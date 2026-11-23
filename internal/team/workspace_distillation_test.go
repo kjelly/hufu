@@ -12,6 +12,7 @@ import (
 )
 
 func TestRetiredDistillationStreamsLargeHistoryAndRejectsCorruption(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	sd := NewSession()
 	sd.Tasks = []*TodoItem{{ID: "1", Agent: "worker", Status: TaskDone, Desc: "finished", Output: "verified-rule-sentinel"}}
@@ -61,6 +62,7 @@ func TestRetiredDistillationStreamsLargeHistoryAndRejectsCorruption(t *testing.T
 }
 
 func TestRetiredDistillationDistinguishesHistoricalFailuresFromCurrentWork(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	sd := NewSession()
 	sd.Tasks = []*TodoItem{{ID: "current", Agent: "worker", Status: TaskDone, Desc: "finished"}}
@@ -94,6 +96,7 @@ func TestRetiredDistillationDistinguishesHistoricalFailuresFromCurrentWork(t *te
 }
 
 func TestRetiredDistillationSnapshotPreservesMemoryScopeAndDetectsChanges(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"shared", "session", "branch", "task", "attempt", "private", "expiring", "pinned"} {
 		t.Run(mode, func(t *testing.T) {
 			protected := mode == "private" || mode == "expiring" || mode == "pinned"

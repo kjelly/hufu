@@ -7,6 +7,7 @@ import (
 )
 
 func TestResultEvidenceCorroborationRequiresSafeFallback(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name          string
 		corroboration bool
@@ -47,6 +48,7 @@ func TestResultEvidenceCorroborationRequiresSafeFallback(t *testing.T) {
 }
 
 func TestResultEvidenceCorroborationCountsOnlyBoundSources(t *testing.T) {
+	t.Parallel()
 	for _, binding := range []string{"legacy", "diagnostics"} {
 		for _, fallback := range []string{"safe", "missing", "unchanged"} {
 			for _, evidence := range []string{"verified", "partial", "absent", "mismatch"} {

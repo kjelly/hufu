@@ -7,6 +7,7 @@ import (
 )
 
 func TestExplainHistoricalQueryUsesFrozenManifestWithoutReranking(t *testing.T) {
+	t.Parallel()
 	c := rankingLockFixture(t, "observe")
 	repo := c.contextRepo.(*contextstore.SQLiteRepository)
 	items, err := repo.QuerySharedPersistentProjection(t.Context(), c.contextScope())

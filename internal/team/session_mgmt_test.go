@@ -14,6 +14,7 @@ import (
 
 // TestTruncateString tests the truncateString function
 func TestTruncateString(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -70,6 +71,7 @@ func TestTruncateString(t *testing.T) {
 
 // TestRemoveFileIfExists tests the removeFileIfExists function
 func TestRemoveFileIfExists(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		setup   func(t *testing.T) string
@@ -121,6 +123,7 @@ func TestRemoveFileIfExists(t *testing.T) {
 
 // TestSaveSession tests the SaveSession function
 func TestSaveSession(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		session *SessionData
@@ -194,12 +197,14 @@ func TestSaveSession(t *testing.T) {
 }
 
 func TestSaveSessionRejectsEmptyWorkspace(t *testing.T) {
+	t.Parallel()
 	if err := SaveSession(" \t", NewSession()); err == nil {
 		t.Fatal("SaveSession should reject an empty workspace")
 	}
 }
 
 func TestSaveSessionRedactsSecretsOnDisk(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	session := &SessionData{Entries: []SessionEntry{{Role: "user", Content: "api_token: top-secret-value"}}}
 	if err := SaveSession(workspace, session); err != nil {
@@ -215,6 +220,7 @@ func TestSaveSessionRedactsSecretsOnDisk(t *testing.T) {
 }
 
 func TestSaveSessionRedactsNestedCredentialTextWithoutCorruptingJSON(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	session := &SessionData{Entries: []SessionEntry{{
 		Role:    "user",
@@ -230,6 +236,7 @@ func TestSaveSessionRedactsNestedCredentialTextWithoutCorruptingJSON(t *testing.
 
 // TestNewSession tests the NewSession function
 func TestNewSession(t *testing.T) {
+	t.Parallel()
 	session := NewSession()
 
 	if session == nil {
@@ -267,6 +274,7 @@ func TestNewSession(t *testing.T) {
 
 // TestSessionDataAddEntry tests the AddEntry method
 func TestSessionDataAddEntry(t *testing.T) {
+	t.Parallel()
 	session := &SessionData{
 		CreatedAt: "2024-01-01T00:00:00Z",
 		UpdatedAt: "2024-01-01T00:00:00Z",
@@ -305,6 +313,7 @@ func TestSessionDataAddEntry(t *testing.T) {
 }
 
 func TestSessionDataAddEntrySkipsEmptyAndDuplicates(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		entries [][2]string // role, content pairs added in order
@@ -330,6 +339,7 @@ func TestSessionDataAddEntrySkipsEmptyAndDuplicates(t *testing.T) {
 
 // TestSessionDataContextSummary tests the ContextSummary method
 func TestSessionDataContextSummary(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		session     *SessionData
@@ -419,6 +429,7 @@ func TestSessionDataContextSummary(t *testing.T) {
 
 // TestArchiveSession tests the ArchiveSession function
 func TestArchiveSession(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		summary string
@@ -525,6 +536,7 @@ func TestArchiveSession(t *testing.T) {
 
 // TestHasSession tests the HasSession function
 func TestHasSession(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		setup func(t *testing.T) string
@@ -572,6 +584,7 @@ func TestHasSession(t *testing.T) {
 
 // TestSessionDataSerialization tests JSON serialization round-trip
 func TestSessionDataSerialization(t *testing.T) {
+	t.Parallel()
 	original := &SessionData{
 		CreatedAt: "2024-01-01T00:00:00Z",
 		UpdatedAt: "2024-01-02T00:00:00Z",
@@ -622,6 +635,7 @@ func TestSessionDataSerialization(t *testing.T) {
 
 // TestSessionEntryWithOptionalTimestamp tests that timestamp is optional in JSON
 func TestSessionEntryWithOptionalTimestamp(t *testing.T) {
+	t.Parallel()
 	jsonData := `{"role": "user", "content": "Hello"}`
 	tmpDir := t.TempDir()
 
@@ -651,6 +665,7 @@ func TestSessionEntryWithOptionalTimestamp(t *testing.T) {
 
 // TestArchiveSessionSlugGeneration tests the slug generation for archive filenames
 func TestArchiveSessionSlugGeneration(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		summary       string

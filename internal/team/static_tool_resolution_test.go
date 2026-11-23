@@ -8,6 +8,7 @@ import (
 )
 
 func TestStaticToolResolutionMatchesRuntimeSurface(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		tools    string
@@ -58,6 +59,7 @@ func TestStaticToolResolutionMatchesRuntimeSurface(t *testing.T) {
 }
 
 func TestTeamSourceIndexLocationsAndBody(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeLintTestFile(t, filepath.Join(dir, "team.yaml"), "apiVersion: hufu.io/v1alpha1\nkind: AgentTeam\nmetadata:\n  name: source-test\nspec:\n  timeout: 12\n")
 	writeLintTestFile(t, filepath.Join(dir, "coordinator.md"), "---\nname: coordinator\nrole: coordinator\ntools: view\n---\nUse `view` tool.\n")
@@ -75,6 +77,7 @@ func TestTeamSourceIndexLocationsAndBody(t *testing.T) {
 }
 
 func TestInspectTeamCollectsTopologyDiagnostics(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeLintTestFile(t, filepath.Join(dir, "a.md"), "---\nname: duplicate\nrole: worker\n---\nA\n")
 	writeLintTestFile(t, filepath.Join(dir, "b.md"), "---\nname: duplicate\nrole: worker\n---\nB\n")

@@ -65,6 +65,7 @@ func workflowTestRegistry() *ProviderRegistry {
 }
 
 func TestRuntimeWorkflowAdvancesOnlyAfterEveryPhaseSucceeds(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	if err := validateRuntimeWorkflowTeam(session, workflowTestRegistry()); err != nil {
 		t.Fatalf("validateRuntimeWorkflowTeam: %v", err)
@@ -112,6 +113,7 @@ func TestRuntimeWorkflowAdvancesOnlyAfterEveryPhaseSucceeds(t *testing.T) {
 }
 
 func TestRuntimeWorkflowRejectsCrossPhaseAndFailedTask(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	w, err := newRuntimeWorkflow(session)
 	if err != nil {
@@ -135,6 +137,7 @@ func TestRuntimeWorkflowRejectsCrossPhaseAndFailedTask(t *testing.T) {
 }
 
 func TestRuntimeWorkflowRequiresEveryStaticContractAndRestoresCheckpoint(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	// Two PREPARE contracts demonstrate that completion is tracked by immutable
 	// contract ID, not merely by worker name.
@@ -187,6 +190,7 @@ func (*namedActionProvider) Execute(context.Context, Action) (interface{}, error
 }
 
 func TestProviderRegistryPreservesDistinctProviderIdentities(t *testing.T) {
+	t.Parallel()
 	registry := NewProviderRegistry()
 	registry.Register("capability-a", &namedActionProvider{name: "adapter-a"})
 	registry.Register("capability-b", &namedActionProvider{name: "adapter-b"})
@@ -224,6 +228,7 @@ func (p *recordingActionProvider) Execute(ctx context.Context, _ Action) (interf
 }
 
 func TestRuntimeWorkflowExecutesStaticActionOnlyInExecutePhase(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	provider := &recordingActionProvider{result: map[string]string{"status": "ok"}}
 	registry := NewProviderRegistry()
@@ -260,6 +265,7 @@ func TestRuntimeWorkflowExecutesStaticActionOnlyInExecutePhase(t *testing.T) {
 }
 
 func TestRuntimeWorkflowAllowsSideEffectFreePrepareAction(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{
 		Workspace: t.TempDir(),
 		Config: agent.TeamConfig{
@@ -310,6 +316,7 @@ func TestRuntimeWorkflowAllowsSideEffectFreePrepareAction(t *testing.T) {
 }
 
 func TestCoordinatorRuntimeActionCompletesTodoWithoutUsingCache(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	provider := &recordingActionProvider{result: "applied"}
 	registry := NewProviderRegistry()
@@ -346,6 +353,7 @@ func TestCoordinatorRuntimeActionCompletesTodoWithoutUsingCache(t *testing.T) {
 }
 
 func TestCoordinatorRuntimeActionEmitsProviderLifecycleAndReceipt(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	provider := &recordingActionProvider{result: "applied"}
 	registry := NewProviderRegistry()
@@ -444,6 +452,7 @@ func TestCoordinatorRuntimeActionEmitsProviderLifecycleAndReceipt(t *testing.T) 
 }
 
 func TestCoordinatorRuntimeActionPreservesProviderFailureForPhaseResult(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	provider := &recordingActionProvider{err: fmt.Errorf("adapter unavailable")}
 	registry := NewProviderRegistry()
@@ -483,6 +492,7 @@ func TestCoordinatorRuntimeActionPreservesProviderFailureForPhaseResult(t *testi
 }
 
 func TestRuntimeWorkflowCancellationIsTyped(t *testing.T) {
+	t.Parallel()
 	w := &runtimeWorkflow{
 		enabled: true,
 		state:   PhaseVerify,
@@ -529,6 +539,7 @@ func (a *executeTasksCancellationAgent) Stream(ctx context.Context, _ fantasy.Ag
 }
 
 func TestExecuteTasksCancellationProjectsTypedWorkflowFailure(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	session.Workspace = t.TempDir()
 	session.Dir = t.TempDir()
@@ -617,6 +628,7 @@ func TestExecuteTasksCancellationProjectsTypedWorkflowFailure(t *testing.T) {
 }
 
 func TestExecuteTasksPreCancelledContextProjectsTypedWorkflowFailure(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	session.Workspace = t.TempDir()
 	session.Dir = t.TempDir()
@@ -675,6 +687,7 @@ func TestExecuteTasksPreCancelledContextProjectsTypedWorkflowFailure(t *testing.
 }
 
 func TestRuntimeWorkflowRetriesProviderFailureBySignatureAndRestoresIt(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	w, err := newRuntimeWorkflow(session)
 	if err != nil {
@@ -722,6 +735,7 @@ func TestRuntimeWorkflowRetriesProviderFailureBySignatureAndRestoresIt(t *testin
 }
 
 func TestRuntimeWorkflowRetryPoliciesKeepSignaturesAndPermanentFailuresDistinct(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	session.Config.Retry.Transient.MaxAttempts = 1
 	session.Config.Retry.Repair.MaxAttemptsPerFailureSignature = 1
@@ -762,6 +776,7 @@ func TestRuntimeWorkflowRetryPoliciesKeepSignaturesAndPermanentFailuresDistinct(
 }
 
 func TestRuntimeWorkflowAppliesConfiguredRepairLimitByFailureSignature(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	session.Config.Retry.Repair.MaxAttemptsPerFailureSignature = 1
 	w, err := newRuntimeWorkflow(session)
@@ -788,6 +803,7 @@ func TestRuntimeWorkflowAppliesConfiguredRepairLimitByFailureSignature(t *testin
 }
 
 func TestRuntimeWorkflowRequiresObjectiveVerifyContractWhenConfigured(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	session.Config.Verification.Required = true
 	if err := validateRuntimeWorkflowTeam(session, workflowTestRegistry()); err == nil {
@@ -800,6 +816,7 @@ func TestRuntimeWorkflowRequiresObjectiveVerifyContractWhenConfigured(t *testing
 }
 
 func TestRuntimeWorkflowRequiresSuccessfulVerifyEvidenceBeforeDone(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	session.Config.Verification.Required = true
 	session.ContractTasks[3].Verify = "test -f runtime/artifacts/result.json"
@@ -826,6 +843,7 @@ func TestRuntimeWorkflowRequiresSuccessfulVerifyEvidenceBeforeDone(t *testing.T)
 }
 
 func TestRuntimeWorkflowRejectsSkippedConfiguredPhase(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	session.Config.Workflow.Phases = []string{"prepare", "execute", "verify"}
 	if _, err := newRuntimeWorkflow(session); err == nil || !strings.Contains(err.Error(), "skipping") {
@@ -834,6 +852,7 @@ func TestRuntimeWorkflowRejectsSkippedConfiguredPhase(t *testing.T) {
 }
 
 func TestRuntimeWorkflowRejectsCompetingInitialBatchPolicy(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	session.Config.Delegation.RequireExactInitialBatch = true
 	if err := validateRuntimeWorkflowTeam(session, workflowTestRegistry()); err == nil || !strings.Contains(err.Error(), "initial-batch") {
@@ -842,6 +861,7 @@ func TestRuntimeWorkflowRejectsCompetingInitialBatchPolicy(t *testing.T) {
 }
 
 func TestRuntimeWorkflowAddsControlledWorkspacePath(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	w, err := newRuntimeWorkflow(session)
 	if err != nil {
@@ -855,6 +875,7 @@ func TestRuntimeWorkflowAddsControlledWorkspacePath(t *testing.T) {
 }
 
 func TestRuntimeWorkflowWriteIsolationIntegration(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	session.Agents["preparer"].Tools = "all"
 	w, err := newRuntimeWorkflow(session)
@@ -939,6 +960,7 @@ func TestRuntimeWorkflowWriteIsolationIntegration(t *testing.T) {
 }
 
 func TestPhaseCapabilityExecutionBlockIntegration(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	session.Agents["preparer"].Tools = "all"
 	w, err := newRuntimeWorkflow(session)
@@ -995,6 +1017,7 @@ func TestPhaseCapabilityExecutionBlockIntegration(t *testing.T) {
 }
 
 func TestPhaseCapabilityMCPBlockIntegration(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	session.Agents["preparer"].MCPTools = map[string]agent.MCPToolConfig{
 		"destructive_mcp": {Cmd: "echo 1"},
@@ -1024,6 +1047,7 @@ func TestPhaseCapabilityMCPBlockIntegration(t *testing.T) {
 }
 
 func TestPhaseCapabilityMCPBlockModelVisible(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	session.Agents["preparer"].MCPTools = map[string]agent.MCPToolConfig{
 		"destructive_mcp": {Cmd: "echo 1"},
@@ -1058,6 +1082,7 @@ func TestPhaseCapabilityMCPBlockModelVisible(t *testing.T) {
 }
 
 func TestRuntimeWorkflow_PhaseTransitions(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{
 		Config: agent.TeamConfig{
 			Name: "test-team",
@@ -1090,6 +1115,7 @@ func TestRuntimeWorkflow_PhaseTransitions(t *testing.T) {
 }
 
 func TestRuntimeWorkflow_FailFast(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{
 		Config: agent.TeamConfig{
 			Name: "test-team",
@@ -1139,6 +1165,7 @@ func TestRuntimeWorkflow_FailFast(t *testing.T) {
 }
 
 func TestRuntimeWorkflow_ReconcileFailure(t *testing.T) {
+	t.Parallel()
 	newFailedWorkflow := func(failedTaskID string) *runtimeWorkflow {
 		return &runtimeWorkflow{
 			enabled:         true,
@@ -1182,6 +1209,7 @@ func TestRuntimeWorkflow_ReconcileFailure(t *testing.T) {
 }
 
 func TestRuntimeWorkflow_ObserveSkipsResolvedFailedTasks(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{
 		Config: agent.TeamConfig{
 			Name:     "test-team",
@@ -1216,6 +1244,7 @@ func TestRuntimeWorkflow_ObserveSkipsResolvedFailedTasks(t *testing.T) {
 }
 
 func TestRuntimeWorkflow_FailFastAllowsAuthorizedWorkerRetry(t *testing.T) {
+	t.Parallel()
 	worker := scriptFailThenSucceed()
 	c := newTestCoordinator(t, withWorker(worker), withMaxRetries(1))
 	c.session.Config.Workflow = agent.WorkflowConfig{Phases: []string{"prepare", "audit", "execute", "verify"}}

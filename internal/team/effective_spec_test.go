@@ -19,6 +19,7 @@ func writeEffectiveSpecFile(t *testing.T, dir, filename, content string) {
 }
 
 func TestCompileTeam_BuiltinDefaultsCarryBuiltinProvenance(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeEffectiveSpecFile(t, dir, "developer.md", "---\nrole: worker\n---\nImplement the change.\n")
 
@@ -38,6 +39,7 @@ func TestCompileTeam_BuiltinDefaultsCarryBuiltinProvenance(t *testing.T) {
 }
 
 func TestCompileTeam_ExplicitTeamValueCarriesTeamProvenance(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeEffectiveSpecFile(t, dir, "team.yaml", "name: custom-team\nmax-rounds: 5\n")
 	writeEffectiveSpecFile(t, dir, "developer.md", "---\nrole: worker\n---\nImplement the change.\n")
@@ -59,6 +61,7 @@ func TestCompileTeam_ExplicitTeamValueCarriesTeamProvenance(t *testing.T) {
 }
 
 func TestCompileTeam_AgentIdentityProvenance(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeEffectiveSpecFile(t, dir, "developer.md", "---\nname: coder\nrole: worker\n---\nImplement the change.\n")
 	writeEffectiveSpecFile(t, dir, "coordinator.md", "Delegate work to the workers.\n")
@@ -81,6 +84,7 @@ func TestCompileTeam_AgentIdentityProvenance(t *testing.T) {
 }
 
 func TestCompileTeam_DeniedToolProvenanceIsVisible(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeEffectiveSpecFile(t, dir, "developer.md", "---\npreset: coding\ntools:\n  denied: [bash]\n---\nImplement the change.\n")
 
@@ -95,6 +99,7 @@ func TestCompileTeam_DeniedToolProvenanceIsVisible(t *testing.T) {
 }
 
 func TestCompileTeam_PresetToolsProvenance(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeEffectiveSpecFile(t, dir, "developer.md", "---\npreset: coding\n---\nImplement the change.\n")
 
@@ -112,6 +117,7 @@ func TestCompileTeam_PresetToolsProvenance(t *testing.T) {
 }
 
 func TestCompileTeam_ExplicitSideEffectOverridesPresetProvenance(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeEffectiveSpecFile(t, dir, "reviewer.md", "---\npreset: review\nside_effect: workspace_write\n---\nReview the change.\n")
 
@@ -126,6 +132,7 @@ func TestCompileTeam_ExplicitSideEffectOverridesPresetProvenance(t *testing.T) {
 }
 
 func TestCompileTeam_CompileFailurePropagatesLoadTeamError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeEffectiveSpecFile(t, dir, "developer.md", "---\npreset: not-a-real-preset\n---\nImplement the change.\n")
 
@@ -135,6 +142,7 @@ func TestCompileTeam_CompileFailurePropagatesLoadTeamError(t *testing.T) {
 }
 
 func TestCompileTeam_IsImmutableAcrossRepeatedCalls(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeEffectiveSpecFile(t, dir, "developer.md", "---\nrole: worker\n---\nImplement the change.\n")
 
@@ -155,6 +163,7 @@ func TestCompileTeam_IsImmutableAcrossRepeatedCalls(t *testing.T) {
 }
 
 func TestValidateEffectiveTeam_MatchesCompileTeamPipeline(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeEffectiveSpecFile(t, dir, "developer.md", "---\nrole: worker\ntools: view,write,edit,grep,glob,ls,bash\n---\nImplement the change.\n")
 
@@ -172,6 +181,7 @@ func TestValidateEffectiveTeam_MatchesCompileTeamPipeline(t *testing.T) {
 }
 
 func TestValidateEffectiveTeamReportsDecisionAuthoringDeprecations(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeEffectiveSpecFile(t, dir, "team.yaml", `decision:
   default-profile: standard
@@ -209,6 +219,7 @@ func TestValidateEffectiveTeamReportsDecisionAuthoringDeprecations(t *testing.T)
 }
 
 func TestValidateEffectiveTeamRejectsEnabledDecisionWithoutRequest(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeEffectiveSpecFile(t, dir, "team.yaml", "decision:\n  profile: standard\n")
 	spec, err := CompileTeam(dir, nil, nil, DefaultProviderRegistry)
@@ -224,6 +235,7 @@ func TestValidateEffectiveTeamRejectsEnabledDecisionWithoutRequest(t *testing.T)
 }
 
 func TestValidateEffectiveTeam_NilSpecReturnsNoFindings(t *testing.T) {
+	t.Parallel()
 	if findings := ValidateEffectiveTeam(nil); findings != nil {
 		t.Fatalf("ValidateEffectiveTeam(nil) = %v, want nil", findings)
 	}

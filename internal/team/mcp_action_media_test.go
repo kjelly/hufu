@@ -12,6 +12,10 @@ import (
 )
 
 func TestMCPActionPublishesImagesAfterOutputsValidation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, scenario := range []string{"structured images", "image only", "schema rejection", "invalid image"} {
 		t.Run(scenario, func(t *testing.T) {
 			image := base64.StdEncoding.EncodeToString(mediaStorePNG(t))

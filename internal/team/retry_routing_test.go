@@ -31,6 +31,7 @@ func criterionFailureFixture(t *testing.T, class TaskFailureClass) (*dagSchedule
 }
 
 func TestFailureEdgeOwnsCriterionRouting(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name      string
 		class     TaskFailureClass
@@ -62,6 +63,7 @@ func TestFailureEdgeOwnsCriterionRouting(t *testing.T) {
 }
 
 func TestCriterionFallbackCarriesFailureEvidence(t *testing.T) {
+	t.Parallel()
 	for _, pending := range []bool{false, true} {
 		t.Run(map[bool]string{false: "retry completed repair", true: "start pending repair"}[pending], func(t *testing.T) {
 			s, items := criterionFailureFixture(t, FailureVerify)
@@ -81,6 +83,7 @@ func TestCriterionFallbackCarriesFailureEvidence(t *testing.T) {
 }
 
 func TestCriterionCannotRestartAnExhaustedOrOwnedTarget(t *testing.T) {
+	t.Parallel()
 	for _, ownEdge := range []bool{false, true} {
 		s, items := criterionFailureFixture(t, FailureVerify)
 		if ownEdge {
@@ -97,6 +100,7 @@ func TestCriterionCannotRestartAnExhaustedOrOwnedTarget(t *testing.T) {
 }
 
 func TestFailureDiagnosticSurvivesSQLiteReplayAndWorkerDispatch(t *testing.T) {
+	t.Parallel()
 	s, items := criterionFailureFixture(t, FailureVerify)
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-retry", "session-retry")
@@ -149,6 +153,7 @@ func TestFailureDiagnosticSurvivesSQLiteReplayAndWorkerDispatch(t *testing.T) {
 }
 
 func TestFailedResetDoesNotPublishRemediation(t *testing.T) {
+	t.Parallel()
 	s, items := criterionFailureFixture(t, FailureVerify)
 	s.coord.SetEventJournal(failingJournal{err: errors.New("reset append failed")})
 	err := s.resetWaveWithRemediation(t.Context(), 0, buildRemediationContext(items[1].ID, items[1]))
@@ -158,6 +163,7 @@ func TestFailedResetDoesNotPublishRemediation(t *testing.T) {
 }
 
 func TestDeferredResetKeepsRemediationUntilWorkerSettles(t *testing.T) {
+	t.Parallel()
 	s, items := criterionFailureFixture(t, FailureVerify)
 	s.states[0], items[0].Status = TaskInProgress, TaskInProgress
 	s.states[1] = TaskError

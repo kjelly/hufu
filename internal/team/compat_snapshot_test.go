@@ -18,6 +18,7 @@ import (
 // Set UPDATE_TEAM_COMPAT_GOLDEN=1 to (re)generate the golden files after an
 // intentional, reviewed behavior change.
 func TestTeamCompatFixtures(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join("testdata", "team-compat")
 	entries, err := os.ReadDir(root)
 	if err != nil {

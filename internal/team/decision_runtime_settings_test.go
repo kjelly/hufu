@@ -11,6 +11,7 @@ import (
 )
 
 func TestDecisionRuntimeMergesTeamOverGlobalAliases(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{
 		GlobalControlDecisions: control.Config{Model: "global", Endpoint: "http://127.0.0.1:11434/v1/systemone", Timeout: time.Minute},
 		Config:                 agent.TeamConfig{DecisionRuntime: settings.Config{SystemOne: settings.SystemOne{Model: "team"}}.WithSource("team")},
@@ -26,6 +27,7 @@ func TestDecisionRuntimeMergesTeamOverGlobalAliases(t *testing.T) {
 }
 
 func TestDecisionRuntimeLegacyPolicyResume(t *testing.T) {
+	t.Parallel()
 	for _, changed := range []bool{false, true} {
 		name := "unchanged"
 		if changed {

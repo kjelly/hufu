@@ -7,6 +7,7 @@ import (
 )
 
 func TestDecodeEventLogKeepsCanonicalBytesAndRejectsInvalidSuffix(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	appendExportFixture(t, root)
 	var exported bytes.Buffer

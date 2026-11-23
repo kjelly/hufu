@@ -23,6 +23,7 @@ func dependencyViewContextFixture(t *testing.T) WorkerContextInput {
 }
 
 func TestDependencyResultViewContextDeliveryAndBudget(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		change func(*WorkerContextInput)
@@ -63,6 +64,7 @@ func TestDependencyResultViewContextDeliveryAndBudget(t *testing.T) {
 }
 
 func TestDependencyResultViewContextRejectsUnpreparedOrChangedInputs(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		change func(*WorkerContextInput)
@@ -85,6 +87,7 @@ func TestDependencyResultViewContextRejectsUnpreparedOrChangedInputs(t *testing.
 }
 
 func TestDependencyResultViewContextRejectsCompilerSourceRebinding(t *testing.T) {
+	t.Parallel()
 	for _, change := range []struct {
 		name  string
 		apply func(*DependencyResultViewSource)

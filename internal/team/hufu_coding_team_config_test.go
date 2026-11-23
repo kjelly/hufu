@@ -40,6 +40,7 @@ func loadHufuCodingTeam(t *testing.T) *TeamSession {
 // regression: a future edit to team.yaml or an agent's frontmatter that
 // breaks a static contract must fail this test, not just a manual CLI run.
 func TestHufuCodingTeamLoadsWithoutContractFindings(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodingTeam(t)
 	findings := ValidateTeamTaskContracts(session)
 	for _, f := range findings {
@@ -55,6 +56,7 @@ func TestHufuCodingTeamLoadsWithoutContractFindings(t *testing.T) {
 }
 
 func TestHufuCodingRequiresCompletedBatchAndStructuredSAContract(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodingTeam(t)
 	want := []string{"sa", "coder", "verifier", "reviewer", "final-sa"}
 	policy := session.Config.Delegation
@@ -110,6 +112,7 @@ func TestHufuCodingRequiresCompletedBatchAndStructuredSAContract(t *testing.T) {
 }
 
 func TestHufuCodingRejectsIncompleteFirstDelegation(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: loadHufuCodingTeam(t), taskTracker: NewTaskTracker(), sessionData: NewSession()}
 	if !c.initialDelegationPending() {
 		t.Fatal("fresh coding run did not require its initial batch")
@@ -143,6 +146,7 @@ func codexCommandDisablesNativeMultiAgent(cmd []string) (agentsDisabled, multiAg
 // and features.multi_agent_v2 precedence per test-matrix item I so enabling
 // one cannot silently override the other.
 func TestHufuCodingCodexProviderDisablesNativeMultiAgent(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodingTeam(t)
 	provider, ok := session.Config.SubagentProviders["codex"]
 	if !ok {
@@ -167,6 +171,7 @@ func TestHufuCodingCodexProviderDisablesNativeMultiAgent(t *testing.T) {
 // so binding a side_effect:none role to codex does not grant it write access
 // — this is a config-only change, no runtime behavior to add.
 func TestHufuCodingAllRolesBoundToCodex(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodingTeam(t)
 	for _, name := range []string{"sa", "coder", "verifier", "reviewer", "final-sa"} {
 		def := session.Agents[name]
@@ -189,6 +194,7 @@ func TestHufuCodingAllRolesBoundToCodex(t *testing.T) {
 // pins the weaker, still-worth-keeping invariant that the frontmatter itself
 // never *also* grants a write-capable tool name.
 func TestHufuCodingReadOnlyRolesCannotWrite(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodingTeam(t)
 	forbidden := []string{"edit", "write", "multiedit"}
 	for _, name := range []string{"sa", "reviewer", "final-sa"} {
@@ -211,6 +217,7 @@ func TestHufuCodingReadOnlyRolesCannotWrite(t *testing.T) {
 // classified none in team.yaml precisely because it must only run commands,
 // never edit source, per spec.md §5.4.
 func TestHufuCodingVerifierCannotWrite(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodingTeam(t)
 	def := session.Agents["verifier"]
 	if def == nil {
@@ -231,6 +238,7 @@ func TestHufuCodingVerifierCannotWrite(t *testing.T) {
 // read-only rather than workspace-write, regardless of what `tools:` would
 // otherwise have gated for a Hufu-native (non-subagent-provider) worker.
 func TestHufuCodingReadOnlyRolesSideEffectNoneGatesCodexSandbox(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodingTeam(t)
 	byAgent := map[string]TaskDef{}
 	for _, task := range session.ContractTasks {
@@ -267,6 +275,7 @@ func hufuCodingAgentToolNames(def *agent.AgentDef) []string {
 // coder contract carries no such restriction (it is only ever a reset
 // target in this batch, never itself an on_failure source).
 func TestHufuCodingOnFailureClassesFreezeSemanticRejectionOnly(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodingTeam(t)
 	byAgent := map[string]TaskDef{}
 	for _, task := range session.ContractTasks {
@@ -306,6 +315,7 @@ func TestHufuCodingOnFailureClassesFreezeSemanticRejectionOnly(t *testing.T) {
 // worker execution — this test only cares that admission itself does not
 // reject the batch over OnFailureClasses before a single worker is dispatched.
 func TestHufuCodingExecuteTasksAdmitsBatchWithoutContractMismatch(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodingTeam(t)
 	workspace := t.TempDir()
 	session.Workspace = workspace
@@ -360,6 +370,7 @@ func TestHufuCodingExecuteTasksAdmitsBatchWithoutContractMismatch(t *testing.T) 
 // downstream task actually receives every upstream typed result its prompt
 // assumes is present.
 func TestHufuCodingVerifierReceivesSAResult(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "sa", Desc: "SA_ANALYZE"},
@@ -389,6 +400,7 @@ func TestHufuCodingVerifierReceivesSAResult(t *testing.T) {
 }
 
 func TestHufuCodingFinalSAReceivesAllUpstreamResults(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "sa", Desc: "SA_ANALYZE"},
@@ -429,6 +441,7 @@ func TestHufuCodingFinalSAReceivesAllUpstreamResults(t *testing.T) {
 // TestHufuCodingInfraFailureWithNoStoredResultDoesNotAuthorizeReset in
 // hufu_coding_classification_test.go for the runtime mechanism that reads it.
 func TestHufuCodingNoVerifySpecOnSemanticRoles(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodingTeam(t)
 	for _, task := range session.ContractTasks {
 		name := strings.ToLower(strings.TrimSpace(task.Agent))

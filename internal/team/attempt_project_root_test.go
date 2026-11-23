@@ -13,6 +13,7 @@ func withExecutionRootForTest(ctx context.Context, root string) context.Context 
 }
 
 func TestAttemptProjectRootFollowsExecutionRoot(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{projectDir: "/canonical"}
 	if got := c.attemptProjectRoot(context.Background()); got != "/canonical" {
 		t.Fatalf("attemptProjectRoot without a root = %q", got)
@@ -26,6 +27,7 @@ func TestAttemptProjectRootFollowsExecutionRoot(t *testing.T) {
 // stays on the canonical project so repeated-failure detection still sees
 // the same failure across attempts with different roots.
 func TestVerificationRunsInAttemptRootWithCanonicalFingerprint(t *testing.T) {
+	t.Parallel()
 	canonical, attemptRoot := t.TempDir(), t.TempDir()
 	c := &Coordinator{projectDir: canonical}
 	result, err := c.verifyTaskDeliverableWithMode(withExecutionRootForTest(context.Background(), attemptRoot), nil, "pwd", "success")
@@ -53,6 +55,7 @@ func TestVerificationRunsInAttemptRootWithCanonicalFingerprint(t *testing.T) {
 }
 
 func TestWorkerPromptNamesAttemptRoot(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "view", nil, nil)
 	def := c.session.Agents["worker"]
 	prompt := c.injectWorkerContext(withExecutionRootForTest(context.Background(), "/attempt/root"), def).System

@@ -16,6 +16,7 @@ func issueCodes(report WorkspaceDoctorReport) map[string]int {
 }
 
 func TestDoctorWorkspaceChecksLineageAndRepairsHeads(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newVersionFixture(t)
 	f.write("a.txt", "v1")
@@ -63,6 +64,7 @@ func TestDoctorWorkspaceChecksLineageAndRepairsHeads(t *testing.T) {
 }
 
 func TestDoctorWorkspaceReportsMissingCommitEvents(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newVersionFixture(t)
 	f.write("a.txt", "v1")
@@ -85,6 +87,7 @@ func TestDoctorWorkspaceReportsMissingCommitEvents(t *testing.T) {
 }
 
 func TestWorkspaceStatusAndPinnedLabels(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newVersionFixture(t)
 	f.write("a.txt", "v1")

@@ -27,6 +27,7 @@ func (f *failingContextRepo) Append(ctx context.Context, items ...contextstore.C
 }
 
 func TestShadowContextAppendDoesNotNeedLegacyPromptPath(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -53,6 +54,7 @@ func TestShadowContextAppendDoesNotNeedLegacyPromptPath(t *testing.T) {
 }
 
 func TestCanonicalMemoryIngestionGeneratesLegacySTMProjection(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -79,6 +81,7 @@ func TestCanonicalMemoryIngestionGeneratesLegacySTMProjection(t *testing.T) {
 }
 
 func TestCanonicalPromptMemoryDoesNotReadLegacyMarkdown(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -102,6 +105,7 @@ func TestCanonicalPromptMemoryDoesNotReadLegacyMarkdown(t *testing.T) {
 }
 
 func TestArchiveSessionSummaryUsesCanonicalContext(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -120,6 +124,7 @@ func TestArchiveSessionSummaryUsesCanonicalContext(t *testing.T) {
 }
 
 func TestShadowContextAppendAndLegacyAppendsPreserveAllSTMAndLTMEntries(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -165,6 +170,7 @@ func TestShadowContextAppendAndLegacyAppendsPreserveAllSTMAndLTMEntries(t *testi
 }
 
 func TestShadowContextAppendFailureIsRepairable(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -233,6 +239,7 @@ func TestShadowContextAppendFailureIsRepairable(t *testing.T) {
 }
 
 func TestAutoExtractLTMUsesCanonicalItemsAndNeverImportsMarkdown(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -266,6 +273,7 @@ func TestAutoExtractLTMUsesCanonicalItemsAndNeverImportsMarkdown(t *testing.T) {
 }
 
 func TestCanonicalProgressNeverPromotesToPersistentKnowledge(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -300,6 +308,7 @@ func (secretLeakingContextRepo) Append(context.Context, ...contextstore.ContextI
 }
 
 func TestShadowContextAppendRedactsFailureCauseEverywhere(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {

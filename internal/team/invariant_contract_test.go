@@ -11,6 +11,7 @@ import (
 )
 
 func TestLoadTeamContractTasksParsesInvariantVerification(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	manifest := `name: contract-team
 tasks:
@@ -35,6 +36,7 @@ tasks:
 }
 
 func TestInvariantVerificationIsConfigurationOnlyAndDurable(t *testing.T) {
+	t.Parallel()
 	task := TaskDef{
 		ID: "verify", Agent: "reviewer", Goal: "review",
 		Phase: PhaseVerify, InvariantVerification: InvariantVerificationGate,
@@ -69,6 +71,7 @@ func TestInvariantVerificationIsConfigurationOnlyAndDurable(t *testing.T) {
 }
 
 func TestInvariantVerificationChangesStaticContractHash(t *testing.T) {
+	t.Parallel()
 	base := TaskDef{ID: "verify", Agent: "reviewer", Execution: ExecutionContract{RequiresResult: true}}
 	report := base
 	report.InvariantVerification = InvariantVerificationReport
@@ -86,6 +89,7 @@ func TestInvariantVerificationChangesStaticContractHash(t *testing.T) {
 }
 
 func TestValidateInvariantVerificationContract(t *testing.T) {
+	t.Parallel()
 	worker := &agent.AgentDef{Name: "reviewer", Role: "worker"}
 	validTask := TaskDef{
 		Agent: "reviewer", Phase: PhaseVerify,
@@ -134,6 +138,7 @@ func TestValidateInvariantVerificationContract(t *testing.T) {
 }
 
 func TestCloneSessionDoesNotAliasInvariantCatalog(t *testing.T) {
+	t.Parallel()
 	original := &TeamSession{InvariantCatalog: []InvariantDefinition{{ID: "safe", AppliesTo: []string{"internal/team/"}}}}
 	cloned := cloneSession(original, t.TempDir())
 	cloned.InvariantCatalog[0].AppliesTo[0] = "changed"

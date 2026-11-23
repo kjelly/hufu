@@ -18,6 +18,7 @@ import (
 // not the expanded prompt, so explain-memory can bind the actual retrieval
 // state to its retrieval ID.
 func TestWorkerManifestQueryHashMatchesRetrievalQuery(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)

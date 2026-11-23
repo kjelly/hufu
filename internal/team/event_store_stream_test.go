@@ -23,6 +23,7 @@ func workspaceEntries(t *testing.T, workspace string) []string {
 }
 
 func TestStreamValidatedRunEventsMissingStoreDoesNotCreateIt(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	var count int
 	if err := StreamValidatedRunEvents(t.Context(), workspace, func(RunEvent) error {
@@ -40,6 +41,7 @@ func TestStreamValidatedRunEventsMissingStoreDoesNotCreateIt(t *testing.T) {
 }
 
 func TestStreamValidatedRunEventsPreservesCanonicalStore(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-stream", "session-stream")
 	if err != nil {
@@ -80,6 +82,7 @@ func TestStreamValidatedRunEventsPreservesCanonicalStore(t *testing.T) {
 }
 
 func TestStreamValidatedRunEventsReportsLateFailureAfterPrefix(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		tamper string
@@ -121,6 +124,7 @@ func TestStreamValidatedRunEventsReportsLateFailureAfterPrefix(t *testing.T) {
 }
 
 func TestRunEventSnapshotKeepsEventsAndBranchesAcrossPasses(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "snapshot-run", "snapshot-session")
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 )
 
 func TestProtocolRepairFailureProjectsCurrentValidationEvidence(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name           string
 		class          TaskFailureClass
@@ -72,6 +73,7 @@ func TestProtocolRepairFailureProjectsCurrentValidationEvidence(t *testing.T) {
 }
 
 func TestProtocolRetryContextRetainsRejectionWithoutToolInput(t *testing.T) {
+	t.Parallel()
 	prompt := buildRetryContext(FailureProtocol, errors.New("result finalization failed"), "", "", -1, nil,
 		submitResultToolName, "", "/record/index: got string, want null; api_token=repair-secret", true, "", TaskDef{})
 	if !strings.Contains(prompt, "last tool call: submit_result (exit: error") || !strings.Contains(prompt, "/record/index: got string, want null") {

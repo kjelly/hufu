@@ -69,6 +69,7 @@ func historicalContextManifest(t *testing.T, c *Coordinator, item *TodoItem, inp
 }
 
 func TestHistoricalResultContextIncludesCompleteFrozenPresentation(t *testing.T) {
+	t.Parallel()
 	c, item, input := historicalContextFixture(t)
 	compiled, manifest := historicalContextManifest(t, c, item, input)
 	for _, want := range []string{"Historical reference data only", "complete deliverable", "future_detail", "9007199254740993", "all diagnostics", "1500000000"} {
@@ -98,6 +99,7 @@ func TestHistoricalResultContextIncludesCompleteFrozenPresentation(t *testing.T)
 }
 
 func TestHistoricalResultContextFailsClosedOnSourceDrift(t *testing.T) {
+	t.Parallel()
 	for _, failure := range []string{"body", "payload", "invalidated", "missing", "request_agent", "request_role", "request_attempt"} {
 		t.Run(failure, func(t *testing.T) {
 			c, _, input := historicalContextFixture(t)
@@ -150,6 +152,7 @@ func (compiler historicalContextTamperCompiler) CompileWorkerContext(ctx context
 }
 
 func TestHistoricalResultContextRejectsCompilerOmissionAndCompression(t *testing.T) {
+	t.Parallel()
 	for _, failure := range []string{"omit", "compress", "body", "authority", "attribution", "prompt"} {
 		t.Run(failure, func(t *testing.T) {
 			c, _, input := historicalContextFixture(t)
@@ -184,6 +187,7 @@ func TestHistoricalResultContextRejectsCompilerOmissionAndCompression(t *testing
 }
 
 func TestHistoricalResultContextBudgetIsRequired(t *testing.T) {
+	t.Parallel()
 	c, _, input := historicalContextFixture(t)
 	input.ModelContext.ContextWindow = 64
 	input.ModelContext.MaxOutputTokens, input.ModelContext.SafetyMarginTokens = 1, 1

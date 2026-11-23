@@ -22,6 +22,7 @@ const hufuCodeReviewReportFixture = `{
 	}`
 
 func TestHufuCodeReviewReportRendersValidInvariantStateEvidence(t *testing.T) {
+	t.Parallel()
 	contract, err := compileResultContractSchema(hufuCodeReviewTeamDir(t), "schemas/report-v1.json")
 	if err != nil {
 		t.Fatal(err)

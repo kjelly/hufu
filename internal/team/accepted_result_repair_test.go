@@ -11,6 +11,7 @@ import (
 )
 
 func TestContractRecoveryAcceptedRepairRequiresVerifiedSources(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"corrupt_source", "corrupt_accepted", "valid_result", "without_runtime_reads", "schema_requires_semantic_change"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, source, id := contractCollectionFixture(t, researchCollectionResponse(t, 2), SideEffectNone, contractCollectionFixtureOptions{Accepted: true, ArtifactKeys: true, ValidAccepted: scenario == "valid_result"})
@@ -45,6 +46,10 @@ func TestContractRecoveryAcceptedRepairRequiresVerifiedSources(t *testing.T) {
 }
 
 func TestContractRecoveryAcceptedGrantWithInvocationContext(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, scenario := range []string{"plain", "coordinator", "provider_bound"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, source, id := contractCollectionFixture(t, researchCollectionResponse(t, 2), SideEffectNone, contractCollectionFixtureOptions{Accepted: true, ArtifactKeys: true, Dependents: true})
@@ -152,6 +157,7 @@ func completeAcceptedRepairDependent(t *testing.T, c *Coordinator, item *TodoIte
 }
 
 func TestAcceptedResultRepairFreezesSemanticClaims(t *testing.T) {
+	t.Parallel()
 	baseline := &TaskResult{Status: "success", Summary: "original", Details: "complete report", Confidence: 1, Evidence: []EvidenceRef{{Type: "task_transcript", TaskID: "original", RunID: "run", Value: "original-transcript", SystemHMAC: "previous-process"}}, Facts: map[string]any{"count": jsontext.Value(`9007199254740993`)}, Findings: []Finding{{Summary: "original issue", Severity: "error"}}, StructuredPayload: &ResultPayload{Value: jsontext.Value(`{"findings":[{"summary":"original issue","severity":"error","evidence":["bad","good"]}]}`)}}
 	pointers := []string{"/findings/0/evidence/0"}
 	want, err := acceptedResultSemanticHash(baseline, pointers)
@@ -198,6 +204,7 @@ func TestAcceptedResultRepairFreezesSemanticClaims(t *testing.T) {
 }
 
 func TestContractRecoveryAcceptedRepairRejectsChangedProof(t *testing.T) {
+	t.Parallel()
 	c, source, id := contractCollectionFixture(t, researchCollectionResponse(t, 2), SideEffectNone, contractCollectionFixtureOptions{Accepted: true, ArtifactKeys: true})
 	ctx := contractCollectionContext(t, id)
 	plan, err := c.AssessContractRecovery(ctx, source)
@@ -246,6 +253,10 @@ func TestContractRecoveryAcceptedRepairRejectsChangedProof(t *testing.T) {
 }
 
 func TestContractRecoveryRepairsAcceptedEvidenceWithoutWorkerReplay(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, scenario := range []string{"correct", "exhausted", "prior_grant", "verbatim", "assumption_checks", "invalid_selection", "cancelled"} {
 		t.Run(scenario, func(t *testing.T) {
 			runCtx, cancel := context.WithCancel(WithSessionResume(t.Context()))

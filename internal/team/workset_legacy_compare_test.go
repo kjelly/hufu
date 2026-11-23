@@ -146,6 +146,7 @@ func writeWorksetManifestFixture(t *testing.T, workspace, relPath string, items 
 // source row order when the manifest lists items in the same order as the
 // TSV.
 func TestCompareLegacyAndArtifactWorksetOrdering(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	writeWorksetTSVFixture(t, workspace, "inputs/items.tsv", []string{"item"}, [][]string{{"alpha"}, {"beta"}, {"gamma"}})
 	writeWorksetManifestFixture(t, workspace, "inputs/items.json", []WorksetItem{
@@ -171,6 +172,7 @@ func TestCompareLegacyAndArtifactWorksetOrdering(t *testing.T) {
 // false here, that orderingEqual actually detects a position difference
 // instead of being vacuously true.
 func TestCompareLegacyAndArtifactWorksetKeys(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	writeWorksetTSVFixture(t, workspace, "inputs/items.tsv", []string{"item"}, [][]string{{"alpha"}, {"beta"}, {"gamma"}})
 	writeWorksetManifestFixture(t, workspace, "inputs/items.json", []WorksetItem{
@@ -195,6 +197,7 @@ func TestCompareLegacyAndArtifactWorksetKeys(t *testing.T) {
 // goal_template substitution is identical across a multi-binding template,
 // not just a single-column one.
 func TestCompareLegacyAndArtifactWorksetTemplateSubstitution(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	writeWorksetTSVFixture(t, workspace, "inputs/items.tsv", []string{"item", "lens"}, [][]string{{"alpha", "security"}, {"beta", "performance"}})
 	writeWorksetManifestFixture(t, workspace, "inputs/items.json", []WorksetItem{
@@ -219,6 +222,7 @@ func TestCompareLegacyAndArtifactWorksetTemplateSubstitution(t *testing.T) {
 // detects both the equal case and a real mismatch, so the check isn't
 // vacuously true.
 func TestCompareLegacyAndArtifactWorksetChildCount(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 
 	t.Run("equal", func(t *testing.T) {
@@ -261,6 +265,7 @@ func TestCompareLegacyAndArtifactWorksetChildCount(t *testing.T) {
 // (reviewing a workset item under a named "lens") as a stand-in until a
 // real legacy consumer needs migrating.
 func TestLegacyAndArtifactWorksetConsumerShapedFixtureEquivalent(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	writeWorksetTSVFixture(t, workspace, "inputs/review.tsv", []string{"key", "lens"}, [][]string{
 		{"internal/team/workset.go", "correctness"},

@@ -6,6 +6,7 @@ import (
 )
 
 func TestResultCollectionEvidenceIgnoresDisplayTimingsAndManifestOrder(t *testing.T) {
+	t.Parallel()
 	source := &TodoItem{ID: "source", Status: TaskDone, TypedResult: &TaskResult{Summary: "accepted"}}
 	source.ContextManifests = []ContextInjectionManifest{{RequestID: "b", ModelCalled: true}, {RequestID: "a", ModelCalled: true}}
 	before, err := collectionDigest(canonicalCollectionSources([]*TodoItem{source}))
@@ -27,6 +28,7 @@ func TestResultCollectionEvidenceIgnoresDisplayTimingsAndManifestOrder(t *testin
 }
 
 func TestResultCollectionRestoresOnlyAuthenticatedLegacyTimings(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"valid", "missing_snapshot", "wrong_hash", "changed_result", "changed_receipt", "changed_contract", "changed_manifest", "current_revision"} {
 		t.Run(kind, func(t *testing.T) {
 			original := &TodoItem{ID: "source", Status: TaskDone, StartedAt: time.Unix(1, 0), EndedAt: time.Unix(2, 0), ModelTime: time.Second, TypedResult: &TaskResult{Summary: "accepted"}}

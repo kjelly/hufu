@@ -20,6 +20,7 @@ import (
 // test copies each fixture before applying it: source bytes in testdata are
 // evidence and must never be rewritten by a test or migration path.
 func TestSavedLegacyFixturesReplayCanonicalAfterMaterialization(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join("testdata", "execution-compat")
 	entries, err := os.ReadDir(root)
 	if err != nil {

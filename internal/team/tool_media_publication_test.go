@@ -41,6 +41,7 @@ func toolMediaPublicationFixture(t *testing.T, withoutInput ...bool) (*Coordinat
 }
 
 func TestToolMediaPublicationPreservesOrderedSourcesAndCanonicalEvidence(t *testing.T) {
+	t.Parallel()
 	c, ctx, tool := toolMediaPublicationFixture(t)
 	encoded := base64.StdEncoding.EncodeToString(mediaStorePNG(t))
 	input := internalmcp.RuntimeToolResult{InvocationID: "mcp-test-call", StructuredContent: []byte(`{"complete":true}`), Content: []internalmcp.RuntimeToolContent{
@@ -126,6 +127,7 @@ func TestToolMediaPublicationPreservesOrderedSourcesAndCanonicalEvidence(t *test
 }
 
 func TestToolMediaPublicationPreservesEmptyTextBlocks(t *testing.T) {
+	t.Parallel()
 	c, ctx, tool := toolMediaPublicationFixture(t, true)
 	response, err := c.publishToolMediaResult(ctx, tool, fantasy.ToolCall{ID: "capture"}, internalmcp.RuntimeToolResult{InvocationID: "mcp-empty-text", Content: []internalmcp.RuntimeToolContent{
 		{Type: "text"}, {Type: "image", Data: base64.StdEncoding.EncodeToString(mediaStorePNG(t)), MIMEType: "image/png"}, {Type: "text"},
@@ -144,6 +146,7 @@ func TestToolMediaPublicationPreservesEmptyTextBlocks(t *testing.T) {
 }
 
 func TestToolMediaPublicationRejectsUnusableContentBeforeAdmission(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"error", "invalid base64", "wrong MIME", "unbound", "unknown block", "empty call"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, ctx, tool := toolMediaPublicationFixture(t)

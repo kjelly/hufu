@@ -55,6 +55,7 @@ func (a *finishStopScriptAgent) Stream(ctx context.Context, call fantasy.AgentSt
 }
 
 func TestCoordinatorStreamStopsAfterTerminalFinish(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"success", "schema_correction", "acceptance_failed"} {
 		t.Run(name, func(t *testing.T) {
 			c := newDoneWorkflowCoordinator(t)
@@ -94,6 +95,7 @@ func TestCoordinatorStreamStopsAfterTerminalFinish(t *testing.T) {
 }
 
 func TestCoordinatorFinishDoesNotStopWorkerStream(t *testing.T) {
+	t.Parallel()
 	c := newDoneWorkflowCoordinator(t)
 	t.Cleanup(func() {
 		if err := c.Close(); err != nil {

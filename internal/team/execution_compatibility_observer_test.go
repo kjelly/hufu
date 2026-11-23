@@ -11,6 +11,7 @@ import (
 )
 
 func TestExecutionCompatibilityObserverPayloadContainsOnlyActionableCounts(t *testing.T) {
+	t.Parallel()
 	report := &executioncompat.InspectionReport{Findings: []executioncompat.Finding{
 		{
 			TaskID: "task-secret", RunID: "run-secret", SourceEventID: "event-secret",
@@ -45,6 +46,7 @@ func TestExecutionCompatibilityObserverPayloadContainsOnlyActionableCounts(t *te
 }
 
 func TestExecutionCompatibilityObserverFlushesOncePerRunAndBranch(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-observed", "session-observed")
 	if err != nil {
@@ -89,6 +91,7 @@ func TestExecutionCompatibilityObserverFlushesOncePerRunAndBranch(t *testing.T) 
 }
 
 func TestExecutionCompatibilityObserverAppendFailureIsTelemetryGap(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-gap", "session-gap")
 	if err != nil {

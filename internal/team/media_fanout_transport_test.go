@@ -8,6 +8,7 @@ import (
 )
 
 func TestMediaFanoutTransportRequiresBothLiveLeases(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"allowed", "parent revoked", "leaf revoked", "wrong model execution", "changed slot", "parent revoked during journal read"} {
 		t.Run(scenario, func(t *testing.T) {
 			parent, ctx, item, request := nativeMediaProviderFixture(t, func(session *TeamSession) {

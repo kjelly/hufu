@@ -9,6 +9,7 @@ import (
 )
 
 func TestUsageFromStepsSumsCacheTokens(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		steps []fantasy.StepResult
@@ -43,6 +44,7 @@ func TestUsageFromStepsSumsCacheTokens(t *testing.T) {
 }
 
 func TestExecutionUsagePromptTokens(t *testing.T) {
+	t.Parallel()
 	usage := ExecutionUsage{InputTokens: 3, OutputTokens: 100, CacheReadTokens: 4, CacheCreationTokens: 5}
 	if got := usage.PromptTokens(); got != 12 {
 		t.Fatalf("PromptTokens = %d, want 12", got)
@@ -50,6 +52,7 @@ func TestExecutionUsagePromptTokens(t *testing.T) {
 }
 
 func TestExecutionUsageJSONOmitsZeroCacheFields(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		usage ExecutionUsage
@@ -72,6 +75,7 @@ func TestExecutionUsageJSONOmitsZeroCacheFields(t *testing.T) {
 }
 
 func TestLLMLogStreamFinishCachePlacement(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		usage    fantasy.Usage

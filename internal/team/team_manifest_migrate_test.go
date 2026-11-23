@@ -81,6 +81,7 @@ func compatSnapshotJSON(t *testing.T, teamDir string) []byte {
 }
 
 func TestTeamMigrateDryRunRoundTrips(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMigrateFixtureTeam(t, dir)
 
@@ -155,6 +156,7 @@ func TestTeamMigrateDryRunRoundTrips(t *testing.T) {
 }
 
 func TestTeamMigratePreservesDecisionPresetIdentity(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTeamManifest(t, dir, `name: preset-team
 decision:
@@ -183,6 +185,7 @@ decision:
 }
 
 func TestTeamMigrateCanonicalizesDecisionAuthoring(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	source := `name: canonicalize
 decision:
@@ -241,6 +244,7 @@ decision:
 }
 
 func TestTeamMigrateCanonicalAuthoringPreservesDisabledRequestContent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTeamManifest(t, dir, `decision:
   request-contract:
@@ -263,6 +267,7 @@ func TestTeamMigrateCanonicalAuthoringPreservesDisabledRequestContent(t *testing
 }
 
 func TestTeamMigrateCanonicalAuthoringRejectsTemplates(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTeamManifest(t, dir, `decision:
   default-profile: "{{.DecisionProfile}}"
@@ -278,6 +283,7 @@ func TestTeamMigrateCanonicalAuthoringRejectsTemplates(t *testing.T) {
 // v1alpha1 output (v1alpha1 has no such alias — §7), and the value must
 // still be present under its canonical field name.
 func TestTeamMigrateExpandsAdvancedNamespaceAlias(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	// verification only takes effect alongside a phased workflow
 	// (parseTeamYML gates Verification/Policies/Capabilities/Retry on
@@ -317,6 +323,7 @@ advanced:
 }
 
 func TestTeamMigrateDoesNotChangeEffectiveSpec(t *testing.T) {
+	t.Parallel()
 	legacyDir := t.TempDir()
 	writeMigrateFixtureTeam(t, legacyDir)
 

@@ -10,6 +10,7 @@ import (
 )
 
 func TestContextQueryManifestKeepsLegacyBytesAndBindsEffectiveSources(t *testing.T) {
+	t.Parallel()
 	plan, sources, row := querySelectionFixture()
 	selection, err := SelectContextQuerySources(t.Context(), &querySelectionRepo{rows: []contextstore.SearchResult{row}}, plan, sources, stableQueryRevision)
 	if err != nil {

@@ -12,6 +12,9 @@ import (
 )
 
 func TestResultCollectionRepairsInvariantClaimsWithOriginalLimits(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	schema, err := json.Marshal(map[string]any{
 		"type": "object", "additionalProperties": false, "required": []string{"findings", "assessments"},
 		"properties": map[string]any{"findings": submitResultToolInfo(taskResultSubmissionContract{}).Parameters["findings"], "assessments": invariantAssessmentClaimsSchema(false)},

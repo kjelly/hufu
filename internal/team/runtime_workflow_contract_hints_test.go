@@ -40,6 +40,7 @@ func threeContractExecuteWorkflow(t *testing.T) *runtimeWorkflow {
 }
 
 func TestPhaseDispatchRejectionsListEveryContract(t *testing.T) {
+	t.Parallel()
 	primary := TaskDef{Agent: "executor", ContractID: "review-primary", Phase: PhaseExecute}
 	docs := TaskDef{Agent: "auditor", ContractID: "review-docs", Phase: PhaseExecute}
 	escalation := TaskDef{Agent: "verifier", ContractID: "review-escalation", Phase: PhaseExecute}

@@ -13,6 +13,7 @@ import (
 )
 
 func TestApplyExecutionCompatibilityMaterializesEventTaskIdempotently(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -76,6 +77,7 @@ func TestApplyExecutionCompatibilityMaterializesEventTaskIdempotently(t *testing
 }
 
 func TestMigrationAppendFailureDoesNotAdvanceProjection(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	legacy := &SessionData{Tasks: []*TodoItem{{ID: "session-only", Status: TaskPending, Model: "qwen3:8b", SubagentProvider: "hufu-local"}}}
 	if err := SaveSession(workspace, legacy); err != nil {
@@ -115,6 +117,7 @@ func TestMigrationAppendFailureDoesNotAdvanceProjection(t *testing.T) {
 }
 
 func TestApplyExecutionCompatibilityWritesOneSelfContainedSessionTask(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	legacy := &SessionData{Tasks: []*TodoItem{{ID: "session-only", Status: TaskPending, Model: "qwen3:8b", SubagentProvider: "hufu-local"}}}
 	if err := SaveSession(workspace, legacy); err != nil {
@@ -156,6 +159,7 @@ func TestApplyExecutionCompatibilityWritesOneSelfContainedSessionTask(t *testing
 }
 
 func TestApplyExecutionCompatibilityMaterializesV3PolicyWithoutLiveConfig(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	snapshot := &ExecutionPolicySnapshot{
 		Version:           executionPolicyLegacySnapshotVersion,
@@ -206,6 +210,7 @@ func TestApplyExecutionCompatibilityMaterializesV3PolicyWithoutLiveConfig(t *tes
 }
 
 func TestApplyExecutionCompatibilityMaterializesSessionOnlyV3Policy(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	snapshot := &ExecutionPolicySnapshot{
 		Version:           executionPolicyLegacySnapshotVersion,
@@ -245,6 +250,7 @@ func TestApplyExecutionCompatibilityMaterializesSessionOnlyV3Policy(t *testing.T
 }
 
 func TestApplyExecutionCompatibilityRefusesAmbiguousTaskWithoutAppending(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -268,6 +274,7 @@ func TestApplyExecutionCompatibilityRefusesAmbiguousTaskWithoutAppending(t *test
 }
 
 func TestAmbiguousLegacyPolicySnapshotAppendsNothing(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	snapshot := &ExecutionPolicySnapshot{
 		Version:           executionPolicyLegacySnapshotVersion,
@@ -301,6 +308,7 @@ func TestAmbiguousLegacyPolicySnapshotAppendsNothing(t *testing.T) {
 }
 
 func TestApplyExecutionCompatibilityMaterializesBackendBindingAndReceipt(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -339,6 +347,7 @@ func TestApplyExecutionCompatibilityMaterializesBackendBindingAndReceipt(t *test
 }
 
 func TestApplyExecutionCompatibilityMaterializesLegacyProviderSessionBinding(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -378,6 +387,7 @@ func TestApplyExecutionCompatibilityMaterializesLegacyProviderSessionBinding(t *
 }
 
 func TestApplyExecutionCompatibilityRejectsProfileBindingConflictWithoutAppending(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -405,6 +415,7 @@ func TestApplyExecutionCompatibilityRejectsProfileBindingConflictWithoutAppendin
 }
 
 func TestApplyExecutionCompatibilityUsesHistoricalProfileEvidence(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -444,6 +455,7 @@ func TestApplyExecutionCompatibilityUsesHistoricalProfileEvidence(t *testing.T) 
 }
 
 func TestApplyExecutionCompatibilityIsBranchScopedAfterFork(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -488,6 +500,7 @@ func TestApplyExecutionCompatibilityIsBranchScopedAfterFork(t *testing.T) {
 }
 
 func TestCanonicalReplayRejectsPostMigrationRetarget(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {

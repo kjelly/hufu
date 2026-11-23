@@ -74,6 +74,7 @@ func (f proposalFixture) proposalEvents(t *testing.T) []RunEvent {
 const validProposal = `{"action":"collect-debug-bundle","arguments":{"service":"api"},"assessment":"recommended","rationale":"api latency spiked"}`
 
 func TestTeamActionProposeRecordsDurableProposal(t *testing.T) {
+	t.Parallel()
 	f := newProposalFixture(t)
 	todosBefore := len(f.c.taskTracker.TodoList().Items())
 	content, isError := f.propose(t, "runtime-engineer", validProposal)
@@ -113,6 +114,7 @@ func TestTeamActionProposeRecordsDurableProposal(t *testing.T) {
 }
 
 func TestTeamActionProposeRejectsInvalidProposals(t *testing.T) {
+	t.Parallel()
 	longEvidence := make([]string, maxProposalEvidenceRefs+1)
 	for i := range longEvidence {
 		longEvidence[i] = fmt.Sprintf("art-%d", i)
@@ -153,6 +155,7 @@ func TestTeamActionProposeRejectsInvalidProposals(t *testing.T) {
 }
 
 func TestTeamActionProposeEnforcesTheSessionLimit(t *testing.T) {
+	t.Parallel()
 	f := newProposalFixture(t)
 	f.c.actionProposals.mu.Lock()
 	for i := range maxProposalsPerSession {
@@ -174,6 +177,7 @@ func fillProposalIndex(c *Coordinator, total int) {
 }
 
 func TestTeamActionProposeRetryIsRecognizedWhenTheSessionIsFull(t *testing.T) {
+	t.Parallel()
 	f := newProposalFixture(t)
 	content, isError := f.propose(t, "runtime-engineer", validProposal)
 	var first map[string]any
@@ -192,6 +196,7 @@ func TestTeamActionProposeRetryIsRecognizedWhenTheSessionIsFull(t *testing.T) {
 }
 
 func TestConcurrentProposalsCannotExceedTheSessionLimit(t *testing.T) {
+	t.Parallel()
 	f := newProposalFixture(t)
 	fillProposalIndex(f.c, maxProposalsPerSession-1)
 	item := f.items["runtime-engineer"]
@@ -239,6 +244,7 @@ func TestConcurrentProposalsCannotExceedTheSessionLimit(t *testing.T) {
 }
 
 func TestTeamActionProposeRequiresJournalAndOpenOccurrence(t *testing.T) {
+	t.Parallel()
 	f := newProposalFixture(t)
 	f.c.eventStore = nil
 	f.c.SetEventJournal(nil)
@@ -257,6 +263,7 @@ func TestTeamActionProposeRequiresJournalAndOpenOccurrence(t *testing.T) {
 }
 
 func TestCoordinatorSeesProposalsNewestFirst(t *testing.T) {
+	t.Parallel()
 	f := newProposalFixture(t)
 	if _, isError := f.propose(t, "runtime-engineer", validProposal); isError {
 		t.Fatal("first proposal failed")
@@ -279,6 +286,7 @@ func TestCoordinatorSeesProposalsNewestFirst(t *testing.T) {
 }
 
 func TestTeamActionProposalIndexRebuildsPerBranch(t *testing.T) {
+	t.Parallel()
 	session := loadActionCatalogTeam(t, actionCatalogTestManifest("", actionCatalogTestEntry))
 	session.Workspace = t.TempDir()
 	start := func(fresh bool) *Coordinator {
@@ -313,6 +321,7 @@ func TestTeamActionProposalIndexRebuildsPerBranch(t *testing.T) {
 }
 
 func TestTeamActionProposedPayloadValidation(t *testing.T) {
+	t.Parallel()
 	payload := TeamActionProposedPayload{
 		SchemaVersion: 1, Status: "proposed", ProposalID: "tap_1", ActionID: "collect", Agent: "worker",
 		Arguments: json.RawMessage(`{}`), Assessment: "recommended", Rationale: "why",
@@ -344,6 +353,7 @@ func TestTeamActionProposedPayloadValidation(t *testing.T) {
 }
 
 func TestTeamActionProposalFieldNamesAreNotRedacted(t *testing.T) {
+	t.Parallel()
 	for _, value := range []any{TeamActionProposedPayload{}, TeamActionEvidenceRef{}} {
 		typ := reflect.TypeOf(value)
 		for i := range typ.NumField() {
@@ -356,6 +366,7 @@ func TestTeamActionProposalFieldNamesAreNotRedacted(t *testing.T) {
 }
 
 func TestTeamActionProposeIsNotAMutationOrCommitGated(t *testing.T) {
+	t.Parallel()
 	if readOnlyToolMutation(teamActionProposeToolName, validProposal) {
 		t.Fatal("team_action_propose is treated as a mutation")
 	}
@@ -377,6 +388,7 @@ func TestTeamActionProposeIsNotAMutationOrCommitGated(t *testing.T) {
 }
 
 func TestStaticExposureAddsProposeForProposers(t *testing.T) {
+	t.Parallel()
 	session := loadActionCatalogTeam(t, actionCatalogTestManifest("", actionCatalogTestEntry))
 	for agentName, want := range map[string]bool{"runtime-engineer": true, "critic": false} {
 		names := staticTeamActionToolNames(session, session.Agents[agentName])

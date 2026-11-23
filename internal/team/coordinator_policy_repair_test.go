@@ -8,6 +8,7 @@ import (
 )
 
 func TestCoordinatorPolicyRepairIsDeterministicAndBounded(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	violation := &delegationPolicyViolation{message: "worker already has a terminal result"}
 
@@ -36,12 +37,14 @@ func TestCoordinatorPolicyRepairIsDeterministicAndBounded(t *testing.T) {
 }
 
 func TestCoordinatorPolicyRepairRecognizesProviderWrappedError(t *testing.T) {
+	t.Parallel()
 	if !isCoordinatorPolicyRepairResult("Error: " + coordinatorPolicyRepairPrefix + "\nAttempt 1/2") {
 		t.Fatal("provider-wrapped repair marker was not recognized")
 	}
 }
 
 func TestCoordinatorPolicyRepairTerminalizesFailedWorkflowImmediately(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		taskTracker: NewTaskTracker(),
 		phaseWorkflow: &runtimeWorkflow{
@@ -66,6 +69,7 @@ func TestCoordinatorPolicyRepairTerminalizesFailedWorkflowImmediately(t *testing
 }
 
 func TestCoordinatorPolicyRepairResponseSetsPendingState(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	response := c.coordinatorPolicyRepairResponse(&delegationPolicyViolation{message: "invalid delegation"})
 	if !c.coordinatorPolicyRepairPending.Load() {
@@ -77,6 +81,7 @@ func TestCoordinatorPolicyRepairResponseSetsPendingState(t *testing.T) {
 }
 
 func TestCoordinatorPolicyRepairNeverRedispatchesCompletedWorker(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "completed work"}})[0]
 	if err := tracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskDone, "done", "authoritative result"); err != nil {
@@ -95,6 +100,7 @@ func TestCoordinatorPolicyRepairNeverRedispatchesCompletedWorker(t *testing.T) {
 }
 
 func TestCoordinatorPolicyRepairAllowsRedispatchWhenAgentHasUnfinishedWork(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	items := tracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "go-reviewer", Desc: "batch 1 (done)"},
@@ -116,6 +122,7 @@ func TestCoordinatorPolicyRepairAllowsRedispatchWhenAgentHasUnfinishedWork(t *te
 }
 
 func TestCompletedPolicyRepairRestoresNormalDelegation(t *testing.T) {
+	t.Parallel()
 	for _, protected := range []bool{false, true} {
 		name := "reusable_role"
 		if protected {
@@ -160,6 +167,7 @@ func TestCompletedPolicyRepairRestoresNormalDelegation(t *testing.T) {
 }
 
 func TestCoordinatorPolicyRepairFinalSummaryUsesTodoEvidence(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "completed work"}})[0]
 	tracker.TodoList().UpdateStatusAndOutput(item.ID, TaskDone, "done", "authoritative result")

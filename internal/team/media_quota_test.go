@@ -84,6 +84,7 @@ func (j mediaQuotaBarrier) AppendAtHead(ctx context.Context, e RunEvent, head st
 }
 
 func TestMediaQuotaAdmissionAcrossEventStoreHandles(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t, media.Limits{MaxBranchBlobs: 1})
 	ctx := openMediaInvocation(t, c)
 	peer := mediaJournalPeer(t, c, c.executionRunID)
@@ -124,6 +125,7 @@ func TestMediaQuotaAdmissionAcrossEventStoreHandles(t *testing.T) {
 }
 
 func TestMediaQuotaFollowsForkLineageAcrossRuns(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t, media.Limits{MaxBranchBlobs: 1})
 	ctx := openMediaInvocation(t, c)
 	first := mediaQuotaCandidate(t, c, "parent-turn", 2)

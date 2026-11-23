@@ -23,6 +23,7 @@ func scopedResolutionFor(tool fantasy.AgentTool) ResolvedWorkerTools {
 }
 
 func TestResolvedWorkerSurfaceCarriesScopeDescriptors(t *testing.T) {
+	t.Parallel()
 	c, root := scopedResourceCoordinator(t)
 	c.coreTools = agent.BuildAllAgentTools(root, internaltools.WithAllowedPaths([]string{root}))
 	c.coreTools = append(c.coreTools,
@@ -93,6 +94,7 @@ func scopedResourceCoordinator(t *testing.T) (*Coordinator, string) {
 }
 
 func TestResolveNewTaskResourceScopeEnablesOnlyEnforcedLocalSurface(t *testing.T) {
+	t.Parallel()
 	c, root := scopedResourceCoordinator(t)
 	binding := &WorksetBinding{TouchedPaths: []string{"docs/a.md"}}
 	todo := &TodoItem{ID: "1", Agent: "worker", SideEffect: SideEffectWorkspaceWrite, WorksetBinding: binding}
@@ -135,6 +137,7 @@ func TestResolveNewTaskResourceScopeEnablesOnlyEnforcedLocalSurface(t *testing.T
 }
 
 func TestResolveNewTaskResourceScopeHonorsConfiguredCeiling(t *testing.T) {
+	t.Parallel()
 	c, root := scopedResourceCoordinator(t)
 	c.allowedPaths = []string{filepath.Join(root, "internal")}
 	binding := &WorksetBinding{TouchedPaths: []string{"docs/a.md"}}
@@ -147,6 +150,7 @@ func TestResolveNewTaskResourceScopeHonorsConfiguredCeiling(t *testing.T) {
 }
 
 func TestDerivedDisjointWriterScopesRemainConcurrent(t *testing.T) {
+	t.Parallel()
 	c, root := scopedResourceCoordinator(t)
 	write := scopedResolutionFor(internaltools.NewWriteTool(internaltools.WithWorkDir(root), internaltools.WithAllowedPaths([]string{root})))
 	tasks := []TaskDef{
@@ -173,6 +177,7 @@ func TestDerivedDisjointWriterScopesRemainConcurrent(t *testing.T) {
 }
 
 func TestInstallTaskExecutionPathScopeUsesDetachedEnvelope(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	envelope := TaskExecutionEnvelope{
 		ResourceScopeDigest: "scope-digest",

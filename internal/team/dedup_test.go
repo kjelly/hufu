@@ -15,6 +15,7 @@ import (
 
 // TestTaskDefUnmarshalJSON tests backward compatibility with legacy "task" field
 func TestTaskDefUnmarshalJSON(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		jsonData string
@@ -58,6 +59,7 @@ func TestTaskDefUnmarshalJSON(t *testing.T) {
 
 // TestTaskDefUnmarshalJSONInvalid tests error handling
 func TestTaskDefUnmarshalJSONInvalid(t *testing.T) {
+	t.Parallel()
 	var task TaskDef
 	err := task.UnmarshalJSON([]byte(`{invalid json}`))
 	if err == nil {
@@ -67,6 +69,7 @@ func TestTaskDefUnmarshalJSONInvalid(t *testing.T) {
 
 // TestDetectTaskCycle tests cycle detection in task dependencies
 func TestDetectTaskCycle(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		tasks []TaskDef
@@ -162,6 +165,7 @@ func TestDetectTaskCycle(t *testing.T) {
 
 // TestLookupTaskCache tests the task cache lookup functionality
 func TestLookupTaskCache(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		cacheSetup func() map[string][]cachedTaskEntry
@@ -292,6 +296,7 @@ func TestLookupTaskCache(t *testing.T) {
 
 // TestLookupTaskCacheAllGenerations tests semantic duplicate detection
 func TestLookupTaskCacheAllGenerations(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		cacheSetup func() map[string][]cachedTaskEntry
@@ -358,6 +363,7 @@ func TestLookupTaskCacheAllGenerations(t *testing.T) {
 }
 
 func TestLookupTaskCacheAllGenerationsSemanticCandidateLimit(t *testing.T) {
+	t.Parallel()
 	for _, count := range []int{99, 100, 101, 150} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			c := newTestCoordinator(t)
@@ -390,6 +396,7 @@ func TestLookupTaskCacheAllGenerationsSemanticCandidateLimit(t *testing.T) {
 
 // TestStoreTaskCache tests caching of task results
 func TestStoreTaskCache(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		taskCache: newDefaultTaskCache(taskCacheDependencies{}),
 	}
@@ -416,6 +423,7 @@ func TestStoreTaskCache(t *testing.T) {
 
 // TestStoreTaskCacheMaxEntries tests that cache is limited to max entries
 func TestStoreTaskCacheMaxEntries(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		taskCache: newDefaultTaskCache(taskCacheDependencies{}),
 	}
@@ -439,6 +447,7 @@ func TestStoreTaskCacheMaxEntries(t *testing.T) {
 
 // TestCheckDuplicateTasksComprehensive tests comprehensive duplicate detection scenarios
 func TestCheckDuplicateTasksComprehensive(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		previousTasks  map[string]int
@@ -555,6 +564,7 @@ func TestCheckDuplicateTasksComprehensive(t *testing.T) {
 
 // TestCheckDuplicateTasksGlobalCountUpdate tests that global counts are updated correctly
 func TestCheckDuplicateTasksGlobalCountUpdate(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		delegatedTasks:   make(map[string]int),
 		delegatedTasksMu: sync.Mutex{},
@@ -606,6 +616,7 @@ func TestCheckDuplicateTasksGlobalCountUpdate(t *testing.T) {
 
 // TestTaskTimingReset tests the taskTiming reset functionality
 func TestTaskTimingReset(t *testing.T) {
+	t.Parallel()
 	tt := &taskTiming{}
 	tt.reset()
 
@@ -624,6 +635,7 @@ func TestTaskTimingReset(t *testing.T) {
 }
 
 func TestTaskTimingAccounting(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name     string
 		counting bool
@@ -662,6 +674,7 @@ func TestTaskTimingAccounting(t *testing.T) {
 
 // TestFormatTaskResults tests task result formatting
 func TestFormatTaskResults(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		results  []agentTaskResult
@@ -776,6 +789,7 @@ func TestFormatTaskResults(t *testing.T) {
 
 // TestFormatTaskResultsSeparators tests that results are properly separated
 func TestFormatTaskResultsSeparators(t *testing.T) {
+	t.Parallel()
 	results := []agentTaskResult{
 		{agentName: "agent1", output: "result1"},
 		{agentName: "agent2", output: "result2"},

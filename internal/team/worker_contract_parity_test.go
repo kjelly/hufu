@@ -14,6 +14,7 @@ import (
 // by writing an ordinary prose summary — and that failure is indistinguishable
 // from genuine non-completion.
 func TestResultProtocolInstructionsStateTheContract(t *testing.T) {
+	t.Parallel()
 	granted := map[string]bool{"submit_result": true}
 
 	tests := []struct {
@@ -92,6 +93,7 @@ func TestResultProtocolInstructionsStateTheContract(t *testing.T) {
 // be told to edit the stm.md projection file directly, even when they hold
 // write/edit grants.
 func TestSharedKnowledgeInstructionsCanonicalModeNeverOffersSTMEdit(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		contextRepo: &contextstore.SQLiteRepository{},
 		session: &TeamSession{
@@ -121,6 +123,7 @@ func TestSharedKnowledgeInstructionsCanonicalModeNeverOffersSTMEdit(t *testing.T
 // call stm_write, which the default team never grants; obeying the instruction
 // aborted the attempt at the stream gate.
 func TestSharedKnowledgeInstructionsOnlyNameGrantedTools(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{
 		Config:    agent.TeamConfig{Name: "team"},
 		Workspace: t.TempDir(),
@@ -155,6 +158,7 @@ func TestSharedKnowledgeInstructionsOnlyNameGrantedTools(t *testing.T) {
 // canonical structured-result instruction. Without it, the worker is
 // runtime-authorized for the alias but receives no contract guidance.
 func TestSharedKnowledgeInstructionsCanonicalModeStmWriteAppendsCompatSentence(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		contextRepo: &contextstore.SQLiteRepository{},
 		session: &TeamSession{
@@ -200,6 +204,7 @@ func TestSharedKnowledgeInstructionsCanonicalModeStmWriteAppendsCompatSentence(t
 // explicit AgentConfig.MaxSteps over resolveMaxSteps, so passing a non-zero
 // constant made --max-steps and team.yaml max-steps silently ineffective.
 func TestStepBudgetHonoursOverrides(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		agentSteps int
@@ -228,6 +233,7 @@ func TestStepBudgetHonoursOverrides(t *testing.T) {
 // uses: both workers and the coordinator honor the team-level budget, while a
 // CLI --max-steps override can still narrow or widen it for one run.
 func TestDefaultTeamStepBudget(t *testing.T) {
+	t.Parallel()
 	session, err := LoadDefaultTeam(t.TempDir(), nil, "bash,terminal")
 	if err != nil {
 		t.Fatalf("LoadDefaultTeam: %v", err)
@@ -248,6 +254,7 @@ func TestDefaultTeamStepBudget(t *testing.T) {
 // step budget carries its prior conversation into the retry, so it must be told
 // to resume — not to change an approach that was never wrong.
 func TestLocalFailureHintForBudgetExhaustion(t *testing.T) {
+	t.Parallel()
 	hint := localFailureHint("protocol incomplete: step budget exhausted (30/30 steps) before submit_result")
 
 	for _, needle := range []string{"continue", "cut off"} {

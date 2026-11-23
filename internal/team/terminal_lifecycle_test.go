@@ -26,6 +26,7 @@ func (delayedExperienceProcessor) Finalize(context.Context, RunFinalizationInput
 }
 
 func TestEventStoreAppendPersistedContextCancelsWhileBlocked(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "run-blocked", "session-blocked")
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +51,7 @@ func TestEventStoreAppendPersistedContextCancelsWhileBlocked(t *testing.T) {
 }
 
 func TestTerminalLifecycleNormalEmergencyRacePublishesOneCanonicalEvent(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-race", "session-race")
 	if err != nil {
@@ -106,6 +108,7 @@ func TestTerminalLifecycleNormalEmergencyRacePublishesOneCanonicalEvent(t *testi
 }
 
 func TestSetWrapUpPersistsOneRunBoundCheckpointAndEvent(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-wrap", "session-wrap")
 	if err != nil {
@@ -157,6 +160,7 @@ func TestSetWrapUpPersistsOneRunBoundCheckpointAndEvent(t *testing.T) {
 }
 
 func TestRunRoundResetPreservesEarlyWrapUpRequest(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{}, sessionData: NewSession(), taskTracker: NewTaskTracker()}
 	c.SetWrapUp()
 	c.resetRoundStatePreservingWrapUp()
@@ -166,6 +170,7 @@ func TestRunRoundResetPreservesEarlyWrapUpRequest(t *testing.T) {
 }
 
 func TestWrapUpEmergencyFinalizationCommitsCanonicalTerminalOutcome(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-wrap-terminal", "session-wrap-terminal")
 	if err != nil {
@@ -202,6 +207,7 @@ func TestWrapUpEmergencyFinalizationCommitsCanonicalTerminalOutcome(t *testing.T
 }
 
 func TestTerminalCommitClearsOnlyMatchingPendingWrapUp(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		executionRunID: "run-wrap", terminalLifecycleRunID: "run-wrap",
@@ -226,6 +232,7 @@ func TestTerminalCommitClearsOnlyMatchingPendingWrapUp(t *testing.T) {
 }
 
 func TestPendingWrapUpProjectionRecoveryIsEventFirst(t *testing.T) {
+	t.Parallel()
 	pending := &PendingWrapUp{RunID: "run-wrap", BranchID: "main", RequestedAt: time.Now().UTC().Format(time.RFC3339Nano), EventDurable: true}
 	if isProjectionPrefixOrRecoverable(&SessionData{PendingWrapUp: pending}, &SessionData{}, nil) {
 		t.Fatal("checkpoint-only wrap-up marker was treated as safely deletable")
@@ -236,6 +243,7 @@ func TestPendingWrapUpProjectionRecoveryIsEventFirst(t *testing.T) {
 }
 
 func TestEmergencyFinalizationCancelsActiveTaskBeforeTerminalSnapshot(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-emergency", "session-emergency")
 	if err != nil {
@@ -273,6 +281,7 @@ func TestEmergencyFinalizationCancelsActiveTaskBeforeTerminalSnapshot(t *testing
 }
 
 func TestActiveSetLastRunResultDoesNotElectOrPersistTerminalState(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		executionRunID:         "run-projection-only",
@@ -300,6 +309,7 @@ func TestActiveSetLastRunResultDoesNotElectOrPersistTerminalState(t *testing.T) 
 }
 
 func TestTerminalAppendFailureLeavesDownstreamProjectionsUnchanged(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-append-failure", "session-append-failure")
 	if err != nil {
@@ -332,6 +342,7 @@ func TestTerminalAppendFailureLeavesDownstreamProjectionsUnchanged(t *testing.T)
 }
 
 func TestTerminalSnapshotUsesOneRunAndEvidenceIdentity(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-identity", "session-identity")
 	if err != nil {
@@ -375,6 +386,7 @@ func TestTerminalSnapshotUsesOneRunAndEvidenceIdentity(t *testing.T) {
 }
 
 func TestTerminalCommitOutlivesExpiringWorkerContext(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-cancelled", "session-cancelled")
 	if err != nil {
@@ -411,6 +423,7 @@ func TestTerminalCommitOutlivesExpiringWorkerContext(t *testing.T) {
 }
 
 func TestFinalizeRemainingTasksPreservesOperatorCancellationCause(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	items := tracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "active", Desc: "active task"},
@@ -432,6 +445,7 @@ func TestFinalizeRemainingTasksPreservesOperatorCancellationCause(t *testing.T) 
 }
 
 func TestFinalizeRunDoesNotSynthesizeNoProgressTerminalResult(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-no-progress", "session-no-progress")
 	if err != nil {
@@ -454,6 +468,7 @@ func TestFinalizeRunDoesNotSynthesizeNoProgressTerminalResult(t *testing.T) {
 }
 
 func TestRuntimeWorksetManifestRequiresExplicitRoleAndStableIdentity(t *testing.T) {
+	t.Parallel()
 	manifest := ArtifactRef{Path: "runtime/runs/r1/actions/a/workset/manifest.json"}
 	falsePositive := ArtifactRef{Path: "workset.json", Kind: "output"}
 	if isRuntimeWorksetManifest(falsePositive, manifest) {
@@ -470,6 +485,7 @@ func TestRuntimeWorksetManifestRequiresExplicitRoleAndStableIdentity(t *testing.
 }
 
 func TestLoadRuntimeWorksetProjectionRejectsWrongRunOrDigest(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	runID := "run-current"
 	manifestPath := filepath.Join(workspace, "runtime", "runs", runID, "actions", "action-1", "workset", "manifest.json")
@@ -502,6 +518,7 @@ func TestLoadRuntimeWorksetProjectionRejectsWrongRunOrDigest(t *testing.T) {
 }
 
 func TestCompletedRunWithoutWorksetReplacesOlderWorkspaceProjection(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	currentPath := filepath.Join(workspace, "runtime", "current-workset.json")
 	old := RuntimeWorksetProjection{SchemaVersion: 1, RunID: "run-20260907090000-old"}
@@ -531,6 +548,7 @@ func TestCompletedRunWithoutWorksetReplacesOlderWorkspaceProjection(t *testing.T
 }
 
 func TestCompletedRunDoesNotRemoveNewerWorkspaceProjection(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	currentPath := filepath.Join(workspace, "runtime", "current-workset.json")
 	newer := RuntimeWorksetProjection{SchemaVersion: 1, RunID: "run-20260907110000-newer"}

@@ -10,6 +10,7 @@ import (
 )
 
 func TestShadowSessionFixturesProduceComparableBundlesWithoutMutatingLegacyPrompt(t *testing.T) {
+	t.Parallel()
 	var fixtures []struct {
 		Name         string `json:"name"`
 		Role         string `json:"role"`
@@ -71,6 +72,7 @@ func TestShadowSessionFixturesProduceComparableBundlesWithoutMutatingLegacyPromp
 }
 
 func TestShadowCompilerProducesDeterministicBudgetedFingerprint(t *testing.T) {
+	t.Parallel()
 	input := WorkerContextInput{
 		Goal: "Implement context tracing", RawSTM: "# 發現\n- context_shadow.go changed\n",
 		RawLTM: "# 決策\n- preserve legacy prompt\n", ModelContext: ModelContextSpec{ModelID: "qwen3", ContextWindow: 600, MaxOutputTokens: 100, SafetyMarginTokens: 50}, MaxAuxChars: 600,
@@ -92,6 +94,7 @@ func TestShadowCompilerProducesDeterministicBudgetedFingerprint(t *testing.T) {
 }
 
 func TestShadowTraceRecordsRequestAndEligibilityWithoutContent(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
 	request := validTestContextRequest()
@@ -122,6 +125,7 @@ func TestShadowTraceRecordsRequestAndEligibilityWithoutContent(t *testing.T) {
 }
 
 func TestBudgetContextItemsNeverExceedsBudgetForOptionalItems(t *testing.T) {
+	t.Parallel()
 	for n := 0; n < 80; n++ {
 		items := make([]ContextItem, n)
 		for i := range items {

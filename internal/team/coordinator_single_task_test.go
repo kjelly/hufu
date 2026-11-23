@@ -16,6 +16,10 @@ import (
 )
 
 func TestRunTaskStructuredOfflineLifecycle(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, category := range []string{"allowed", "denied"} {
 		t.Run(category, func(t *testing.T) {
 			root := t.TempDir()

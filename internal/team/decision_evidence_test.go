@@ -42,6 +42,7 @@ func mustSeal(t *testing.T, packet DecisionEvidencePacket) DecisionEvidencePacke
 // The digest must be stable across repeated seals and across input ordering:
 // judges are told they share "the same evidence", and that has to be exact.
 func TestEvidenceHashIsStable(t *testing.T) {
+	t.Parallel()
 	packet := evidenceFixture()
 	first := mustSeal(t, packet).Hash
 	if first == "" || len(first) != 64 {
@@ -63,6 +64,7 @@ func TestEvidenceHashIsStable(t *testing.T) {
 
 // Material changes must produce a new hash (spec §15.2).
 func TestMaterialChangesAlterTheHash(t *testing.T) {
+	t.Parallel()
 	base := mustSeal(t, evidenceFixture()).Hash
 	tests := []struct {
 		name   string
@@ -97,6 +99,7 @@ func TestMaterialChangesAlterTheHash(t *testing.T) {
 // Non-material changes must NOT alter the hash. Hashing them would make every
 // routine bookkeeping update invalidate a whole judgment round (spec §15.2).
 func TestNonMaterialChangesPreserveTheHash(t *testing.T) {
+	t.Parallel()
 	base := mustSeal(t, evidenceFixture()).Hash
 	tests := []struct {
 		name   string
@@ -139,6 +142,7 @@ func TestNonMaterialChangesPreserveTheHash(t *testing.T) {
 // The canonical byte form is the hash input; pin it so a future encoder change
 // cannot silently invalidate every persisted decision.
 func TestCanonicalMaterialGolden(t *testing.T) {
+	t.Parallel()
 	packet := DecisionEvidencePacket{
 		Question: "Ship?",
 		Options: []DecisionOption{
@@ -166,6 +170,7 @@ func TestCanonicalMaterialGolden(t *testing.T) {
 // Absent and empty must hash identically so an empty list can never look like
 // different evidence than a missing one (spec §15.3 rule 5).
 func TestCanonicalOmitsEmptyValues(t *testing.T) {
+	t.Parallel()
 	absent := DecisionEvidencePacket{Question: "Ship?", Options: []DecisionOption{{ID: "a", Kind: OptionExecute}}}
 	empty := DecisionEvidencePacket{
 		Question:    "Ship?",
@@ -183,6 +188,7 @@ func TestCanonicalOmitsEmptyValues(t *testing.T) {
 // Unicode normalization keeps two byte-different but canonically identical
 // strings from looking like different evidence.
 func TestCanonicalNormalizesUnicode(t *testing.T) {
+	t.Parallel()
 	composed := DecisionEvidencePacket{Question: "Ship café?", Options: []DecisionOption{{ID: "a", Kind: OptionExecute}}}
 	decomposed := DecisionEvidencePacket{Question: "Ship café?", Options: []DecisionOption{{ID: "a", Kind: OptionExecute}}}
 	if mustSeal(t, composed).Hash != mustSeal(t, decomposed).Hash {
@@ -191,6 +197,7 @@ func TestCanonicalNormalizesUnicode(t *testing.T) {
 }
 
 func TestEvidenceValidate(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		mutate  func(*DecisionEvidencePacket)
@@ -222,6 +229,7 @@ func TestEvidenceValidate(t *testing.T) {
 }
 
 func TestPacketOptionHelpers(t *testing.T) {
+	t.Parallel()
 	packet := evidenceFixture()
 	if !packet.HasOption("migrate") || packet.HasOption("nope") {
 		t.Fatal("HasOption is wrong")
@@ -242,6 +250,7 @@ func TestPacketOptionHelpers(t *testing.T) {
 // The encoder version is stamped on a sealed packet so a later hash mismatch
 // can be attributed rather than merely observed.
 func TestSealStampsTheCanonicalFormVersion(t *testing.T) {
+	t.Parallel()
 	sealed := mustSeal(t, evidenceFixture())
 	if sealed.CanonicalVersion != CanonicalFormVersion {
 		t.Fatalf("CanonicalVersion = %d, want %d", sealed.CanonicalVersion, CanonicalFormVersion)
@@ -254,6 +263,7 @@ func TestSealStampsTheCanonicalFormVersion(t *testing.T) {
 // A packet persisted before versioning existed reports v1, which is what that
 // encoder was; it must not be treated as an unknown or outdated form.
 func TestUnversionedPacketReadsAsVersionOne(t *testing.T) {
+	t.Parallel()
 	legacy := DecisionEvidencePacket{Hash: "abc", CanonicalVersion: 0}
 	if got := legacy.EffectiveCanonicalVersion(); got != 1 {
 		t.Fatalf("EffectiveCanonicalVersion = %d, want 1", got)
@@ -272,6 +282,7 @@ func TestUnversionedPacketReadsAsVersionOne(t *testing.T) {
 // newer encoder must be explained as an encoder change, not as evidence that
 // moved.
 func TestEvidenceChangeReasonDistinguishesEncoderUpgrades(t *testing.T) {
+	t.Parallel()
 	sealed := mustSeal(t, evidenceFixture())
 
 	upgraded := sealed
@@ -297,6 +308,7 @@ func TestEvidenceChangeReasonDistinguishesEncoderUpgrades(t *testing.T) {
 // The version is inside the hash input, so two encoders can never produce the
 // same digest for the same evidence and be mistaken for one another.
 func TestCanonicalVersionParticipatesInTheHash(t *testing.T) {
+	t.Parallel()
 	canonical, err := evidenceFixture().canonicalMaterial()
 	if err != nil {
 		t.Fatal(err)

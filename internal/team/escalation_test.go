@@ -8,6 +8,7 @@ import (
 )
 
 func TestNextStrongerModel(t *testing.T) {
+	t.Parallel()
 	list := []config.ModelEntry{{ID: "fast"}, {ID: "mid"}, {ID: "strong"}}
 
 	cases := []struct {
@@ -35,6 +36,7 @@ func TestNextStrongerModel(t *testing.T) {
 }
 
 func TestTaskEscalationEnabled(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name         string
 		task         TaskDef
@@ -59,6 +61,7 @@ func TestTaskEscalationEnabled(t *testing.T) {
 }
 
 func TestEscalateTaskModelForRetry(t *testing.T) {
+	t.Parallel()
 	list := []config.ModelEntry{{ID: "fast"}, {ID: "strong"}}
 	c := &Coordinator{
 		session:   &TeamSession{Config: agent.TeamConfig{Name: "test"}},

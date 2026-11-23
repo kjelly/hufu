@@ -12,6 +12,7 @@ import (
 )
 
 func TestBindEvidenceSources(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer"}, {Agent: "reviewer"}, {Agent: "reviewer"}})
 	done, running, failedResult := items[0], items[1], items[2]
@@ -55,6 +56,7 @@ func TestBindEvidenceSources(t *testing.T) {
 }
 
 func TestEvidenceFromGivesCriticTheReviewedInputsAndFinding(t *testing.T) {
+	t.Parallel()
 	c, _, reviewer, ref, receipt := newWorksetAuthorizationFixture(t)
 	reviewer.WorksetReceipt = cloneWorksetReceipt(receipt)
 	reviewResult := &TaskResult{
@@ -116,6 +118,7 @@ func TestEvidenceFromGivesCriticTheReviewedInputsAndFinding(t *testing.T) {
 }
 
 func TestEvidenceFromSurvivesEventReplayAndShadow(t *testing.T) {
+	t.Parallel()
 	item := todoItemFromSpec(TodoSpec{Agent: "critic", Desc: "confirm finding", Goal: "confirm finding", EvidenceFrom: []string{"12"}}, "15")
 	payload, err := json.Marshal(taskTransitionPayload(item))
 	if err != nil {
@@ -141,6 +144,7 @@ func TestEvidenceFromSurvivesEventReplayAndShadow(t *testing.T) {
 }
 
 func TestDependencyBindingKeepsAcceptedArtifactsSeparateFromReviewedInputs(t *testing.T) {
+	t.Parallel()
 	c, _, reviewer, ref, receipt := newWorksetAuthorizationFixture(t)
 	reviewer.WorksetReceipt = cloneWorksetReceipt(receipt)
 	compiled, err := CompileResultContractDocument("source.json", []byte(`{"type":"object","required":["value"],"properties":{"value":{"type":"string"}},"additionalProperties":false}`))

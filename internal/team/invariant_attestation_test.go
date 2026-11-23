@@ -63,6 +63,7 @@ func addInvariantRecoveryManifest(t *testing.T, c *Coordinator, item *TodoItem, 
 }
 
 func TestAttestInvariantClaimsBuildsCanonicalSortedEnvelope(t *testing.T) {
+	t.Parallel()
 	c, item, manifest := invariantAttestationFixture(t, InvariantVerificationGate,
 		InvariantDefinition{ID: "zeta", Statement: "preserve zeta", Severity: InvariantSeverityWarning, AppliesTo: []string{"*"}},
 		InvariantDefinition{ID: "alpha", Statement: "preserve alpha", Severity: InvariantSeverityError, AppliesTo: []string{"internal/team/"}},
@@ -92,6 +93,7 @@ func TestAttestInvariantClaimsBuildsCanonicalSortedEnvelope(t *testing.T) {
 }
 
 func TestAttestInvariantClaimsRequiresExplicitEmptySet(t *testing.T) {
+	t.Parallel()
 	c, item, manifest := invariantAttestationFixture(t, InvariantVerificationReport)
 	result := &TaskResult{}
 	empty := []InvariantAssessmentClaim{}
@@ -107,6 +109,7 @@ func TestAttestInvariantClaimsRequiresExplicitEmptySet(t *testing.T) {
 }
 
 func TestAttestInvariantClaimsRejectsInvalidClaimsAndAttribution(t *testing.T) {
+	t.Parallel()
 	definition := InvariantDefinition{ID: "safe", Statement: "preserve safety", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}
 	tests := []struct {
 		name string
@@ -165,6 +168,7 @@ func TestAttestInvariantClaimsRejectsInvalidClaimsAndAttribution(t *testing.T) {
 }
 
 func TestAttestInvariantClaimsOrdinaryTaskRejectsExplicitArray(t *testing.T) {
+	t.Parallel()
 	c, item, _ := invariantAttestationFixture(t, "")
 	empty := []InvariantAssessmentClaim{}
 	if err := c.attestInvariantClaims(item.ID, 1, "", &empty, &TaskResult{}); err == nil {
@@ -176,6 +180,7 @@ func TestAttestInvariantClaimsOrdinaryTaskRejectsExplicitArray(t *testing.T) {
 }
 
 func TestCloneTaskResultDeepCopiesInvariantAttestation(t *testing.T) {
+	t.Parallel()
 	index := 2
 	original := &TaskResult{InvariantVerification: &InvariantVerificationResult{Assessments: []InvariantAssessment{{FindingIndex: &index, MissingEvidence: []string{"one"}}}}}
 	cloned := cloneTaskResult(original)
@@ -187,6 +192,7 @@ func TestCloneTaskResultDeepCopiesInvariantAttestation(t *testing.T) {
 }
 
 func TestSubmitResultInvariantClaimSchemaIsModeAware(t *testing.T) {
+	t.Parallel()
 	ordinary := submitResultToolInfo(taskResultSubmissionContract{})
 	if _, ok := ordinary.Parameters["invariant_assessments"]; !ok {
 		t.Fatal("ordinary schema omitted invariant_assessments description")
@@ -206,6 +212,7 @@ func TestSubmitResultInvariantClaimSchemaIsModeAware(t *testing.T) {
 }
 
 func TestSubmitResultLocallyRejectsMissingInvariantID(t *testing.T) {
+	t.Parallel()
 	definition := InvariantDefinition{ID: "safe", Statement: "preserve safety", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}
 	c, item, manifest := invariantAttestationFixture(t, InvariantVerificationReport, definition)
 	ctx := withInvocationMetadata(occurrenceTestContext(c, item.ID, 1), invocationMetadataFromManifest(&manifest))
@@ -227,6 +234,7 @@ func TestSubmitResultLocallyRejectsMissingInvariantID(t *testing.T) {
 }
 
 func TestSubmitResultAttestsBeforePublishing(t *testing.T) {
+	t.Parallel()
 	definition := InvariantDefinition{ID: "safe", Statement: "preserve safety", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}
 	c, item, manifest := invariantAttestationFixture(t, InvariantVerificationReport, definition)
 	ctx := withInvocationMetadata(occurrenceTestContext(c, item.ID, 1), invocationMetadataFromManifest(&manifest))
@@ -252,6 +260,7 @@ func TestSubmitResultAttestsBeforePublishing(t *testing.T) {
 }
 
 func TestSubmitResultUsesTaskExecutionManifestAfterToolFailure(t *testing.T) {
+	t.Parallel()
 	definition := InvariantDefinition{ID: "safe", Statement: "preserve safety", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}
 	c, item, primary := invariantAttestationFixture(t, InvariantVerificationReport, definition)
 	addInvariantRecoveryManifest(t, c, item, primary, "request-recovery")
@@ -268,6 +277,7 @@ func TestSubmitResultUsesTaskExecutionManifestAfterToolFailure(t *testing.T) {
 }
 
 func TestInvariantRepairInstructionsReuseDurableManifest(t *testing.T) {
+	t.Parallel()
 	definition := InvariantDefinition{ID: "safe", Statement: "preserve safety", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}
 	c, item, manifest := invariantAttestationFixture(t, InvariantVerificationGate, definition)
 	item.WorksetBinding = &WorksetBinding{TouchedPaths: []string{"internal/team/invariant_attestation.go"}}
@@ -293,6 +303,7 @@ func TestInvariantRepairInstructionsReuseDurableManifest(t *testing.T) {
 }
 
 func TestInvariantRepairUsesUniquePrimaryAmongRecoveryManifests(t *testing.T) {
+	t.Parallel()
 	definition := InvariantDefinition{ID: "safe", Statement: "preserve safety", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}
 	c, item, primary := invariantAttestationFixture(t, InvariantVerificationGate, definition)
 	addInvariantRecoveryManifest(t, c, item, primary, "request-recovery-1")
@@ -316,6 +327,7 @@ func TestInvariantRepairUsesUniquePrimaryAmongRecoveryManifests(t *testing.T) {
 }
 
 func TestInvariantRepairIdentityUsesTaskExecutionManifest(t *testing.T) {
+	t.Parallel()
 	c, item, primary := invariantAttestationFixture(t, InvariantVerificationReport)
 	metadata, err := c.invariantRepairIdentity(item, 1)
 	if err != nil {
@@ -327,6 +339,7 @@ func TestInvariantRepairIdentityUsesTaskExecutionManifest(t *testing.T) {
 }
 
 func TestInvariantRepairIdentityUsesRetryManifest(t *testing.T) {
+	t.Parallel()
 	c, item, retry := invariantAttestationFixture(t, InvariantVerificationReport)
 	retry.Attempt = 2
 	retry.Trigger = ContextTriggerRetry
@@ -345,6 +358,7 @@ func TestInvariantRepairIdentityUsesRetryManifest(t *testing.T) {
 }
 
 func TestInvariantManifestSelectionFailsClosedWithoutUniquePrimary(t *testing.T) {
+	t.Parallel()
 	c, item, primary := invariantAttestationFixture(t, InvariantVerificationReport)
 	duplicate := *cloneContextInjectionManifest(&primary)
 	duplicate.RequestID = "request-primary-duplicate"
@@ -366,6 +380,7 @@ func TestInvariantManifestSelectionFailsClosedWithoutUniquePrimary(t *testing.T)
 }
 
 func TestInvariantManifestSelectionSurvivesSessionReload(t *testing.T) {
+	t.Parallel()
 	c, item, primary := invariantAttestationFixture(t, InvariantVerificationGate)
 	item.WorksetBinding = &WorksetBinding{TouchedPaths: []string{"docs/review.md"}}
 	c.taskTracker.TodoList().Restore([]*TodoItem{item})
@@ -395,6 +410,7 @@ func TestInvariantManifestSelectionSurvivesSessionReload(t *testing.T) {
 }
 
 func TestSubmitResultRejectsUnknownFindingSeverity(t *testing.T) {
+	t.Parallel()
 	tool := &submitResultTool{}
 	response, err := tool.Run(t.Context(), fantasy.ToolCall{Input: `{"status":"success","summary":"done","findings":[{"summary":"bad","severity":"critical"}]}`})
 	if err != nil || !response.IsError {

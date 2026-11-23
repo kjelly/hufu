@@ -26,6 +26,7 @@ func newVerifyCoordinator(t *testing.T, projectDir string) *Coordinator {
 }
 
 func TestVerifyTaskDeliverable_EmptyCommand(t *testing.T) {
+	t.Parallel()
 	c := newVerifyCoordinator(t, t.TempDir())
 	result, err := c.verifyTaskDeliverable(context.Background(), nil, "")
 	if err != nil {
@@ -37,6 +38,7 @@ func TestVerifyTaskDeliverable_EmptyCommand(t *testing.T) {
 }
 
 func TestVerifyTaskDeliverable_Success(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "report.md"), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
@@ -52,6 +54,7 @@ func TestVerifyTaskDeliverable_Success(t *testing.T) {
 }
 
 func TestCompletionVerificationInstructions(t *testing.T) {
+	t.Parallel()
 	instructions := completionVerificationInstructions("test -f reports/final.md", "/tmp/project")
 	for _, want := range []string{"test -f reports/final.md", "/tmp/project", "not accepted until"} {
 		if !strings.Contains(instructions, want) {
@@ -61,6 +64,7 @@ func TestCompletionVerificationInstructions(t *testing.T) {
 }
 
 func TestFinalizeNormalCompletionMarksIncompleteTasksAsErrors(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session:      &TeamSession{Config: agent.TeamConfig{Name: "test"}},
 		taskTracker:  NewTaskTracker(),
@@ -85,6 +89,7 @@ func TestFinalizeNormalCompletionMarksIncompleteTasksAsErrors(t *testing.T) {
 }
 
 func TestVerifyTaskDeliverable_FailureWhenMissing(t *testing.T) {
+	t.Parallel()
 	c := newVerifyCoordinator(t, t.TempDir())
 	result, err := c.verifyTaskDeliverable(context.Background(), nil, "test -f does-not-exist.md")
 	if err == nil {
@@ -96,6 +101,7 @@ func TestVerifyTaskDeliverable_FailureWhenMissing(t *testing.T) {
 }
 
 func TestVerifyTaskDeliverable_FailureIncludesOutput(t *testing.T) {
+	t.Parallel()
 	c := newVerifyCoordinator(t, t.TempDir())
 	result, err := c.verifyTaskDeliverable(context.Background(), nil, "echo boom >&2; exit 3")
 	if err == nil {
@@ -110,6 +116,7 @@ func TestVerifyTaskDeliverable_FailureIncludesOutput(t *testing.T) {
 }
 
 func TestVerifyTaskTimeout_UsesDedicatedVerifyTimeout(t *testing.T) {
+	t.Parallel()
 	c := newVerifyCoordinator(t, t.TempDir())
 	c.session.Config.VerifyTimeout = 1
 
@@ -126,6 +133,7 @@ func TestVerifyTaskTimeout_UsesDedicatedVerifyTimeout(t *testing.T) {
 // ── Repeated-failure detection ────────────────────────────────────────────────
 
 func TestSameFailure(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		a, b string
 		want bool
@@ -145,6 +153,7 @@ func TestSameFailure(t *testing.T) {
 }
 
 func TestIsUnfixableVerifyFailure(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		err  error
@@ -165,6 +174,7 @@ func TestIsUnfixableVerifyFailure(t *testing.T) {
 }
 
 func TestIsUnfixableVerifyFailureRequiresStructuredPolarityError(t *testing.T) {
+	t.Parallel()
 	_, err := ExecuteVerificationSpec(context.Background(), "sh", t.TempDir(), VerificationSpec{
 		Type:    VerifyCommandExit,
 		Command: "printf x | grep -c missing",
@@ -183,6 +193,7 @@ func TestIsUnfixableVerifyFailureRequiresStructuredPolarityError(t *testing.T) {
 // ── Local failure hints ───────────────────────────────────────────────────────
 
 func TestLocalFailureHint(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		in       string
 		contains string
@@ -204,6 +215,7 @@ func TestLocalFailureHint(t *testing.T) {
 }
 
 func TestIsTaskTimeout(t *testing.T) {
+	t.Parallel()
 	if isTaskTimeout(nil) {
 		t.Fatal("nil error must not be treated as a timeout")
 	}
@@ -219,6 +231,7 @@ func TestIsTaskTimeout(t *testing.T) {
 }
 
 func TestFailureDetailBudgetExceeded(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.updateSnapshot(func(s *currentSnapshot) {
 		s.Agent = "researcher"
@@ -240,6 +253,7 @@ func TestFailureDetailBudgetExceeded(t *testing.T) {
 }
 
 func TestFailureDetailMaxRoundsExceeded(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	detail := c.FailureDetail(fmt.Errorf("max rounds (10) exceeded"), "max_rounds_exceeded")
 	if !strings.Contains(detail, "source=max_rounds_exceeded") {
@@ -248,6 +262,7 @@ func TestFailureDetailMaxRoundsExceeded(t *testing.T) {
 }
 
 func TestFailureDetailUserDeclined(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	detail := c.FailureDetail(fmt.Errorf("user declined task execution"), "user_declined")
 	if !strings.Contains(detail, "source=user_declined") {
@@ -256,6 +271,7 @@ func TestFailureDetailUserDeclined(t *testing.T) {
 }
 
 func TestSegmentFailureSource(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		kind string
 		want string
@@ -276,6 +292,7 @@ func TestSegmentFailureSource(t *testing.T) {
 }
 
 func TestPersistFailureWritesStructuredArtifacts(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := EnsureWorkspaceDirs(workspace); err != nil {
 		t.Fatal(err)
@@ -340,6 +357,7 @@ func TestPersistFailureWritesStructuredArtifacts(t *testing.T) {
 }
 
 func TestValidateTaskOutput(t *testing.T) {
+	t.Parallel()
 	task := TaskDef{Goal: "Summarize the findings"}
 	longReport := "Let me walk through each finding in detail.\n\n" + strings.Repeat("Finding: the guest agent was disconnected and had to be restarted before verification could proceed. ", 6) + "\nConclusion: PASS."
 
@@ -370,6 +388,7 @@ func TestValidateTaskOutput(t *testing.T) {
 // ── Worker auxiliary-context budget ───────────────────────────────────────────
 
 func TestAssembleContextWithinBudget(t *testing.T) {
+	t.Parallel()
 	a := strings.Repeat("A", 100)
 	b := strings.Repeat("B", 100)
 	cc := strings.Repeat("C", 100)
@@ -410,6 +429,7 @@ func TestAssembleContextWithinBudget(t *testing.T) {
 func msgWith(text string) fantasy.Message { return fantasy.NewUserMessage(text) }
 
 func TestTrimHistoryPreservingHead(t *testing.T) {
+	t.Parallel()
 	msgs := make([]fantasy.Message, 20)
 	for i := range msgs {
 		msgs[i] = msgWith(string(rune('a' + i)))
@@ -451,6 +471,7 @@ func TestTrimHistoryPreservingHead(t *testing.T) {
 }
 
 func TestTrimHistoryPreservingHeadKeepsOriginalGoalAndLatestForty(t *testing.T) {
+	t.Parallel()
 	msgs := make([]fantasy.Message, 100)
 	msgs[0] = msgWith("original goal: preserve this")
 	for i := 1; i < len(msgs); i++ {
@@ -468,6 +489,7 @@ func TestTrimHistoryPreservingHeadKeepsOriginalGoalAndLatestForty(t *testing.T) 
 }
 
 func TestTrimHistoryPreservingHead_PreservesToolPairWithSourceCounts(t *testing.T) {
+	t.Parallel()
 	callA := fantasy.ToolCallPart{ToolCallID: "call_a", ToolName: "view", Input: `{"file_path":"a.txt"}`}
 	resA := fantasy.ToolResultPart{ToolCallID: "call_a", Output: fantasy.ToolResultOutputContentText{Text: "ok"}}
 	callB := fantasy.ToolCallPart{ToolCallID: "call_b", ToolName: "edit", Input: `{"file_path":"b.txt"}`}
@@ -531,6 +553,7 @@ func TestTrimHistoryPreservingHead_PreservesToolPairWithSourceCounts(t *testing.
 }
 
 func TestTrimHistoryPreservingHead_FallbackNeverReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	call := fantasy.ToolCallPart{
 		ToolCallID: "call_1",
 		ToolName:   "view",
@@ -562,6 +585,7 @@ func TestTrimHistoryPreservingHead_FallbackNeverReturnsEmpty(t *testing.T) {
 }
 
 func TestNewCoordinatorRestoresConversationHistorySourceState(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	history := []fantasy.Message{
 		fantasy.NewUserMessage("goal"),
@@ -609,6 +633,7 @@ func firstText(m fantasy.Message) string {
 }
 
 func TestVerifyTaskDeliverable_ExpiredParentContext(t *testing.T) {
+	t.Parallel()
 	c := newVerifyCoordinator(t, t.TempDir())
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
@@ -629,6 +654,10 @@ func TestVerifyTaskDeliverable_ExpiredParentContext(t *testing.T) {
 }
 
 func TestVerifyTaskDeliverable_ParentExpiresMidVerify(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	c := newVerifyCoordinator(t, t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
@@ -643,6 +672,10 @@ func TestVerifyTaskDeliverable_ParentExpiresMidVerify(t *testing.T) {
 }
 
 func TestVerifyModeObservationPreservesExecutionFailures(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	t.Run("normal non-zero exit is observed", func(t *testing.T) {
 		c := newVerifyCoordinator(t, t.TempDir())
 		result, err := c.verifyTaskDeliverableWithMode(context.Background(), nil, "false", "observation")
@@ -693,6 +726,7 @@ func TestVerifyModeObservationPreservesExecutionFailures(t *testing.T) {
 }
 
 func TestVerifyModesAcceptDiagnosticNonZeroExits(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		command string
@@ -719,6 +753,7 @@ func TestVerifyModesAcceptDiagnosticNonZeroExits(t *testing.T) {
 }
 
 func TestRecordRunAborted(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	c := &Coordinator{
 		session:     &TeamSession{Config: agent.TeamConfig{Name: "test"}, Workspace: ws},
@@ -755,6 +790,7 @@ func TestRecordRunAborted(t *testing.T) {
 }
 
 func TestRecordRunAbortedFailureCreatesFailedRunResult(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir()}, sessionData: NewSession(), taskTracker: NewTaskTracker()}
 	c.recordRunAborted(errors.New("provider unavailable"))
 	result := c.LastRunResult()

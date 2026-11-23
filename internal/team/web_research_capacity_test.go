@@ -10,6 +10,7 @@ import (
 )
 
 func TestWebResearchReportCoversBothResearchTracksWithinItsBudget(t *testing.T) {
+	t.Parallel()
 	for _, counts := range [][2]int{{11, 9}, {12, 12}} {
 		for _, external := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d+%d/external=%t", counts[0], counts[1], external), func(t *testing.T) {

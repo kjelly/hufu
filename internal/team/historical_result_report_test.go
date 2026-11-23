@@ -9,6 +9,7 @@ import (
 )
 
 func TestHistoricalResultGrantReportRequiresCanonicalDispatch(t *testing.T) {
+	t.Parallel()
 	c, item, input := historicalContextFixture(t)
 	_, manifest := historicalContextManifest(t, c, item, input)
 	assertState := func(want string) {
@@ -59,6 +60,7 @@ func (j historicalHeadRaceJournal) AppendBatchAtHead(ctx context.Context, events
 }
 
 func TestHistoricalResultRequestFencesConcurrentHeadChange(t *testing.T) {
+	t.Parallel()
 	c, rows := historicalRequestFixture(t)
 	ctx := claimHistoricalRequestFixture(t, c, rows)
 	other, err := OpenEventStore(c.session.Workspace)
@@ -81,6 +83,7 @@ func TestHistoricalResultRequestFencesConcurrentHeadChange(t *testing.T) {
 }
 
 func TestHistoricalResultResumeSourcesPrecedeSemanticStartup(t *testing.T) {
+	t.Parallel()
 	c, rows := historicalRequestFixture(t)
 	ctx := claimHistoricalRequestFixture(t, c, rows)
 	if _, err := c.beginFollowUpWorkflow(ctx, "new request"); err != nil {

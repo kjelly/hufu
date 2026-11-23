@@ -14,6 +14,7 @@ import (
 )
 
 func TestProjectAgentStatusesUsesCanonicalTaskAndTerminalState(t *testing.T) {
+	t.Parallel()
 	items := []*TodoItem{
 		{ID: "1", Agent: "Worker", Status: TaskDone},
 		{ID: "2", Agent: "worker", Status: TaskError},
@@ -44,6 +45,7 @@ func TestProjectAgentStatusesUsesCanonicalTaskAndTerminalState(t *testing.T) {
 }
 
 func TestTerminalStatusProjectionWritesOneRunAndAggregateForCoordinatorAndWorkers(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "inspect"}})[0]
@@ -70,6 +72,7 @@ func TestTerminalStatusProjectionWritesOneRunAndAggregateForCoordinatorAndWorker
 }
 
 func TestProjectAgentStatusesDistinguishesContainedAndManualTerminalCleanup(t *testing.T) {
+	t.Parallel()
 	items := []*TodoItem{
 		{ID: "contained", Agent: "contained", Status: TaskDone},
 		{ID: "manual", Agent: "manual", Status: TaskDone},
@@ -107,6 +110,7 @@ func TestProjectAgentStatusesDistinguishesContainedAndManualTerminalCleanup(t *t
 }
 
 func TestReconcileAgentStatusesKeepsDetailAndFailureEventFromSameGoverningTask(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	earlier := time.Now().Add(-time.Minute)
 	later := time.Now()
@@ -147,6 +151,7 @@ func TestReconcileAgentStatusesKeepsDetailAndFailureEventFromSameGoverningTask(t
 // the old task's error forever just because "error" used to always outrank
 // "working" once emitted for that agent name.
 func TestReconcileAgentStatusesCurrentWorkOutranksOlderReplannedFailure(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	earlier := time.Now().Add(-time.Hour)
 	later := time.Now()
@@ -184,6 +189,7 @@ func TestReconcileAgentStatusesCurrentWorkOutranksOlderReplannedFailure(t *testi
 }
 
 func TestReconcileAgentStatusesManualCleanupGuidanceOverridesEarlierCompletedSession(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	items := []*TodoItem{{ID: "task", Agent: "worker", Status: TaskDone}}
 	sessions := []TerminalSession{
@@ -206,6 +212,7 @@ func TestReconcileAgentStatusesManualCleanupGuidanceOverridesEarlierCompletedSes
 }
 
 func TestReconcileAgentStatusesRedactsAndSerializesDetailAsYAML(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	detail := "request failed\nnext: line\napi_token=super-secret-value"
 	items := []*TodoItem{{ID: "1", Agent: "worker", Status: TaskError, Detail: detail}}
@@ -232,6 +239,7 @@ func TestReconcileAgentStatusesRedactsAndSerializesDetailAsYAML(t *testing.T) {
 }
 
 func TestPersistFailureProjectsStructuredRedactedFailureEvent(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "sensitive prompt that must not be projected"}})[0]
@@ -274,6 +282,7 @@ func TestPersistFailureProjectsStructuredRedactedFailureEvent(t *testing.T) {
 }
 
 func TestReconcileAgentStatusesRejectsPathTraversalAgentNames(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"../outside", "/tmp/outside", `..\outside`, "worker/child"} {
 		t.Run(name, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -298,6 +307,7 @@ func containsSecret(content, secret string) bool {
 }
 
 func TestReconcileAgentStatusesRepairsStaleFilesAndIsIdempotent(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	statusPath := filepath.Join(workspace, statusDir, "worker.yml")
 	stalePath := filepath.Join(workspace, statusDir, "stale.yml")
@@ -338,6 +348,7 @@ func TestReconcileAgentStatusesRepairsStaleFilesAndIsIdempotent(t *testing.T) {
 }
 
 func TestReconcileAgentStatusesHandlesEmptyAndCrashResumeStates(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(workspace, statusDir), 0o755); err != nil {
 		t.Fatal(err)
@@ -365,6 +376,7 @@ func TestReconcileAgentStatusesHandlesEmptyAndCrashResumeStates(t *testing.T) {
 }
 
 func TestCoordinatorProjectionIncludesConfiguredIdleWorkersWithoutTodoMutation(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{
@@ -392,6 +404,7 @@ func TestCoordinatorProjectionIncludesConfiguredIdleWorkersWithoutTodoMutation(t
 }
 
 func TestReconcileAgentStatusesSerializesConcurrentSnapshots(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	items := []*TodoItem{{ID: "1", Agent: "worker", Status: TaskInProgress}}
 	var wg sync.WaitGroup

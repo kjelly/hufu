@@ -10,6 +10,7 @@ import (
 )
 
 func TestTodoListConcurrentAddBatch(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 	var wg sync.WaitGroup
 
@@ -37,6 +38,7 @@ func TestTodoListConcurrentAddBatch(t *testing.T) {
 }
 
 func TestTodoListConcurrentUpdateStatus(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 	items := tl.AddBatch([]TodoSpec{
 		{Agent: "a", Desc: "t1"},
@@ -78,6 +80,7 @@ func TestTodoListConcurrentUpdateStatus(t *testing.T) {
 }
 
 func TestTodoListConcurrentReadWrite(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 	tl.AddBatch([]TodoSpec{{Agent: "a", Desc: "initial"}})
 
@@ -102,6 +105,7 @@ func TestTodoListConcurrentReadWrite(t *testing.T) {
 }
 
 func TestTodoListConcurrentClearAndRead(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 	tl.AddBatch([]TodoSpec{
 		{Agent: "a", Desc: "t1"},
@@ -124,6 +128,7 @@ func TestTodoListConcurrentClearAndRead(t *testing.T) {
 }
 
 func TestCoordinatorConversationHistoryConcurrent(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session:      &TeamSession{Config: agent.TeamConfig{Name: "test"}},
 		agentCache:   make(map[string]fantasy.Agent),
@@ -158,6 +163,7 @@ func TestCoordinatorConversationHistoryConcurrent(t *testing.T) {
 }
 
 func TestCoordinatorWrapUpConcurrent(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session:      &TeamSession{Config: agent.TeamConfig{Name: "test"}},
 		agentCache:   make(map[string]fantasy.Agent),

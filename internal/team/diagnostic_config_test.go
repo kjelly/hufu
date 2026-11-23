@@ -44,6 +44,7 @@ func diagnosticConfigFixture(t *testing.T) *TeamSession {
 }
 
 func TestDiagnosticConfigurationPreparationAndLegacyHash(t *testing.T) {
+	t.Parallel()
 	session := diagnosticConfigFixture(t)
 	if err := compileTeamDiagnosticLoop(session); err != nil {
 		t.Fatal(err)
@@ -95,6 +96,7 @@ func TestDiagnosticConfigurationPreparationAndLegacyHash(t *testing.T) {
 }
 
 func TestDiagnosticConfigurationFailsClosed(t *testing.T) {
+	t.Parallel()
 	for name, mutate := range map[string]func(*TeamSession){
 		"shadow unavailable":    func(s *TeamSession) { s.Config.DiagnosticLoop.Mode = "shadow" },
 		"executor unavailable":  func(s *TeamSession) { s.Config.DiagnosticLoop.Mode = "bounded_read_only" },
@@ -136,6 +138,7 @@ func TestDiagnosticConfigurationFailsClosed(t *testing.T) {
 }
 
 func TestDiagnosticManifestStrictDecoding(t *testing.T) {
+	t.Parallel()
 	for _, manifest := range []string{
 		"name: test\ndiagnostic-loop:\n  mode: off\n  model-file: model.json\n  policy-file: policy.json\n  adapter-file: adapter.json\n  actor: worker\n",
 		"apiVersion: hufu.io/v1alpha1\nkind: AgentTeam\nmetadata:\n  name: test\nspec:\n  diagnostic-loop:\n    mode: off\n    model-file: model.json\n    policy-file: policy.json\n    adapter-file: adapter.json\n    actor: worker\n",
@@ -164,6 +167,7 @@ func TestDiagnosticManifestStrictDecoding(t *testing.T) {
 }
 
 func TestDiagnosticPreparedSnapshotSurvivesAdmissionAndRejectsDrift(t *testing.T) {
+	t.Parallel()
 	session := diagnosticConfigFixture(t)
 	c, err := newCoordinator(coordinatorParams{Session: session, MaxConcurrent: 1}, RuntimeServices{})
 	if err != nil {

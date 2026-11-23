@@ -10,6 +10,7 @@ import (
 )
 
 func TestArtifactStoreOpenHonorsReadBudget(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
@@ -40,6 +41,7 @@ func TestArtifactStoreOpenHonorsReadBudget(t *testing.T) {
 }
 
 func TestArtifactReadBudgetAggregate(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "artifact")
 	if err := os.WriteFile(path, []byte("1234"), 0o600); err != nil {
 		t.Fatal(err)
@@ -69,6 +71,7 @@ func TestArtifactReadBudgetAggregate(t *testing.T) {
 }
 
 func TestArtifactReadBudgetPreflightAndCancellation(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "large")
 	file, err := os.Create(path)
 	if err != nil {

@@ -31,6 +31,7 @@ func derivedForkIntentFixture(t *testing.T) (*SessionTree, *SessionBranch) {
 }
 
 func TestDerivedForkIntentPersistsWithItsBranch(t *testing.T) {
+	t.Parallel()
 	tree, child := derivedForkIntentFixture(t)
 	root := child.Derivation.Workspace
 	if err := SaveSessionTree(root, tree); err != nil {
@@ -69,6 +70,7 @@ func TestDerivedForkIntentPersistsWithItsBranch(t *testing.T) {
 }
 
 func TestDerivedForkIntentRejectsMalformedMetadata(t *testing.T) {
+	t.Parallel()
 	_, branch := derivedForkIntentFixture(t)
 	encoded, err := encodeDerivedForkIntent(branch.Derivation)
 	if err != nil {
@@ -111,6 +113,7 @@ func TestDerivedForkIntentRejectsMalformedMetadata(t *testing.T) {
 }
 
 func TestSessionTreeReadOnlySchemaBeforeDerivation(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	tree := NewSessionTree()
 	if err := SaveSessionTree(root, tree); err != nil {

@@ -151,6 +151,9 @@ func TestResultCollectionKeepsRedactedEvidenceJSONValid(t *testing.T) {
 }
 
 func TestResultCollectorAttributesProviderFailureToFrozenTarget(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, scenario := range []struct {
 		name   string
 		status int
@@ -222,6 +225,9 @@ func TestResultCollectorAttributesProviderFailureToFrozenTarget(t *testing.T) {
 }
 
 func TestResultCollectionRetriesTransientRequestWithoutRepeatingWork(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, partial := range []bool{false, true} {
 		t.Run(fmt.Sprint(partial), func(t *testing.T) {
 			var calls atomic.Int32
@@ -298,6 +304,9 @@ func TestResultCollectionRetriesTransientRequestWithoutRepeatingWork(t *testing.
 }
 
 func TestResultCollectorUsesDataOnlyRequestsAndBoundedFormatRepair(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, scenario := range []struct {
 		replies []string
 		worker  bool

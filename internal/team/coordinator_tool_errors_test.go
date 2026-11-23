@@ -45,6 +45,7 @@ func okResponse() scriptedToolResult {
 }
 
 func TestCoordinatorToolFailureSemantics(t *testing.T) {
+	t.Parallel()
 	type outcome struct {
 		terminal bool
 		fatal    bool
@@ -134,6 +135,7 @@ func TestCoordinatorToolFailureSemantics(t *testing.T) {
 }
 
 func TestCoordinatorToolErrorStreakResetsPerInvocation(t *testing.T) {
+	t.Parallel()
 	c := gateTestCoordinator()
 	c.coordinatorToolErrorStreak.Store(maxConsecutiveCoordinatorToolErrors)
 	c.noteCoordinatorToolSuccess()
@@ -143,6 +145,7 @@ func TestCoordinatorToolErrorStreakResetsPerInvocation(t *testing.T) {
 }
 
 func TestMarkCoordinatorFatalKeepsWrappedSentinels(t *testing.T) {
+	t.Parallel()
 	if markCoordinatorFatal(nil) != nil {
 		t.Fatal("nil error must stay nil")
 	}
@@ -159,6 +162,7 @@ func TestMarkCoordinatorFatalKeepsWrappedSentinels(t *testing.T) {
 }
 
 func TestCoordinatorHardToolFailureStopsRealFantasyExecutor(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"fatal", "policy_exhausted", "recoverable", "worker"} {
 		t.Run(name, func(t *testing.T) {
 			c := newTestCoordinator(t)
@@ -212,6 +216,7 @@ func TestCoordinatorHardToolFailureStopsRealFantasyExecutor(t *testing.T) {
 }
 
 func TestCoordinatorFailedStreamRejectsRemainingToolDispatch(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	inner := &scriptedCoordinatorTool{name: "agent", results: []scriptedToolResult{okResponse()}}
 	boundary := &coordinatorStreamFailure{}
@@ -231,6 +236,7 @@ func TestCoordinatorFailedStreamRejectsRemainingToolDispatch(t *testing.T) {
 }
 
 func TestValidateToolArgumentsLetsAgentDecoderOwnUndeclaredKeys(t *testing.T) {
+	t.Parallel()
 	task := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -268,6 +274,7 @@ func TestValidateToolArgumentsLetsAgentDecoderOwnUndeclaredKeys(t *testing.T) {
 }
 
 func TestCoordinatorNativeDenialPreservesReceiptReporter(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	native := tools.ToolExecutionDisposition{Kind: "guard_denied", ReasonCode: "guard_rule", ToolName: "agent", ToolCallID: "denied"}
 	inner := &scriptedCoordinatorTool{name: "agent", results: []scriptedToolResult{{err: errors.New("操作遭拒"), disposition: &native}}}

@@ -19,6 +19,7 @@ import (
 )
 
 func TestMediaHistoryPersistsReferencesWithoutClaimingCompaction(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	task := admittedMediaTask(t, c, ctx, "turn")
@@ -76,6 +77,7 @@ func TestMediaHistoryPersistsReferencesWithoutClaimingCompaction(t *testing.T) {
 }
 
 func TestMediaHistoryRejectsRawWritesAndUnadmittedSources(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	_ = admittedMediaTask(t, c, ctx, "turn")
@@ -116,6 +118,7 @@ func TestMediaHistoryRejectsRawWritesAndUnadmittedSources(t *testing.T) {
 }
 
 func TestMediaHistoryCannotResumeFromCompatibilityProjection(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	_ = admittedMediaTask(t, c, ctx, "turn")
@@ -129,6 +132,7 @@ func TestMediaHistoryCannotResumeFromCompatibilityProjection(t *testing.T) {
 }
 
 func TestMediaHistoryPinsReferencesDuringTextCompaction(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	_ = admittedMediaTask(t, c, ctx, "turn")
@@ -165,6 +169,7 @@ func TestMediaHistoryPinsReferencesDuringTextCompaction(t *testing.T) {
 }
 
 func TestMediaHistoryLoadsInertRefsAndRejectsMissingContentBeforeResume(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	task := admittedMediaTask(t, c, ctx, "turn")
@@ -186,6 +191,7 @@ func TestMediaHistoryLoadsInertRefsAndRejectsMissingContentBeforeResume(t *testi
 }
 
 func TestMediaAuditRequiresAtomicTaskBindingAndCanonicalContent(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	task := admittedMediaTask(t, c, ctx, "turn")
@@ -224,6 +230,7 @@ func TestMediaAuditRequiresAtomicTaskBindingAndCanonicalContent(t *testing.T) {
 }
 
 func TestMediaHistoryResetPersistsWithoutReleasingQuota(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t, media.Limits{MaxBranchBlobs: 1})
 	ctx := openMediaInvocation(t, c)
 	_ = admittedMediaTask(t, c, ctx, "turn")
@@ -259,6 +266,7 @@ func TestMediaHistoryResetPersistsWithoutReleasingQuota(t *testing.T) {
 }
 
 func TestMediaHistoryResetReportsFailedAttestation(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	_ = admittedMediaTask(t, c, ctx, "turn")
@@ -286,6 +294,7 @@ func TestMediaHistoryResetReportsFailedAttestation(t *testing.T) {
 }
 
 func TestMediaHistoryRetryRestoresCommittedInput(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	_ = admittedMediaTask(t, c, ctx, "turn")
@@ -305,6 +314,7 @@ func TestMediaHistoryRetryRestoresCommittedInput(t *testing.T) {
 }
 
 func TestMediaHistoryRejectsSourcesAfterBranchCutoff(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	tree, err := LoadSessionTree(c.session.Workspace)
@@ -326,6 +336,7 @@ func TestMediaHistoryRejectsSourcesAfterBranchCutoff(t *testing.T) {
 }
 
 func TestMediaHistoryTextCompactionReplaysCanonicalReferences(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	_ = admittedMediaTask(t, c, ctx, "turn")
@@ -364,6 +375,7 @@ func (rawHistoryMarshalTrap) MarshalJSON() ([]byte, error) {
 }
 
 func TestMediaHistoryRejectsRawBeforeCheckpointDigests(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	_ = admittedMediaTask(t, c, ctx, "turn")

@@ -56,6 +56,7 @@ func completedCycleCoordinator(t *testing.T) *Coordinator {
 }
 
 func TestWorkflowCyclePreservesConversationButRequiresFreshEvidence(t *testing.T) {
+	t.Parallel()
 	c := completedCycleCoordinator(t)
 	c.TaskCache().Restore([]TaskCacheSeed{{AgentKey: "preparer", Task: "new research", Output: "stale cached answer"}})
 	c.sessionData.CriterionResults = []CriterionResult{{}}
@@ -114,6 +115,7 @@ func TestWorkflowCyclePreservesConversationButRequiresFreshEvidence(t *testing.T
 }
 
 func TestWorkflowCycleRecoveryAfterDurableBoundary(t *testing.T) {
+	t.Parallel()
 	c := completedCycleCoordinator(t)
 	before := ReduceToSessionData(mustCycleEvents(t, c))
 	boundary := RunEvent{
@@ -139,6 +141,7 @@ func TestWorkflowCycleRecoveryAfterDurableBoundary(t *testing.T) {
 }
 
 func TestWorkflowCycleCompletesOnlyAfterFreshContractsAndCanContinueAgain(t *testing.T) {
+	t.Parallel()
 	c := completedCycleCoordinator(t)
 	for cycle := range 2 {
 		if _, err := c.beginFollowUpWorkflow(t.Context(), "investigate further"); err != nil {
@@ -179,6 +182,7 @@ func TestWorkflowCycleCompletesOnlyAfterFreshContractsAndCanContinueAgain(t *tes
 }
 
 func TestWorkflowCycleReservesRemovedTaskIDsAndDoesNotRestoreOldJournalCache(t *testing.T) {
+	t.Parallel()
 	c := completedCycleCoordinator(t)
 	appendBranchEvent(t, c.eventStore, RunEvent{Type: "task_created", TaskID: "9", Payload: []byte(`{"id":"9","status":"pending","agent":"preparer"}`)})
 	appendBranchEvent(t, c.eventStore, RunEvent{Type: "task_removed", TaskID: "9", Payload: []byte(`{"id":"9","status":"skipped"}`)})
@@ -208,6 +212,7 @@ func TestWorkflowCycleReservesRemovedTaskIDsAndDoesNotRestoreOldJournalCache(t *
 }
 
 func TestWorkflowCycleRejectsInvalidReplayBoundaries(t *testing.T) {
+	t.Parallel()
 	c := completedCycleCoordinator(t)
 	prior := mustCycleEvents(t, c)
 	for _, input := range []string{
@@ -233,6 +238,7 @@ func mustCycleEvents(t *testing.T, c *Coordinator) []RunEvent {
 }
 
 func TestWorkflowCycleDoesNotRestartRecoveryOrReplayFailedWork(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []Phase{PhasePrepare, PhaseVerify, PhaseFailed} {
 		t.Run(string(phase), func(t *testing.T) {
 			c := completedCycleCoordinator(t)
@@ -282,6 +288,7 @@ func TestWorkflowCycleDoesNotRestartRecoveryOrReplayFailedWork(t *testing.T) {
 }
 
 func TestWorkflowCycleKeepsConversationDuringExactInitialDelegation(t *testing.T) {
+	t.Parallel()
 	c := completedCycleCoordinator(t)
 	c.session.Config.Delegation = agent.DelegationPolicy{RequireExactInitialBatch: true, InitialBatch: []string{"preparer"}}
 	if _, err := c.beginFollowUpWorkflow(t.Context(), "follow up"); err != nil {
@@ -296,6 +303,7 @@ func TestWorkflowCycleKeepsConversationDuringExactInitialDelegation(t *testing.T
 }
 
 func TestWorkflowCyclePublicEntryPointsResetBeforeProviderPreparation(t *testing.T) {
+	t.Parallel()
 	for _, entry := range []string{"run", "chat"} {
 		t.Run(entry, func(t *testing.T) {
 			c := completedCycleCoordinator(t)

@@ -11,6 +11,7 @@ import (
 )
 
 func TestDependencyResultViewWorkerDispatchAndCompletion(t *testing.T) {
+	t.Parallel()
 	c, source, consumer, _ := dependencyViewRuntimeFixture(t)
 	before, err := json.Marshal(source.TypedResult, json.Deterministic(true))
 	if err != nil {
@@ -55,6 +56,7 @@ func TestDependencyResultViewWorkerDispatchAndCompletion(t *testing.T) {
 }
 
 func TestDependencyResultViewCancelledRequestIsNotDelivery(t *testing.T) {
+	t.Parallel()
 	c, _, consumer, input := dependencyViewRuntimeFixture(t)
 	compiled, err := c.compileWorkerContext(t.Context(), input)
 	if err != nil {
@@ -72,6 +74,7 @@ func TestDependencyResultViewCancelledRequestIsNotDelivery(t *testing.T) {
 }
 
 func TestDependencyResultViewFailedDispatchRecordIsNotDelivery(t *testing.T) {
+	t.Parallel()
 	c, _, consumer, input := dependencyViewRuntimeFixture(t)
 	compiled, err := c.compileWorkerContext(t.Context(), input)
 	if err != nil {
@@ -91,6 +94,7 @@ func TestDependencyResultViewFailedDispatchRecordIsNotDelivery(t *testing.T) {
 }
 
 func TestDependencyResultViewAuxiliaryCallKeepsItsOwnIdentity(t *testing.T) {
+	t.Parallel()
 	c, _, _, _ := dependencyViewRuntimeFixture(t)
 	manifest := dependencyViewManifestFixture(t)
 	ctx := c.bindDependencyViewCall(t.Context(), &manifest)
@@ -107,6 +111,7 @@ func TestDependencyResultViewAuxiliaryCallKeepsItsOwnIdentity(t *testing.T) {
 }
 
 func TestDependencyResultViewCheckpointCannotForgeDispatch(t *testing.T) {
+	t.Parallel()
 	c, _, consumer, input := dependencyViewRuntimeFixture(t)
 	compiled, err := c.compileWorkerContext(t.Context(), input)
 	if err != nil {
@@ -133,6 +138,7 @@ func TestDependencyResultViewCheckpointCannotForgeDispatch(t *testing.T) {
 }
 
 func TestDependencyResultViewFanoutLeafDelivery(t *testing.T) {
+	t.Parallel()
 	for _, historical := range []bool{false, true} {
 		name := "selected"
 		if historical {
@@ -214,6 +220,7 @@ func TestDependencyResultViewFanoutLeafDelivery(t *testing.T) {
 }
 
 func TestDependencyResultViewInvalidSourcesNeverReachWorker(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		change func(*TodoItem, *TodoItem)

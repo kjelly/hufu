@@ -35,6 +35,9 @@ func (mediaFanoutIntrospector) InspectModel(ctx context.Context, ref providerint
 }
 
 func TestNativeMediaModelFanoutKeepsIndependentGrantsAndOriginalCAS(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, mode := range []string{"single_task", "coordinator", "judge_failure", "skeptic_abstention"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)

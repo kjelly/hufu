@@ -7,6 +7,7 @@ import (
 )
 
 func TestParseVarFlags(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		flags []string
@@ -65,6 +66,7 @@ func TestParseVarFlags(t *testing.T) {
 }
 
 func TestLoadVarsFileEnvFormat(t *testing.T) {
+	t.Parallel()
 	content := `# Comment
 DB_HOST=localhost
 DB_PORT=5432
@@ -104,6 +106,7 @@ SINGLE_QUOTED='value with spaces'
 }
 
 func TestLoadVarsFileYAMLFormat(t *testing.T) {
+	t.Parallel()
 	content := `model: qwen3:8b
 temperature: "0.7"
 debug: true
@@ -135,6 +138,7 @@ max_rounds: 10
 }
 
 func TestLoadVarsFileYAMLNested(t *testing.T) {
+	t.Parallel()
 	content := `model:
   id: qwen3:8b
   temperature: 0.7
@@ -159,6 +163,7 @@ func TestLoadVarsFileYAMLNested(t *testing.T) {
 }
 
 func TestLoadVarsFileNotFound(t *testing.T) {
+	t.Parallel()
 	_, err := LoadVarsFile("/nonexistent/vars.yaml")
 	if err == nil {
 		t.Error("expected error for nonexistent file")
@@ -166,6 +171,7 @@ func TestLoadVarsFileNotFound(t *testing.T) {
 }
 
 func TestMergeVars(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		maps []map[string]string
@@ -209,6 +215,7 @@ func TestMergeVars(t *testing.T) {
 }
 
 func TestResolveVars(t *testing.T) {
+	t.Parallel()
 	t.Run("no vars", func(t *testing.T) {
 		m, err := ResolveVars(nil, nil)
 		if err != nil {
@@ -278,6 +285,7 @@ func TestResolveVars(t *testing.T) {
 }
 
 func TestFindMissingVars(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	// 1. Create a dummy team.yml with template placeholders
@@ -355,6 +363,7 @@ System instructions using {@ .missing_agent_var @}.
 }
 
 func TestFindMissingVarsUsesManifestDefaults(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTeamManifest(t, dir, `name: bootstrap
 vars:

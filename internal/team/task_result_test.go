@@ -14,6 +14,7 @@ import (
 )
 
 func TestTaskResult_SchemaAndFormatting(t *testing.T) {
+	t.Parallel()
 	tr := &TaskResult{
 		TaskID:  "task-123",
 		Agent:   "coder",
@@ -65,6 +66,7 @@ func TestTaskResult_SchemaAndFormatting(t *testing.T) {
 }
 
 func TestTaskResultContextUsesOpaqueTranscriptRefInsteadOfPath(t *testing.T) {
+	t.Parallel()
 	result := &TaskResult{Summary: "done", RawOutputRef: &ArtifactRef{
 		ID: "sha256-opaque", Path: "/workspace/long/hufu-pilot-integration/logs/transcript.jsonl", SHA256: "digest", Bytes: 42,
 	}}
@@ -78,6 +80,7 @@ func TestTaskResultContextUsesOpaqueTranscriptRefInsteadOfPath(t *testing.T) {
 }
 
 func TestValidateSubmittedTaskResultSeparatesSchemaFromCompletion(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps, TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked} {
 		t.Run(status, func(t *testing.T) {
 			result := &TaskResult{Status: status, Summary: "work status"}
@@ -96,6 +99,7 @@ func TestValidateSubmittedTaskResultSeparatesSchemaFromCompletion(t *testing.T) 
 }
 
 func TestTaskResultSinkLatchesFirstResultUntilRetryClear(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker(), executionRunID: "run-latch"}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "review assigned files"}})[0]
 	sink := coordinatorTaskResultSink{coordinator: c}
@@ -144,6 +148,7 @@ func TestTaskResultSinkLatchesFirstResultUntilRetryClear(t *testing.T) {
 }
 
 func TestTaskResultSinkRejectsDelayedPriorAttemptBeforeCurrentResult(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker(), executionRunID: "run-occurrence"}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "occurrence ownership"}})[0]
 	sink := coordinatorTaskResultSink{coordinator: c}
@@ -185,6 +190,7 @@ func TestTaskResultSinkRejectsDelayedPriorAttemptBeforeCurrentResult(t *testing.
 }
 
 func TestParseFreeTextResult(t *testing.T) {
+	t.Parallel()
 	text := "Done with the task. All tests passed."
 	tr := ParseFreeTextResult(text)
 	if tr.Summary != text {
@@ -199,6 +205,7 @@ func TestParseFreeTextResult(t *testing.T) {
 }
 
 func TestSubmitResultTool(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	artifactPath := filepath.Join(workspace, "result.json")
 	if err := os.WriteFile(artifactPath, []byte(`{"ok":true}`), 0o644); err != nil {
@@ -315,6 +322,7 @@ func TestSubmitResultTool(t *testing.T) {
 }
 
 func TestSubmitResultToolRejectsModelDeclaredRawOutputRef(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "runtime transcript"}})[0]
 	response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(context.Background(), fantasy.ToolCall{
@@ -333,6 +341,7 @@ func TestSubmitResultToolRejectsModelDeclaredRawOutputRef(t *testing.T) {
 }
 
 func TestSubmitResultToolRejectsUnknownArtifactRef(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "strict result schema"}})[0]
 	response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(context.Background(), fantasy.ToolCall{
@@ -351,6 +360,7 @@ func TestSubmitResultToolRejectsUnknownArtifactRef(t *testing.T) {
 }
 
 func TestSubmitResultToolPrefixesRuntimeClosedSequenceFailure(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "run fixed sequence"}})[0]
 	sequence := newTaskToolSequence([]string{"bash", "submit_result"}, nil, "", nil)
@@ -382,6 +392,7 @@ func TestSubmitResultToolPrefixesRuntimeClosedSequenceFailure(t *testing.T) {
 }
 
 func TestCoordinatorTaskOutputUsesSubmittedTypedResult(t *testing.T) {
+	t.Parallel()
 	typed := &TaskResult{
 		Status:  TaskResultStatusSuccess,
 		Summary: "concise result",
@@ -398,6 +409,7 @@ func TestCoordinatorTaskOutputUsesSubmittedTypedResult(t *testing.T) {
 }
 
 func TestCoordinatorTaskOutputUsesSubmittedTypedResultWithoutDetails(t *testing.T) {
+	t.Parallel()
 	typed := &TaskResult{
 		Status:    TaskResultStatusSuccess,
 		Summary:   "summary is the complete handoff",
@@ -414,6 +426,7 @@ func TestCoordinatorTaskOutputUsesSubmittedTypedResultWithoutDetails(t *testing.
 }
 
 func TestSubmitResultToolPromotesStringFileRefs(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		taskTracker: NewTaskTracker(),
 	}
@@ -440,6 +453,7 @@ func TestSubmitResultToolPromotesStringFileRefs(t *testing.T) {
 }
 
 func TestSubmitResultToolPromotesScalarFileRef(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "scalar file ref"}})
 	tool := &submitResultTool{coordinator: c, todoID: items[0].ID}
@@ -454,6 +468,7 @@ func TestSubmitResultToolPromotesScalarFileRef(t *testing.T) {
 }
 
 func TestSubmitResultToolPromotesScalarDescriptiveArrays(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "scalar findings"}})
 	tool := &submitResultTool{coordinator: c, todoID: items[0].ID}
@@ -476,6 +491,7 @@ func TestSubmitResultToolPromotesScalarDescriptiveArrays(t *testing.T) {
 // every severity inside a string, so a blocker would read as a finding with
 // none; it is decoded when it parses and rejected when it does not.
 func TestSubmitResultToolDecodesSerializedFindings(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		findings  string
@@ -547,6 +563,7 @@ func TestSubmitResultToolDecodesSerializedFindings(t *testing.T) {
 }
 
 func TestSubmitResultToolAcceptsStructuredOpenQuestions(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "structured questions"}})[0]
 	tool := &submitResultTool{coordinator: c, todoID: item.ID}
@@ -569,6 +586,7 @@ func TestSubmitResultToolAcceptsStructuredOpenQuestions(t *testing.T) {
 }
 
 func TestSubmitResultToolRejectsMalformedStructuredOpenQuestions(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "malformed questions"}})[0]
 
@@ -588,6 +606,7 @@ func TestSubmitResultToolRejectsMalformedStructuredOpenQuestions(t *testing.T) {
 }
 
 func TestSubmitResultToolAdvertisesStructuredOpenQuestions(t *testing.T) {
+	t.Parallel()
 	info := (&submitResultTool{}).Info()
 	questions, ok := info.Parameters["open_questions"].(map[string]any)
 	if !ok {
@@ -600,6 +619,7 @@ func TestSubmitResultToolAdvertisesStructuredOpenQuestions(t *testing.T) {
 }
 
 func TestSubmitResultToolAcceptsStringFileRefsAtProtocolBoundary(t *testing.T) {
+	t.Parallel()
 	info := (&submitResultTool{}).Info()
 	input := `{"status":"success","summary":"done","files_read":["docs/runbook.md"],"files_modified":["tmp/result.txt"]}`
 	if err := validateToolArguments(input, info); err != nil {
@@ -608,6 +628,7 @@ func TestSubmitResultToolAcceptsStringFileRefsAtProtocolBoundary(t *testing.T) {
 }
 
 func TestSubmitResultToolRejectsForbiddenArtifacts(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "worker", Desc: "closed evidence task", Execution: ExecutionContract{ForbidArtifacts: true}},
@@ -627,6 +648,7 @@ func TestSubmitResultToolRejectsForbiddenArtifacts(t *testing.T) {
 }
 
 func TestSubmitResultToolRejectsModelDeclaredRuntimeOutputs(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "runtime outputs"}})[0]
 	response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(context.Background(), fantasy.ToolCall{
@@ -642,6 +664,7 @@ func TestSubmitResultToolRejectsModelDeclaredRuntimeOutputs(t *testing.T) {
 }
 
 func TestSubmitResultToolRequiresCurrentAttemptReceiptsForStructuredExecution(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
 		Agent: "worker",
@@ -707,6 +730,7 @@ func TestSubmitResultToolRequiresCurrentAttemptReceiptsForStructuredExecution(t 
 }
 
 func TestSubmitResultToolAcceptsCompletedWithGaps(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "analyst", Desc: "survey target capability"}})
 	tool := &submitResultTool{coordinator: c, todoID: items[0].ID}
@@ -725,6 +749,7 @@ func TestSubmitResultToolAcceptsCompletedWithGaps(t *testing.T) {
 }
 
 func TestSubmitResultToolRejectsMissingArtifactBeforeStoringResult(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session:        &TeamSession{Workspace: workspace},
@@ -753,6 +778,7 @@ func TestSubmitResultToolRejectsMissingArtifactBeforeStoringResult(t *testing.T)
 }
 
 func TestStrictTaskResultEnforcement(t *testing.T) {
+	t.Parallel()
 	// Verify that ExecutionContract with RequiresResult = true fails if no submit_result was called
 	taskDef := TaskDef{
 		Agent: "worker",

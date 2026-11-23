@@ -35,6 +35,7 @@ func bundledTeamsDir(t *testing.T) string {
 // TestTeamCompatFixtures uses, since both are the one golden-fixture
 // mechanism.
 func TestBundledTeamsNormalize(t *testing.T) {
+	t.Parallel()
 	root := bundledTeamsDir(t)
 	entries, err := os.ReadDir(root)
 	if err != nil {

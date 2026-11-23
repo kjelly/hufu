@@ -63,6 +63,7 @@ func finishDiagnostic(t *testing.T, j *DiagnosticJournal) DiagnosticEpisodeState
 }
 
 func TestDiagnosticJournalEveryOfflineCommitBoundaryReopens(t *testing.T) {
+	t.Parallel()
 	for prefix := range 6 {
 		t.Run(string(rune('0'+prefix)), func(t *testing.T) {
 			f, fixture, j := diagnosticTestFixture(t)
@@ -118,6 +119,7 @@ func TestDiagnosticJournalEveryOfflineCommitBoundaryReopens(t *testing.T) {
 }
 
 func TestDiagnosticMissingAndCorruptFixturePreservesHistory(t *testing.T) {
+	t.Parallel()
 	for _, corrupt := range []bool{false, true} {
 		f, fixture, j := diagnosticTestFixture(t)
 		if err := j.OpenFixture(t.Context(), fixture); err != nil {
@@ -157,6 +159,7 @@ func TestDiagnosticMissingAndCorruptFixturePreservesHistory(t *testing.T) {
 }
 
 func TestDiagnosticReplayRejectsForgedDecisionsObservationsAndScope(t *testing.T) {
+	t.Parallel()
 	f, fixture, j := diagnosticTestFixture(t)
 	if err := j.OpenFixture(t.Context(), fixture); err != nil {
 		t.Fatal(err)
@@ -201,6 +204,7 @@ func TestDiagnosticReplayRejectsForgedDecisionsObservationsAndScope(t *testing.T
 }
 
 func TestDiagnosticForkHistoryIsReadOnlyAndNewEpisodesAreIsolated(t *testing.T) {
+	t.Parallel()
 	f, fixture, j := diagnosticTestFixture(t)
 	if err := j.OpenFixture(t.Context(), fixture); err != nil {
 		t.Fatal(err)
@@ -273,6 +277,7 @@ func (j *diagnosticUncertainJournal) AppendAtHead(ctx context.Context, e RunEven
 }
 
 func TestDiagnosticFailedCommitDoesNotAdvanceAndOrphanArtifactCanBeReused(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{EventDiagnosticEpisodeOpened, EventDiagnosticEpisodeShadowed, EventDiagnosticEpisodeObserved} {
 		f, fixture, j := diagnosticTestFixture(t)
 		adapter := &diagnosticUncertainJournal{ConditionalEventJournal: eventStoreJournal{f.store}, failBeforeType: kind}
@@ -313,6 +318,7 @@ func TestDiagnosticFailedCommitDoesNotAdvanceAndOrphanArtifactCanBeReused(t *tes
 }
 
 func TestDiagnosticOfflineLimitsStopWithoutExecutionReservations(t *testing.T) {
+	t.Parallel()
 	for _, limit := range []string{"attempt", "cost", "bytes", "events"} {
 		t.Run(limit, func(t *testing.T) {
 			_, fixture, j := diagnosticTestFixture(t)
@@ -349,6 +355,7 @@ func TestDiagnosticOfflineLimitsStopWithoutExecutionReservations(t *testing.T) {
 }
 
 func TestDiagnosticUnknownCommitAndGlobalHeadFence(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{EventDiagnosticEpisodeOpened, EventDiagnosticEpisodeShadowed, EventDiagnosticEpisodeObserved} {
 		f, fixture, j := diagnosticTestFixture(t)
 		adapter := &diagnosticUncertainJournal{ConditionalEventJournal: eventStoreJournal{f.store}, failType: kind}
@@ -398,6 +405,7 @@ func TestDiagnosticUnknownCommitAndGlobalHeadFence(t *testing.T) {
 }
 
 func TestDiagnosticFixtureRejectsInvalidScopeAndMeasurements(t *testing.T) {
+	t.Parallel()
 	for _, mutate := range []func(*DiagnosticFixture){
 		func(f *DiagnosticFixture) { f.Model.Synthetic = false },
 		func(f *DiagnosticFixture) { f.Revisions.Source = "unknown" },

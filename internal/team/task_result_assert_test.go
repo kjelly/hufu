@@ -31,6 +31,7 @@ func taskResultAssertSubject(status string) *TaskResult {
 }
 
 func TestTaskResultAssertOperators(t *testing.T) {
+	t.Parallel()
 	result := taskResultAssertSubject(TaskResultStatusSuccess)
 	tests := []struct {
 		name      string
@@ -66,6 +67,7 @@ func TestTaskResultAssertOperators(t *testing.T) {
 }
 
 func TestTaskResultAssertValidationBounds(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		spec VerificationSpec
@@ -86,6 +88,7 @@ func TestTaskResultAssertValidationBounds(t *testing.T) {
 }
 
 func TestTaskResultAssertPartialAndBlockedAreResultSemantics(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{TaskResultStatusPartial, TaskResultStatusBlocked} {
 		t.Run(status, func(t *testing.T) {
 			result, err := ExecuteVerificationSpecWithTaskResult(context.Background(), "sh", t.TempDir(), VerificationSpec{
@@ -102,6 +105,7 @@ func TestTaskResultAssertPartialAndBlockedAreResultSemantics(t *testing.T) {
 }
 
 func TestTaskResultAssertFailsClosedWithoutTaskResult(t *testing.T) {
+	t.Parallel()
 	result, err := ExecuteVerificationSpec(context.Background(), "sh", t.TempDir(), VerificationSpec{
 		Type: VerifyTaskResultAssert,
 		TaskResultAssertions: []TaskResultAssertion{{
@@ -114,6 +118,7 @@ func TestTaskResultAssertFailsClosedWithoutTaskResult(t *testing.T) {
 }
 
 func TestTaskResultAssertFingerprintIsOrderIndependent(t *testing.T) {
+	t.Parallel()
 	first := VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{
 		{Pointer: "/summary", Op: "non_empty"},
 		{Pointer: "/status", Op: "equals", Value: "success"},
@@ -134,6 +139,7 @@ func TestTaskResultAssertFingerprintIsOrderIndependent(t *testing.T) {
 }
 
 func TestTaskResultAssertParserAndJSONContract(t *testing.T) {
+	t.Parallel()
 	const source = `type: task_result_assert
 task-result-assertions:
   - pointer: /status
@@ -176,6 +182,7 @@ task-result-assertions:
 }
 
 func TestTaskResultAssertCoordinatorPassesCanonicalResult(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{projectDir: t.TempDir()}
 	result, err := c.verifyTaskDeliverableWithSpecAndResult(context.Background(), nil, TaskDef{
 		VerifySpec: &VerificationSpec{
@@ -191,6 +198,7 @@ func TestTaskResultAssertCoordinatorPassesCanonicalResult(t *testing.T) {
 }
 
 func TestTaskResultAssertPolicyLint(t *testing.T) {
+	t.Parallel()
 	valid := LintVerifier(VerificationSpec{
 		Type: VerifyTaskResultAssert,
 		TaskResultAssertions: []TaskResultAssertion{{
@@ -212,6 +220,7 @@ func TestTaskResultAssertPolicyLint(t *testing.T) {
 }
 
 func TestTaskResultAssertAcceptanceContextFailsClosed(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		projectDir: t.TempDir(),
 		session:    &TeamSession{Config: agent.TeamConfig{Shell: "sh"}},

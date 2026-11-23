@@ -54,6 +54,7 @@ func verifiedResolutionFixture(t *testing.T) (*Coordinator, *TodoItem, *TodoItem
 }
 
 func TestValidatePersistedResultPayloadReceipt(t *testing.T) {
+	t.Parallel()
 	for _, required := range []bool{true, false} {
 		t.Run(fmt.Sprintf("required=%t", required), func(t *testing.T) {
 			c, _, item := verifiedResolutionFixture(t)
@@ -71,6 +72,7 @@ func TestValidatePersistedResultPayloadReceipt(t *testing.T) {
 }
 
 func TestVerifiedResolutionSatisfiesAllFinalizationGatesAndReplay(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{"superseded", "reconciled"} {
 		t.Run(status, func(t *testing.T) {
 			c, original, replacement := verifiedResolutionFixture(t)
@@ -132,6 +134,7 @@ func TestVerifiedResolutionSatisfiesAllFinalizationGatesAndReplay(t *testing.T) 
 }
 
 func TestResolutionRejectsUnverifiedOrWeakerReplacement(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*TodoItem, *TodoItem)
@@ -186,6 +189,7 @@ func TestResolutionRejectsUnverifiedOrWeakerReplacement(t *testing.T) {
 }
 
 func TestResolutionProofCannotBeForgedOrDetachedFromReplacement(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"missing_replacement", "failed_replacement", "wrong_binding", "cycle", "waived"} {
 		t.Run(name, func(t *testing.T) {
 			c, original, replacement := verifiedResolutionFixture(t)
@@ -222,6 +226,7 @@ func TestResolutionProofCannotBeForgedOrDetachedFromReplacement(t *testing.T) {
 }
 
 func TestResolutionWithoutReplacementTranscriptFailsClosed(t *testing.T) {
+	t.Parallel()
 	c, original, replacement := verifiedResolutionFixture(t)
 	replacement.ExecutionReceipt.TranscriptRef = ""
 	original.Resolution = &TaskResolution{Status: "superseded", ResolvedBy: replacement.ID}
@@ -235,6 +240,7 @@ func TestResolutionWithoutReplacementTranscriptFailsClosed(t *testing.T) {
 }
 
 func TestResolutionRejectedByToolDoesNotEraseOriginalFailure(t *testing.T) {
+	t.Parallel()
 	c, original, replacement := verifiedResolutionFixture(t)
 	replacement.VerifyResult = nil
 	before := *original.FailureEvent

@@ -158,6 +158,7 @@ func fixtureRequestDeliveryAssessment(response bool) RequestDeliveryAssessment {
 }
 
 func TestRequestAcceptanceResponseEnvelope(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name string
 		raw  string
@@ -199,6 +200,7 @@ func TestRequestAcceptanceResponseEnvelope(t *testing.T) {
 }
 
 func TestRequestAcceptanceFencedResponseLifecycle(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	request := "Retrieve the complete source document"
 	c.SetRequestAcceptanceModel(withRequestMaterialReview(requestAcceptanceModelFunc(func(ctx context.Context, operation, _ string) ([]byte, error) {
@@ -242,6 +244,7 @@ func TestRequestAcceptanceFencedResponseLifecycle(t *testing.T) {
 }
 
 func TestRequestAcceptanceExtractionFailsClosed(t *testing.T) {
+	t.Parallel()
 	for name, raw := range map[string]string{
 		"no requirements":        `{"requirements":[]}`,
 		"missing necessity":      `{"requirements":[{"statement":"read document","source_quote":"read document","verification":"observed"}]}`,
@@ -263,6 +266,7 @@ func TestRequestAcceptanceExtractionFailsClosed(t *testing.T) {
 }
 
 func TestRequestAcceptanceExtractionRepairsQuoteBeforeFreezing(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	request := "調查甲文件與乙文件並比較差異"
 	makeExtraction := func(quote string) []byte {
@@ -327,6 +331,7 @@ func TestRequestAcceptanceExtractionRepairsQuoteBeforeFreezing(t *testing.T) {
 }
 
 func TestRequestAcceptanceExtractionRepairIsBounded(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	calls := 0
 	c.SetRequestAcceptanceModel(withRequestMaterialReview(requestAcceptanceModelFunc(func(context.Context, string, string) ([]byte, error) {
@@ -348,6 +353,7 @@ func TestRequestAcceptanceExtractionRepairIsBounded(t *testing.T) {
 }
 
 func TestRequestAcceptanceExtractionDoesNotRetryUnavailableOrOversizedOutput(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"provider error", "cancelled", "oversized"} {
 		t.Run(kind, func(t *testing.T) {
 			c := requestAcceptanceFixture(t)
@@ -374,6 +380,7 @@ func TestRequestAcceptanceExtractionDoesNotRetryUnavailableOrOversizedOutput(t *
 }
 
 func TestRequestAcceptanceFreezesReplaysAndPreventsExplicitReplacement(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	snapshot := freezeRequestFixture(t, c, "read document", "observed")
 	contract, err := RequestAcceptanceContractFromSnapshot(snapshot)
@@ -395,6 +402,7 @@ func TestRequestAcceptanceFreezesReplaysAndPreventsExplicitReplacement(t *testin
 }
 
 func TestRequestAcceptanceActualEvidenceAndOfflineReplay(t *testing.T) {
+	t.Parallel()
 	for _, request := range []string{"Retrieve the complete source document", "Run the project's verification suite"} {
 		t.Run(request, func(t *testing.T) {
 			c := requestAcceptanceFixture(t)
@@ -431,6 +439,7 @@ func TestRequestAcceptanceActualEvidenceAndOfflineReplay(t *testing.T) {
 }
 
 func TestRequestAcceptanceDoesNotAcceptWorkerClaimsOrFailedTools(t *testing.T) {
+	t.Parallel()
 	for _, failedTool := range []bool{false, true} {
 		c := requestAcceptanceFixture(t)
 		snapshot := freezeRequestFixture(t, c, "Retrieve the complete source document", "observed")
@@ -459,6 +468,7 @@ func TestRequestAcceptanceDoesNotAcceptWorkerClaimsOrFailedTools(t *testing.T) {
 }
 
 func TestRequestAcceptanceUnavailableReviewFailsEvenWithoutStaticAcceptance(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	freezeRequestFixture(t, c, "Read the requested document", "observed")
 	c.SetRequestAcceptanceModel(withRequestMaterialReview(requestAcceptanceModelFunc(func(context.Context, string, string) ([]byte, error) {
@@ -471,6 +481,7 @@ func TestRequestAcceptanceUnavailableReviewFailsEvenWithoutStaticAcceptance(t *t
 }
 
 func TestRequestAcceptanceDryRunNeverCallsModel(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	c.SetRequestAcceptanceModel(requestAcceptanceModelFunc(func(context.Context, string, string) ([]byte, error) {
 		t.Fatal("preview called a model")
@@ -482,6 +493,7 @@ func TestRequestAcceptanceDryRunNeverCallsModel(t *testing.T) {
 }
 
 func TestRequestAcceptanceOffPreservesPolicyAndManifestParsing(t *testing.T) {
+	t.Parallel()
 	c := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
 	before := c.executionPolicy.snapshot.ConfigurationHash
 	if err := installRequestAcceptanceInput(c.session); err != nil {
@@ -501,6 +513,7 @@ func TestRequestAcceptanceOffPreservesPolicyAndManifestParsing(t *testing.T) {
 }
 
 func TestRequestAcceptanceManifestFormats(t *testing.T) {
+	t.Parallel()
 	for _, manifest := range []string{
 		"name: generic\ngoal-mode: outcome\nrequest-acceptance: true\n",
 		"apiVersion: hufu.io/v1alpha1\nkind: AgentTeam\nmetadata:\n  name: generic\nspec:\n  goal-mode: outcome\n  request-acceptance: true\n",
@@ -515,6 +528,7 @@ func TestRequestAcceptanceManifestFormats(t *testing.T) {
 }
 
 func TestRequestAcceptanceInterruptedAndTargetedRecoveryReuseFrozenRequirements(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	snapshot := freezeRequestFixture(t, c, "Read the requested source", "observed")
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{recoveryRequestSpec(snapshot)})[0]
@@ -539,6 +553,7 @@ func TestRequestAcceptanceInterruptedAndTargetedRecoveryReuseFrozenRequirements(
 }
 
 func TestRequestAcceptanceCrashAfterWorkersFinishKeepsOriginalContract(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	snapshot := freezeRequestFixture(t, c, "Read the requested source", "observed")
 	completedRequestEvidence(t, c, "source text", false)
@@ -562,6 +577,7 @@ func recoveryRequestSpec(snapshot *RunInputSnapshot) TodoSpec {
 }
 
 func TestRequestAcceptanceBindsOrdinaryTasksAndRejectsCrossInvocationEvidence(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	snapshot := freezeRequestFixture(t, c, "Read the requested source", "observed")
 	task, err := c.canonicalizeTaskOccurrence(TaskDef{Agent: "worker", Goal: "perform work"}, c.session.Agents["worker"], "remote/agent-model")
@@ -587,6 +603,7 @@ func TestRequestAcceptanceBindsOrdinaryTasksAndRejectsCrossInvocationEvidence(t 
 }
 
 func TestRequestAcceptanceReviewCannotWeakenStaticChecks(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	snapshot := freezeRequestFixture(t, c, "Read the requested source", "observed")
 	completedRequestEvidence(t, c, "requested source text", false)
@@ -607,6 +624,7 @@ func TestRequestAcceptanceReviewCannotWeakenStaticChecks(t *testing.T) {
 }
 
 func TestRequestAcceptanceReviewRejectsMalformedOrUngroundedVerdicts(t *testing.T) {
+	t.Parallel()
 	for name, review := range map[string]string{
 		"missing checks":          `{"request_covered":true,"checks":[]}`,
 		"unknown ID":              `{"request_covered":true,"checks":[{"id":"other","status":"satisfied","reason":"ok","evidence":[]}]}`,
@@ -632,6 +650,7 @@ func TestRequestAcceptanceReviewRejectsMalformedOrUngroundedVerdicts(t *testing.
 }
 
 func TestRequestAcceptanceDirectAgentTerminalAndReplay(t *testing.T) {
+	t.Parallel()
 	for _, satisfied := range []bool{true, false} {
 		t.Run(map[bool]string{true: "satisfied", false: "missing"}[satisfied], func(t *testing.T) {
 			c := newDirectTerminationCoordinator(t, directTerminationAgent{})

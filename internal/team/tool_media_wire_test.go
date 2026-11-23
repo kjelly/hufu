@@ -42,6 +42,9 @@ type toolMediaWireRequest struct {
 }
 
 func TestMCPImagesReachNativeWorkerThroughActualSDK(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, scenario := range []string{"gateway", "direct", "image only", "multiple calls", "recycled IDs", "result repair", "fanout", "fanout branch", "invalid base64", "wrong MIME", "error image", "no vision", "egress denied", "count limit"} {
 		t.Run(scenario, func(t *testing.T) { testMCPImageWire(t, scenario) })
 	}

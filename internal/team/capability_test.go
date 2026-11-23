@@ -40,6 +40,7 @@ func newCapabilityCoordinator(t *testing.T, preflight []agent.CapabilityRequirem
 }
 
 func TestCheckCapabilityRequirements_CachesSuccessfulProbe(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	if err := os.WriteFile(filepath.Join(ws, "ready.txt"), []byte("ok"), 0o644); err != nil {
 		t.Fatal(err)
@@ -80,6 +81,7 @@ func TestCheckCapabilityRequirements_CachesSuccessfulProbe(t *testing.T) {
 }
 
 func TestExecuteTasksBlocksOnMissingCapability(t *testing.T) {
+	t.Parallel()
 	c := newCapabilityCoordinator(t, []agent.CapabilityRequirement{
 		{Name: "workspace-ready", Probe: "test -f ready.txt", Timeout: 2},
 	})
@@ -132,6 +134,7 @@ func TestExecuteTasksBlocksOnMissingCapability(t *testing.T) {
 }
 
 func TestExecuteTasksUnknownCapabilityPersistsStructuredFailureEvent(t *testing.T) {
+	t.Parallel()
 	c := newCapabilityCoordinator(t, nil)
 	var failureEvent StatusEvent
 	c.SetStatusReporter(func(event StatusEvent) {
@@ -157,6 +160,7 @@ func TestExecuteTasksUnknownCapabilityPersistsStructuredFailureEvent(t *testing.
 }
 
 func TestRunAgentsToolCapabilityReferencesAreSchemaBoundAndRejectedBeforeTodoCreation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		preflight     []agent.CapabilityRequirement
@@ -215,6 +219,7 @@ func TestRunAgentsToolCapabilityReferencesAreSchemaBoundAndRejectedBeforeTodoCre
 }
 
 func TestCapabilityBlockedErrorHelper(t *testing.T) {
+	t.Parallel()
 	res := CapabilityResult{Name: "libvirt", Reason: "capability \"libvirt\" unavailable"}
 	if _, ok := isCapabilityBlockedError(capabilityBlockedError{Result: res}); !ok {
 		t.Fatal("expected capability blocked error to be recognized")

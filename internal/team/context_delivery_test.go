@@ -14,6 +14,7 @@ import (
 )
 
 func TestContextManifestRecordsOnlyMaterializedItems(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		compiled   CompiledContext
@@ -62,6 +63,7 @@ func TestContextManifestRecordsOnlyMaterializedItems(t *testing.T) {
 }
 
 func TestCompileWorkerContextReportsFilteredCanonicalItems(t *testing.T) {
+	t.Parallel()
 	evaluatedAt := time.Now().UTC().Add(-time.Hour)
 	expiredBeforeRoute := evaluatedAt.Add(-time.Minute)
 	expiredAfterRoute := evaluatedAt.Add(30 * time.Minute)
@@ -118,6 +120,7 @@ func TestCompileWorkerContextReportsFilteredCanonicalItems(t *testing.T) {
 }
 
 func TestBudgetContextItemsNeverExceedsBudget(t *testing.T) {
+	t.Parallel()
 	cjk := strings.Repeat("繁體中文的歷史記憶內容需要被正確截斷。", 40)
 	ascii := strings.Repeat("historical memory content that must be truncated ", 40)
 	tests := []struct {
@@ -200,6 +203,7 @@ func (r scopeFailingSearchRepo) SearchLexical(ctx context.Context, req contextst
 }
 
 func TestWorkerMemoryRecallDegradesPerSource(t *testing.T) {
+	t.Parallel()
 	sessionScope := func(scope contextstore.Scope) bool { return scope.SessionID != "" }
 	persistentScope := func(scope contextstore.Scope) bool { return scope.SessionID == "" }
 	tests := []struct {
@@ -273,6 +277,7 @@ func (s *countingWorkerMemoryService) Recall(context.Context, WorkerMemoryRecall
 }
 
 func TestRecallWorkerMemorySkipsVerifyPhase(t *testing.T) {
+	t.Parallel()
 	agentDef := &agent.AgentDef{Name: "worker", MemoryID: "worker-mem", Memory: agent.WorkerMemoryPolicy{Mode: agent.WorkerMemorySession}}
 	tests := []struct {
 		phase     Phase
@@ -297,6 +302,7 @@ func TestRecallWorkerMemorySkipsVerifyPhase(t *testing.T) {
 }
 
 func TestCandidateRunIDFailsClosed(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		executing  string
@@ -319,6 +325,7 @@ func TestCandidateRunIDFailsClosed(t *testing.T) {
 }
 
 func TestCandidateRoutingAndGetUseTheExecutionRun(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name, execution, requested string
 		allowed                    bool
@@ -354,6 +361,7 @@ func TestCandidateRoutingAndGetUseTheExecutionRun(t *testing.T) {
 }
 
 func TestContextGetKeepsReplayTimeThroughManifest(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	c.executionRunID = "run-current"
 	c.sessionData = NewSession()

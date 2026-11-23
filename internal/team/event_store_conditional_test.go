@@ -7,6 +7,7 @@ import (
 )
 
 func TestEventStoreConditionalAppendAcrossHandles(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	first, err := NewEventStore(workspace, "run-fence", "session-fence")
 	if err != nil {

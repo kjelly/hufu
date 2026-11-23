@@ -8,6 +8,7 @@ import (
 )
 
 func TestPermitRepairRetryByTeamShape(t *testing.T) {
+	t.Parallel()
 	dynamic, err := newRuntimeWorkflow(&TeamSession{Config: agent.TeamConfig{Name: "dynamic"}})
 	if err != nil {
 		t.Fatalf("newRuntimeWorkflow(dynamic): %v", err)
@@ -47,6 +48,7 @@ func TestPermitRepairRetryByTeamShape(t *testing.T) {
 // workflow's failure-signature limit: the dynamic-team fix must not let a
 // workflow team repair the same signature more often than its policy allows.
 func TestPermitRepairRetryWorkflowSignatureBoundIsUnchanged(t *testing.T) {
+	t.Parallel()
 	w := &runtimeWorkflow{enabled: true, retryState: NewRetryState(), policies: Policies{MaxRetries: 1}}
 	task := TaskDef{ID: "verify", Agent: "verifier"}
 	failure := errors.New("same failure")

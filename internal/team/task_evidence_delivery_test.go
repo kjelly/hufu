@@ -35,6 +35,7 @@ func (a *evidenceAuditCaptureAgent) Generate(ctx context.Context, call fantasy.A
 }
 
 func TestExecuteWorkerReceivesAcceptedEvidenceBeforeSuccessfulAudit(t *testing.T) {
+	t.Parallel()
 	c, source, audit, _, _ := evidenceDeliveryFixture(t)
 	c.session.Workspace = t.TempDir()
 	c.session.Agents = map[string]*agent.AgentDef{"auditor": {Name: "auditor", Role: "worker", Tools: "view", SideEffect: "none", Generation: agent.GenerationParams{Model: "test"}, MaxRetries: -1}}
@@ -86,6 +87,7 @@ func evidenceDeliveryFixture(t *testing.T) (*Coordinator, *TodoItem, *TodoItem, 
 }
 
 func TestRequiredEvidenceDeliversDowngradedPayloadAndSealedHash(t *testing.T) {
+	t.Parallel()
 	c, source, audit, _, compiled := evidenceDeliveryFixture(t)
 	for _, want := range []string{string(source.TypedResult.StructuredPayload.Value), source.TypedResult.StructuredPayload.SHA256, `"verdict":"unverified"`, "Original limitation.", "evidence downgrades 1"} {
 		if !strings.Contains(compiled.Prompt, want) {
@@ -105,6 +107,7 @@ func TestRequiredEvidenceDeliversDowngradedPayloadAndSealedHash(t *testing.T) {
 }
 
 func TestRequiredEvidenceNeverUsesTruncatedCoordinatorPreview(t *testing.T) {
+	t.Parallel()
 	longValue := `{"details":"` + strings.Repeat("x", resultPayloadContextMaxBytes+1) + `","end":"retained"}`
 	input := WorkerContextInput{
 		Goal: "audit", TaskDef: TaskDef{EvidenceFrom: []string{"1"}, Execution: ExecutionContract{RequiresEvidence: true}},
@@ -121,6 +124,7 @@ func TestRequiredEvidenceNeverUsesTruncatedCoordinatorPreview(t *testing.T) {
 }
 
 func TestRequiredEvidenceRejectsMissingAndModifiedContext(t *testing.T) {
+	t.Parallel()
 	_, _, _, input, compiled := evidenceDeliveryFixture(t)
 	for _, name := range []string{"missing_input", "missing_item", "missing_prompt", "compressed", "changed"} {
 		t.Run(name, func(t *testing.T) {
@@ -153,6 +157,7 @@ func TestRequiredEvidenceRejectsMissingAndModifiedContext(t *testing.T) {
 }
 
 func TestRequiredEvidenceSubmissionFailsClosedButKeepsIncompleteStatuses(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps, TaskResultStatusPartial, TaskResultStatusBlocked} {
 		t.Run(status, func(t *testing.T) {
 			c, _, audit, _, _ := evidenceDeliveryFixture(t)
@@ -169,6 +174,7 @@ func TestRequiredEvidenceSubmissionFailsClosedButKeepsIncompleteStatuses(t *test
 }
 
 func TestRequiredEvidenceManifestIntegrityAndScope(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"legacy", "omitted", "compressed", "wrong_hash", "wrong_task", "wrong_attempt", "wrong_agent", "wrong_run", "repair", "tampered", "fanout_valid", "fanout_missing", "agent_case"} {
 		t.Run(name, func(t *testing.T) {
 			c, _, audit, _, _ := evidenceDeliveryFixture(t)
@@ -226,6 +232,7 @@ func TestRequiredEvidenceManifestIntegrityAndScope(t *testing.T) {
 }
 
 func TestRequiredEvidenceDeliverySurvivesReplayAndBlocksLegacyFinish(t *testing.T) {
+	t.Parallel()
 	c, _, audit, _, _ := evidenceDeliveryFixture(t)
 	var events []RunEvent
 	for _, item := range c.taskTracker.TodoList().Items() {
@@ -257,6 +264,7 @@ func TestRequiredEvidenceDeliverySurvivesReplayAndBlocksLegacyFinish(t *testing.
 }
 
 func TestEvidenceDispatchRejectsCorruptOrMissingPayload(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"missing", "hash", "schema"} {
 		t.Run(name, func(t *testing.T) {
 			c, source, audit, _, _ := evidenceDeliveryFixture(t)
@@ -276,6 +284,7 @@ func TestEvidenceDispatchRejectsCorruptOrMissingPayload(t *testing.T) {
 }
 
 func TestRequiredEvidenceCannotBypassThroughSidecarOrTerminalTransition(t *testing.T) {
+	t.Parallel()
 	c, _, audit, input, _ := evidenceDeliveryFixture(t)
 	input.TaskDef.Sidecar = true
 	if err := c.validateSidecarTaskContract(input.TaskDef); err == nil {
@@ -292,6 +301,7 @@ func TestRequiredEvidenceCannotBypassThroughSidecarOrTerminalTransition(t *testi
 }
 
 func TestRequiredEvidenceTerminalGateUsesActualRetryAttempt(t *testing.T) {
+	t.Parallel()
 	c, _, audit, _, _ := evidenceDeliveryFixture(t)
 	audit.Status = TaskInProgress
 	manifest := &audit.ContextManifests[0]

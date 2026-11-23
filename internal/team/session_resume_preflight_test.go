@@ -9,6 +9,7 @@ import (
 )
 
 func TestResumePreflightRejectsMalformedConversation(t *testing.T) {
+	t.Parallel()
 	c, _, source := metadataContractRecoveryFixture(t)
 	ctx := WithMetadataOnlyContractRecovery(t.Context())
 	plan, err := c.AssessContractRecovery(ctx, source)
@@ -41,6 +42,7 @@ func TestResumePreflightRejectsMalformedConversation(t *testing.T) {
 }
 
 func TestResumePreflightRetainsFrozenNativeOutputContext(t *testing.T) {
+	t.Parallel()
 	c := newRecoveredArtifactCoordinator(t, configureInputBoundContractRecovery)
 	source, err := ReadResumeSource(c.session.Workspace, c.activeBranchID(), "")
 	if err != nil {
@@ -91,6 +93,7 @@ func TestResumePreflightRetainsFrozenNativeOutputContext(t *testing.T) {
 }
 
 func TestResumePreflightUsesCanonicalSharedWorksetReceipt(t *testing.T) {
+	t.Parallel()
 	c, f, source := metadataContractRecoveryFixture(t, func(c *Coordinator) {
 		// The legacy event omits this field even though its contract hash
 		// includes it. Check both preflight hydration and canonical comparison.
@@ -146,6 +149,7 @@ func TestResumePreflightUsesCanonicalSharedWorksetReceipt(t *testing.T) {
 }
 
 func TestRecoveredArtifactOperatorDiagnosticPreservesModelBoundary(t *testing.T) {
+	t.Parallel()
 	c := newRecoveredArtifactCoordinator(t)
 	consumer := c.todoItemByID("2")
 	id := consumer.WorksetBinding.Inputs[0].ID

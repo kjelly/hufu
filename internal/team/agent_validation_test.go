@@ -10,6 +10,7 @@ import (
 )
 
 func TestExecuteTasks_AgentValidation(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Agents: map[string]*agent.AgentDef{
@@ -53,6 +54,7 @@ func TestExecuteTasks_AgentValidation(t *testing.T) {
 }
 
 func TestAllowsFreeTextWorkerResultOnlyForExplicitReadOnlyAgent(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{
 		Config: agent.TeamConfig{AllowFreeTextResults: true},
 		Agents: map[string]*agent.AgentDef{
@@ -76,6 +78,7 @@ func TestAllowsFreeTextWorkerResultOnlyForExplicitReadOnlyAgent(t *testing.T) {
 }
 
 func TestFreeTextResultNeedsSummaryOnlyForInvalidFinalOutput(t *testing.T) {
+	t.Parallel()
 	if freeTextResultNeedsSummary(TaskDef{}, "Let me explain the findings") {
 		t.Fatal("wording must not require a summary repair")
 	}
@@ -88,6 +91,7 @@ func TestFreeTextResultNeedsSummaryOnlyForInvalidFinalOutput(t *testing.T) {
 }
 
 func TestPromoteValidatedReadOnlyHandoffRequiresFinalOutput(t *testing.T) {
+	t.Parallel()
 	complete := "Read-only task completed with no blocking issue."
 	got := promoteValidatedReadOnlyHandoff(TaskDef{}, "task-7", "reader", complete)
 	if got == nil || got.Status != TaskResultStatusSuccess || got.Source != "promoted_free_text" || got.Details != complete {
@@ -99,6 +103,7 @@ func TestPromoteValidatedReadOnlyHandoffRequiresFinalOutput(t *testing.T) {
 }
 
 func TestIncompleteReadOnlyReviewSummaryIsExplicitAndComplete(t *testing.T) {
+	t.Parallel()
 	summary := incompleteReadOnlyReviewSummary(20)
 	if !strings.Contains(summary, "incomplete") || !strings.Contains(summary, "20 inspection step") {
 		t.Fatalf("summary = %q, want explicit incomplete evidence", summary)
@@ -109,6 +114,7 @@ func TestIncompleteReadOnlyReviewSummaryIsExplicitAndComplete(t *testing.T) {
 }
 
 func TestExecuteTasks_AcceptanceRecoveryCanDelegateDuringWrapUp(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{Agents: map[string]*agent.AgentDef{}, Config: agent.TeamConfig{}},
 	}
@@ -134,6 +140,7 @@ func TestExecuteTasks_AcceptanceRecoveryCanDelegateDuringWrapUp(t *testing.T) {
 // through the same bounded, model-facing repair path as any other rejected
 // delegation.
 func TestExecuteTasks_WrapUpRejectionIsRecoverableNotTerminal(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{Agents: map[string]*agent.AgentDef{}, Config: agent.TeamConfig{}},
 	}
@@ -165,6 +172,7 @@ func TestExecuteTasks_WrapUpRejectionIsRecoverableNotTerminal(t *testing.T) {
 }
 
 func TestResolveAgentName_NilSession(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: nil}
 	_, _, err := c.resolveAgentName("developer")
 	if err == nil {
@@ -176,6 +184,7 @@ func TestResolveAgentName_NilSession(t *testing.T) {
 }
 
 func TestResolveAgentName_CoordinatorRole(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Agents: map[string]*agent.AgentDef{
@@ -199,6 +208,7 @@ func TestResolveAgentName_CoordinatorRole(t *testing.T) {
 }
 
 func TestResolveAgentName_FuzzyMatch(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Agents: map[string]*agent.AgentDef{
@@ -220,6 +230,7 @@ func TestResolveAgentName_FuzzyMatch(t *testing.T) {
 }
 
 func TestResolveAgentName_Ambiguous(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Agents: map[string]*agent.AgentDef{
@@ -239,6 +250,7 @@ func TestResolveAgentName_Ambiguous(t *testing.T) {
 }
 
 func TestResolveAgentName_ExactMatchPriority(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Agents: map[string]*agent.AgentDef{
@@ -263,6 +275,7 @@ func TestResolveAgentName_ExactMatchPriority(t *testing.T) {
 // A grounded task never completes from prose: free-text promotion is off for
 // it, while an ordinary read-only task can still be promoted.
 func TestGroundedTaskIsNeverPromotedFromFreeText(t *testing.T) {
+	t.Parallel()
 	output := "## Review\nThe module looks correct."
 	for _, grounded := range []bool{true, false} {
 		task := TaskDef{Agent: "worker", Goal: "review", Execution: ExecutionContract{RequiresResult: true, RequiresGroundedResult: grounded}}
@@ -277,6 +290,7 @@ func TestGroundedTaskIsNeverPromotedFromFreeText(t *testing.T) {
 // always overwrite the Source, so the final values are recovered_protocol or
 // promoted_free_text.
 func TestFreeTextResultSourcesAreOverwritten(t *testing.T) {
+	t.Parallel()
 	parsed := ParseFreeTextResult("Finished the review.")
 	if parsed == nil || parsed.Source != "parsed_free_text" {
 		t.Fatalf("ParseFreeTextResult source = %#v, want parsed_free_text", parsed)

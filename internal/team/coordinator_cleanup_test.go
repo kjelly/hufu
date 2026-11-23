@@ -29,6 +29,7 @@ type cleanupOrderRepository struct {
 func (r cleanupOrderRepository) Close() error { return r.close() }
 
 func TestCoordinatorFixtureCleanupDrainsBeforeResources(t *testing.T) {
+	t.Parallel()
 	writerDone, storeClosed, workspaceRemoved := false, false, false
 	synctest.Test(t, func(t *testing.T) {
 		t.Cleanup(func() {
@@ -61,6 +62,7 @@ func TestCoordinatorFixtureCleanupDrainsBeforeResources(t *testing.T) {
 }
 
 func TestCoordinatorFixtureCleanupWithoutWorkDoesNotWait(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		start := time.Now()
 		t.Cleanup(func() {

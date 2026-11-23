@@ -8,6 +8,7 @@ import (
 )
 
 func TestWebResearchAdmitsHistoricalResearchButRequiresIndependentVerifier(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(bundledTeamsDir(t), "web-research")
 	research, err := compileResultContractSchema(dir, "schemas/research-v1.json")
 	if err != nil {

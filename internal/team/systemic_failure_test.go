@@ -91,6 +91,7 @@ func systemicEscalationEvents(t *testing.T, store *EventStore) int {
 }
 
 func TestSystemicScopeEscalation(t *testing.T) {
+	t.Parallel()
 	fp := systemicFingerprint("exit code 1")
 	tests := []struct {
 		name    string
@@ -137,6 +138,7 @@ func TestSystemicScopeEscalation(t *testing.T) {
 }
 
 func TestSystemicScopeBlocksOnlyTasksInEscalatedScope(t *testing.T) {
+	t.Parallel()
 	fp := systemicFingerprint("exit code 1")
 	var state AntiThrashingState
 	for _, item := range systemicItems("t1", "t2", "t3") {
@@ -157,6 +159,7 @@ func TestSystemicScopeBlocksOnlyTasksInEscalatedScope(t *testing.T) {
 }
 
 func TestSystemicScopeBlocksFreshCandidateByStableOperation(t *testing.T) {
+	t.Parallel()
 	// Executed tasks record their last tool call as LastOperation, but the
 	// systemic fingerprint uses the stable Kind-derived operation so a fresh
 	// candidate that never ran derives the same (component, operation).
@@ -197,6 +200,7 @@ func TestSystemicScopeBlocksFreshCandidateByStableOperation(t *testing.T) {
 }
 
 func TestSystemicEscalationSurvivesCriterionProgress(t *testing.T) {
+	t.Parallel()
 	fp := systemicFingerprint("exit code 1")
 	items := systemicFingerprinted(fp, "t1", "t2", "t3")
 	var state AntiThrashingState
@@ -213,6 +217,7 @@ func TestSystemicEscalationSurvivesCriterionProgress(t *testing.T) {
 }
 
 func TestSystemicScopeRebuildMatchesLiveRecording(t *testing.T) {
+	t.Parallel()
 	fp := systemicFingerprint("exit code 1")
 	belowThreshold := systemicFingerprinted(fp, "t1", "t2")
 	belowThreshold[1].Advances = []string{"tests"}
@@ -257,6 +262,7 @@ func TestSystemicScopeRebuildMatchesLiveRecording(t *testing.T) {
 }
 
 func TestSystemicThresholdConfig(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		yaml    string
@@ -291,6 +297,7 @@ func TestSystemicThresholdConfig(t *testing.T) {
 }
 
 func TestSystemicThresholdExplicitZeroDisablesLiveAndReplay(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	yaml := "name: systemic-zero\nacceptance: 'true'\nreliability:\n  max-systemic-failure-tasks: 0\n"
 	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(yaml), 0o644); err != nil {
@@ -323,6 +330,7 @@ func TestSystemicThresholdExplicitZeroDisablesLiveAndReplay(t *testing.T) {
 }
 
 func TestSystemicEscalationPersistsOnceAcrossDistinctTasks(t *testing.T) {
+	t.Parallel()
 	c, store := systemicCoordinator(t, nil)
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "worker", Desc: "task A", Advances: []string{"build"}},
@@ -354,6 +362,7 @@ func TestSystemicEscalationPersistsOnceAcrossDistinctTasks(t *testing.T) {
 }
 
 func TestSystemicEscalationExcludesCancelledFailures(t *testing.T) {
+	t.Parallel()
 	c, _ := systemicCoordinator(t, nil)
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "worker", Desc: "task A"},
@@ -369,6 +378,7 @@ func TestSystemicEscalationExcludesCancelledFailures(t *testing.T) {
 }
 
 func TestSystemicEscalationLiveMatchesReplay(t *testing.T) {
+	t.Parallel()
 	live, _ := systemicCoordinator(t, func(cfg *agent.TeamConfig) {
 		cfg.Reliability = systemicLimits(3, true)
 	})
@@ -398,6 +408,7 @@ func TestSystemicEscalationLiveMatchesReplay(t *testing.T) {
 }
 
 func TestSystemicEscalationBlocksFreshCandidateViaPersistFailure(t *testing.T) {
+	t.Parallel()
 	c, _ := systemicCoordinator(t, nil)
 	failed := c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "worker", Desc: "a", Advances: []string{"build"}, Kind: TaskKindOutcome},
@@ -420,6 +431,7 @@ func TestSystemicEscalationBlocksFreshCandidateViaPersistFailure(t *testing.T) {
 }
 
 func TestSystemicDispositionForClass(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		class TaskFailureClass
 		want  string

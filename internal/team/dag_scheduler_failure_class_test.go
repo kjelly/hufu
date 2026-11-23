@@ -14,6 +14,7 @@ import (
 // Hufu itself could not classify, not a silent reset), and membership is
 // otherwise exact.
 func TestFailureClassAllowedHelpers(t *testing.T) {
+	t.Parallel()
 	if failureClassAllowed("", []TaskFailureClass{FailureVerify}) {
 		t.Fatal("an empty/unknown class must not be authorized against an explicit allowlist (fail closed, not fail open)")
 	}
@@ -117,6 +118,7 @@ func drainRelaunchedTask(t *testing.T, s *dagScheduler) {
 // additionally require CanAutomaticallyReplay (the same authority resetTask
 // itself already gates on).
 func TestDAGSchedulerSelfHealRespectsRecoveryNeverPolicy(t *testing.T) {
+	t.Parallel()
 	s, items := dagSchedulerOnFailureClassesFixture(t, []TaskFailureClass{FailureVerify}, FailureExecution)
 	items[1].Recovery = RecoveryNever
 	ctx, cancel := context.WithCancel(context.Background())
@@ -140,6 +142,7 @@ func TestDAGSchedulerSelfHealRespectsRecoveryNeverPolicy(t *testing.T) {
 // task whose contract restricts on_failure to `verification` must retry that
 // task in place and must never reset the on_failure ancestor (the coder).
 func TestDAGSchedulerOnFailureClassesSuppressesNonSemanticReset(t *testing.T) {
+	t.Parallel()
 	s, items := dagSchedulerOnFailureClassesFixture(t, []TaskFailureClass{FailureVerify}, FailureExecution)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -176,6 +179,7 @@ func TestDAGSchedulerOnFailureClassesSuppressesNonSemanticReset(t *testing.T) {
 // an allowlist that only names FailureVerify (as this test's does) must
 // still fail closed for it.
 func TestDAGSchedulerGenuineFailedReportRequiresSemanticRejectionInAllowlist(t *testing.T) {
+	t.Parallel()
 	s, items := dagSchedulerOnFailureClassesFixture(t, []TaskFailureClass{FailureVerify}, FailureExecution)
 	items[1].TypedResult = &TaskResult{Status: TaskResultStatusFailed, Source: "submitted", Summary: "confirmed a real defect"}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -203,6 +207,7 @@ func TestDAGSchedulerGenuineFailedReportRequiresSemanticRejectionInAllowlist(t *
 // already-persisted terminal state: no reset of the ancestor, no retry of
 // the failing task, no new goroutine launched at all.
 func TestDAGSchedulerOnFailureClassesFailsClosedForStructuralFailure(t *testing.T) {
+	t.Parallel()
 	for _, class := range []TaskFailureClass{FailureContract, FailureEnvironment, FailurePolicy, FailureCancelled} {
 		t.Run(string(class), func(t *testing.T) {
 			s, items := dagSchedulerOnFailureClassesFixture(t, []TaskFailureClass{FailureVerify}, class)
@@ -239,6 +244,7 @@ func TestDAGSchedulerOnFailureClassesFailsClosedForStructuralFailure(t *testing.
 // one kind of failure Hufu itself could not even classify. It falls through
 // to the same fail-closed handling as any other non-self-healable class.
 func TestDAGSchedulerOnFailureClassesFailsClosedForUnclassifiedFailure(t *testing.T) {
+	t.Parallel()
 	s, items := dagSchedulerOnFailureClassesFixture(t, []TaskFailureClass{FailureVerify}, "")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -259,6 +265,7 @@ func TestDAGSchedulerOnFailureClassesFailsClosedForUnclassifiedFailure(t *testin
 // TestDAGSchedulerOnFailureClassesAllowsSemanticReset proves the same gate
 // still allows the on_failure edge for the one class it authorizes.
 func TestDAGSchedulerOnFailureClassesAllowsSemanticReset(t *testing.T) {
+	t.Parallel()
 	s, items := dagSchedulerOnFailureClassesFixture(t, []TaskFailureClass{FailureVerify}, FailureVerify)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -282,6 +289,7 @@ func TestDAGSchedulerOnFailureClassesAllowsSemanticReset(t *testing.T) {
 // OnFailureClasses must reset its on_failure ancestor for any terminal
 // failure class, exactly as before this field existed.
 func TestDAGSchedulerOnFailureClassesOmittedPreservesLegacyBehavior(t *testing.T) {
+	t.Parallel()
 	s, items := dagSchedulerOnFailureClassesFixture(t, nil, FailureExecution)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

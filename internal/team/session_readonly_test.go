@@ -9,6 +9,7 @@ import (
 )
 
 func TestLoadSessionReadOnlyDoesNotCreateMissingWorkspace(t *testing.T) {
+	t.Parallel()
 	workspace := filepath.Join(t.TempDir(), "missing")
 	session, exists, err := LoadSessionReadOnly(workspace)
 	if err != nil {
@@ -23,6 +24,7 @@ func TestLoadSessionReadOnlyDoesNotCreateMissingWorkspace(t *testing.T) {
 }
 
 func TestLoadSessionReadOnlyReportsMalformedProjection(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	putRuntimeDocument(t, workspace, runtimestore.DocumentSession, []byte(`{"tasks":`))
 	session, exists, err := LoadSessionReadOnly(workspace)

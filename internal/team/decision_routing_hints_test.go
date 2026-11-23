@@ -7,6 +7,7 @@ import (
 )
 
 func TestApplyRoutingHints(t *testing.T) {
+	t.Parallel()
 	hints := []agent.RoutingHint{
 		{ContractID: "kubernetes", PreferredCapabilities: []string{"kubernetes", "platform-engineering"}},
 		{ContractID: "kubernetes", PreferredCapabilities: []string{"security"}},
@@ -50,6 +51,7 @@ func TestApplyRoutingHints(t *testing.T) {
 }
 
 func TestHintedJudgeRole(t *testing.T) {
+	t.Parallel()
 	hints := []agent.RoutingHint{
 		{ContractID: "storage", PreferredCapabilities: []string{"architecture"}},
 	}

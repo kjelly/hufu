@@ -47,6 +47,7 @@ func addFailedReplanTask(list *TodoList, spec TodoSpec) *TodoItem {
 }
 
 func TestReplanPredecessorsLinkOnlyByVerificationOrCriterion(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		failed    TodoSpec
@@ -85,6 +86,7 @@ func TestReplanPredecessorsLinkOnlyByVerificationOrCriterion(t *testing.T) {
 // in each mode: a replacement that rewords the goal of a replan_required
 // task but keeps its agent, target, dependencies, and verification.
 func TestRepeatedFailureRejectsSameExecutionStrategy(t *testing.T) {
+	t.Parallel()
 	repeat := TodoSpec{Agent: "worker", Goal: "Fix it another way", Verify: "go test ./x", ExecutionTarget: replanTestTarget}
 	other := TodoSpec{Agent: "debugger", Goal: "Fix it", Verify: "go test ./x", ExecutionTarget: replanTestTarget}
 	cases := []struct {
@@ -147,6 +149,7 @@ func TestRepeatedFailureRejectsSameExecutionStrategy(t *testing.T) {
 // comparison for a replacement's first finished attempt only, also after a
 // resumed coordinator rebuilds its state from the event log.
 func TestExecutedStrategyChangeComparesToolSequencesOnce(t *testing.T) {
+	t.Parallel()
 	store := replanTestStore(t)
 	tracker := NewTaskTracker()
 	c := replanTestCoordinator(t, agent.MaterialReplanWarn, store, tracker)
@@ -193,6 +196,7 @@ func TestExecutedStrategyChangeComparesToolSequencesOnce(t *testing.T) {
 }
 
 func TestMaterialReplanModeConfiguration(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		reliability string

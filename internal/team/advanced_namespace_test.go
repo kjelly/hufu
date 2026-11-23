@@ -23,6 +23,7 @@ func writeAdvancedNamespaceFile(t *testing.T, dir, filename, content string) {
 const advancedNamespaceDeveloperMD = "---\nname: developer\nrole: worker\ntools: view,write,edit,grep,glob,ls,bash\nside_effect: workspace_write\nrecovery: retry\n---\nImplement the change.\n"
 
 func TestAdvancedNamespace_WorkflowEquivalentToLegacyTopLevel(t *testing.T) {
+	t.Parallel()
 	legacyYAML := `name: legacy-workflow
 workflow:
   phases: [prepare, execute, verify]
@@ -92,6 +93,7 @@ advanced:
 }
 
 func TestAdvancedNamespace_WorkflowConflictFailsClosed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeAdvancedNamespaceFile(t, dir, "team.yaml", `name: conflict
 workflow:
@@ -109,6 +111,7 @@ advanced:
 }
 
 func TestAdvancedNamespace_TasksConflictFailsClosed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeAdvancedNamespaceFile(t, dir, "team.yaml", `name: conflict
 tasks:
@@ -130,6 +133,7 @@ advanced:
 }
 
 func TestAdvancedNamespace_ReliabilityConflictFailsClosed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeAdvancedNamespaceFile(t, dir, "team.yaml", `name: conflict
 reliability:
@@ -147,6 +151,7 @@ advanced:
 }
 
 func TestAdvancedNamespace_VerificationConflictFailsClosed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeAdvancedNamespaceFile(t, dir, "team.yaml", `name: conflict
 workflow:
@@ -178,6 +183,7 @@ tasks:
 }
 
 func TestAdvancedNamespace_RetryConflictFailsClosed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeAdvancedNamespaceFile(t, dir, "team.yaml", `name: conflict
 workflow:
@@ -211,6 +217,7 @@ tasks:
 }
 
 func TestAdvancedNamespace_AdvancedOnlyTasksLoadWithoutTopLevel(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeAdvancedNamespaceFile(t, dir, "team.yaml", `name: advanced-only
 advanced:
@@ -231,6 +238,7 @@ advanced:
 }
 
 func TestAdvancedNamespace_LegacyTeamsWithoutAdvancedStillWork(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeAdvancedNamespaceFile(t, dir, "team.yaml", "name: legacy-only\nmax-rounds: 5\n")
 	writeAdvancedNamespaceFile(t, dir, "developer.md", advancedNamespaceDeveloperMD)

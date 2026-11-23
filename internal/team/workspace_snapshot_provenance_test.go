@@ -7,6 +7,7 @@ import (
 )
 
 func TestWorkspaceSnapshotProvenanceDistinguishesDerivedPublication(t *testing.T) {
+	t.Parallel()
 	f := newVersionFixture(t)
 	f.write("version.txt", "A")
 	base, _, err := f.ops().SnapshotNow(t.Context())

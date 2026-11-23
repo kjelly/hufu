@@ -7,6 +7,7 @@ import (
 )
 
 func TestCheckAlternatives(t *testing.T) {
+	t.Parallel()
 	execute := DecisionOption{ID: "a", Kind: OptionExecute}
 	negotiate := DecisionOption{ID: "b", Kind: OptionNegotiate}
 	defer_ := DecisionOption{ID: "defer", Kind: OptionDefer}
@@ -90,6 +91,7 @@ func usableBaseRate() BaseRateEvidence {
 }
 
 func TestCheckOutsideView(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		policy OutsideViewPolicy
@@ -156,6 +158,7 @@ func TestCheckOutsideView(t *testing.T) {
 }
 
 func TestCheckPremortem(t *testing.T) {
+	t.Parallel()
 	good := &PremortemResult{FailureModes: []FailureMode{{ID: "F1", Description: "stalls", Likelihood: 0.2, Impact: 0.9}}}
 
 	if gate := CheckPremortem(PremortemPolicy{Enabled: true}, nil); gate != nil {
@@ -178,6 +181,7 @@ func TestCheckPremortem(t *testing.T) {
 }
 
 func TestCheckForecast(t *testing.T) {
+	t.Parallel()
 	record := DecisionRecord{Probability: 0.7, FalsificationConditions: []string{"ingest lag exceeds 5m"}}
 
 	if gate := CheckForecast(ForecastPolicy{}, DecisionRecord{}); gate != nil {
@@ -198,6 +202,7 @@ func TestCheckForecast(t *testing.T) {
 }
 
 func TestCheckRequestContract(t *testing.T) {
+	t.Parallel()
 	good := &RequestContract{Objective: "cut ingest lag", SuccessCriteria: []SuccessCriterion{{ID: "S1", Statement: "p99 under 1m"}}}
 
 	if gate := CheckRequestContract(good); gate != nil {
@@ -218,6 +223,7 @@ func TestCheckRequestContract(t *testing.T) {
 // Three mirrors of one origin are one confirmation, not three (spec §28.1,
 // test matrix I).
 func TestGroupEvidenceMergesSharedOrigins(t *testing.T) {
+	t.Parallel()
 	policy := EvidenceIndependencePolicy{WarnSharedOrigin: true}
 
 	sameContent := GroupEvidence([]EvidenceProvenance{
@@ -256,6 +262,7 @@ func TestGroupEvidenceMergesSharedOrigins(t *testing.T) {
 // same spec that asks for independence says self-description is not evidence
 // (spec §28.1).
 func TestGroupEvidenceIgnoresDeclaredParents(t *testing.T) {
+	t.Parallel()
 	independent := GroupEvidence([]EvidenceProvenance{
 		{SourceID: "a"},
 		{SourceID: "b", DeclaredParentSourceIDs: []string{"a"}},
@@ -268,6 +275,7 @@ func TestGroupEvidenceIgnoresDeclaredParents(t *testing.T) {
 
 // Grouping must not depend on the order sources arrive in.
 func TestGroupEvidenceIsOrderIndependent(t *testing.T) {
+	t.Parallel()
 	sources := []EvidenceProvenance{
 		{SourceID: "a", ContentHash: "h1"},
 		{SourceID: "b", ContentHash: "h2"},
@@ -292,6 +300,7 @@ func TestGroupEvidenceIsOrderIndependent(t *testing.T) {
 }
 
 func TestProvenanceFromArtifacts(t *testing.T) {
+	t.Parallel()
 	sources := ProvenanceFromArtifacts([]ArtifactRef{
 		{ID: "art-1", SHA256: "h1"},
 		{Path: "reports/a.json", SHA256: "h1"},
@@ -308,6 +317,7 @@ func TestProvenanceFromArtifacts(t *testing.T) {
 }
 
 func TestTrustedProvenanceUsesOnlyResolvedRuntimeMetadata(t *testing.T) {
+	t.Parallel()
 	metadata := []RuntimeEvidenceMetadata{
 		{Artifact: ArtifactRef{ID: "artifact-a", SHA256: "same"}, Origin: ArtifactOriginMetadata{RetrievalURL: "https://news.example.com/a", ParentSourceIDs: []string{"root"}}},
 		{Artifact: ArtifactRef{ID: "artifact-b", SHA256: "same"}, Origin: ArtifactOriginMetadata{RetrievalURL: "https://blog.example.com/b"}},

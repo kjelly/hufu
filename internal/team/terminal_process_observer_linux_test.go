@@ -11,6 +11,7 @@ import (
 )
 
 func TestTerminalProcessGroupContained(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		readErr   error

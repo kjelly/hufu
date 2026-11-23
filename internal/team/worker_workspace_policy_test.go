@@ -15,6 +15,7 @@ import (
 )
 
 func TestWorkerWorkspaceSpecDecodesStrictly(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		yaml string
@@ -46,6 +47,7 @@ func TestWorkerWorkspaceSpecDecodesStrictly(t *testing.T) {
 }
 
 func TestWorkerWorkspaceSpecPrecedence(t *testing.T) {
+	t.Parallel()
 	isolated := &agent.WorkerWorkspaceSpec{Mode: agent.WorkerWorkspaceIsolated, Integrate: agent.WorkerWorkspaceIntegrateOnVerified}
 	shared := &agent.WorkerWorkspaceSpec{Mode: agent.WorkerWorkspaceShared}
 	session := &TeamSession{Config: agent.TeamConfig{WorkerWorkspace: isolated}}
@@ -65,6 +67,7 @@ func isolatedSpec() *agent.WorkerWorkspaceSpec {
 }
 
 func TestValidateTeamWorkerWorkspacesRejectsUnsupportedAgents(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		def   *agent.AgentDef
@@ -103,6 +106,7 @@ func TestValidateTeamWorkerWorkspacesRejectsUnsupportedAgents(t *testing.T) {
 }
 
 func TestLoadTeamBindsIsolatedWorkerWorkspaces(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte("name: isolated-team\nworker-workspace:\n  mode: isolated\n  integrate: on-verified\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -145,6 +149,7 @@ func isolatedAdmissionCoordinator(t *testing.T) *Coordinator {
 }
 
 func TestAdmittedWorkerWorkspace(t *testing.T) {
+	t.Parallel()
 	def := &agent.AgentDef{Name: "worker", Role: "worker"}
 	local := execution.ExecutionTarget{Backend: "local", Model: "m"}
 	writer := TaskDef{Agent: "worker", SideEffect: SideEffectWorkspaceWrite, ResolvedExecutionTarget: local}
@@ -199,6 +204,7 @@ func TestAdmittedWorkerWorkspace(t *testing.T) {
 }
 
 func TestIsolatedTaskResourceScopeIsARootReadClaim(t *testing.T) {
+	t.Parallel()
 	isolated, err := isolatedTaskResourceScope(nil, SideEffectWorkspaceWrite)
 	if err != nil {
 		t.Fatal(err)
@@ -249,6 +255,7 @@ func TestIsolatedTaskResourceScopeIsARootReadClaim(t *testing.T) {
 }
 
 func TestWorkerWorkspacePolicyIsDurable(t *testing.T) {
+	t.Parallel()
 	policy := &WorkerWorkspacePolicy{Mode: agent.WorkerWorkspaceIsolated, Integrate: agent.WorkerWorkspaceIntegrateOnVerified, EffectiveMode: agent.WorkerWorkspaceIsolated}
 	list := NewTaskTracker().TodoList()
 	item := list.AddBatch([]TodoSpec{{Agent: "worker", Desc: "code", WorkerWorkspace: policy}})[0]
@@ -272,6 +279,7 @@ func TestWorkerWorkspacePolicyIsDurable(t *testing.T) {
 }
 
 func TestIsolatedResolvedToolsUnsupported(t *testing.T) {
+	t.Parallel()
 	if err := isolatedResolvedToolsUnsupported(ResolvedWorkerTools{AuthorizedNames: []string{"view", "write", "bash"}}); err != nil {
 		t.Fatalf("supported tools rejected: %v", err)
 	}

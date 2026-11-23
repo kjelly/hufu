@@ -13,6 +13,7 @@ import (
 )
 
 func TestExecutionEventProjectorMapsCanonicalRunEvents(t *testing.T) {
+	t.Parallel()
 	manifest := &EvidenceManifest{ManifestHash: "manifest-1"}
 	payload, err := json.Marshal(LifecycleEventPayload{Team: "team", Outcome: RunOutcomeCompleted, AcceptanceState: AcceptancePassed, EvidenceManifest: manifest})
 	if err != nil {
@@ -31,6 +32,7 @@ func TestExecutionEventProjectorMapsCanonicalRunEvents(t *testing.T) {
 }
 
 func TestExecutionEventExporterFallbackKeepsHistoricalAttemptAndAgent(t *testing.T) {
+	t.Parallel()
 	events := []RunEvent{
 		{Type: string(EventTaskStarted), RunID: "run", TaskID: "task", Actor: "worker", Payload: []byte(`{"agent":"worker","dispatch_attempt":1}`)},
 		// Historical fallback events had only the control actor, not agent.
@@ -45,6 +47,7 @@ func TestExecutionEventExporterFallbackKeepsHistoricalAttemptAndAgent(t *testing
 }
 
 func TestProjectedExecutionEventsCollapsesDuplicateDurableTransitions(t *testing.T) {
+	t.Parallel()
 	events := []RunEvent{
 		{Type: string(EventRunStarted), RunID: "run-1", Payload: []byte(`{"team":"team"}`)},
 		{Type: string(EventTaskStarted), RunID: "run-1", TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","retries":0}`)},
@@ -64,6 +67,7 @@ func TestProjectedExecutionEventsCollapsesDuplicateDurableTransitions(t *testing
 }
 
 func TestProtocolIncompleteCompatibilityExportUsesRepairOutcome(t *testing.T) {
+	t.Parallel()
 	for _, repaired := range []bool{true, false} {
 		t.Run(fmt.Sprintf("repaired=%t", repaired), func(t *testing.T) {
 			event := func(kind EventType) RunEvent {
@@ -96,6 +100,7 @@ func TestProtocolIncompleteCompatibilityExportUsesRepairOutcome(t *testing.T) {
 // a status again when the task re-enters it after another status (every retry
 // and every approved --plan execution).
 func TestProjectedExecutionEventsFollowDispatchAttempts(t *testing.T) {
+	t.Parallel()
 	ev := func(eventType, taskID, payload string) RunEvent {
 		return RunEvent{Type: eventType, RunID: "run-1", TaskID: taskID, Actor: "worker", Payload: []byte(payload)}
 	}
@@ -165,6 +170,7 @@ func TestProjectedExecutionEventsFollowDispatchAttempts(t *testing.T) {
 }
 
 func TestExecutionEventProjectorTerminalOutcomes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		runEvents []RunEvent
@@ -232,6 +238,7 @@ func TestExecutionEventProjectorTerminalOutcomes(t *testing.T) {
 // execution telemetry only as canonical events: no execution-event file is
 // written, and the run projects from the event store.
 func TestExecutionRunLeavesNoExecutionEventFiles(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{
@@ -280,6 +287,7 @@ func TestExecutionRunLeavesNoExecutionEventFiles(t *testing.T) {
 // TestSkippedTasksProjectAtTheirLastAttempt pins that a skipped task projects
 // one skip row, at the attempt its last dispatch started.
 func TestSkippedTasksProjectAtTheirLastAttempt(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		attempt int // 0 leaves the task pending until it is skipped
@@ -331,6 +339,7 @@ func TestSkippedTasksProjectAtTheirLastAttempt(t *testing.T) {
 }
 
 func TestSealedPartialRunDoesNotAppendLateTaskSkips(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "sealed-partial"}},

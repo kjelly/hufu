@@ -11,6 +11,7 @@ import (
 )
 
 func TestOpenQuestionsTextCompatibilityBoundary(t *testing.T) {
+	t.Parallel()
 	for _, gated := range []bool{false, true} {
 		for _, tc := range []struct {
 			name, input string

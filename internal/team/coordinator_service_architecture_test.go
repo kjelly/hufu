@@ -15,6 +15,7 @@ import (
 // confines direct field access and default implementation construction to the
 // composition/accessor files; production behavior must use the service seams.
 func TestCoordinatorServiceOwnershipArchitecture(t *testing.T) {
+	t.Parallel()
 	requiredCoordinatorFields := map[string]bool{
 		"taskCache":        false,
 		"evidenceService":  false,

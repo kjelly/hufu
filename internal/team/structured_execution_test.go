@@ -36,6 +36,7 @@ func (t *structuredTestTool) Run(ctx context.Context, call fantasy.ToolCall) (fa
 }
 
 func TestExecutionContractStructuredStepsParseAndValidate(t *testing.T) {
+	t.Parallel()
 	const contractJSON = `{
   "agent":"worker",
   "goal":"produce, validate, and execute an artifact",
@@ -62,6 +63,7 @@ func TestExecutionContractStructuredStepsParseAndValidate(t *testing.T) {
 }
 
 func TestRunStructuredExecutionResolvesTypedUpstreamReferences(t *testing.T) {
+	t.Parallel()
 	contract := ExecutionContract{Steps: []ExecutionStep{
 		{
 			ID: "discover", Tool: "probe", Effect: ExecutionEffectRead,
@@ -112,6 +114,7 @@ func TestRunStructuredExecutionResolvesTypedUpstreamReferences(t *testing.T) {
 }
 
 func TestRunStructuredExecutionInjectsOpaqueArtifactRefAndReceiptsProvenance(t *testing.T) {
+	t.Parallel()
 	contract := ExecutionContract{Steps: []ExecutionStep{
 		{ID: "produce", Tool: "producer", Effect: ExecutionEffectProduce, Outputs: []ExecutionStepOutput{{Name: "transcript", Kind: ExecutionOutputArtifact}}},
 		{ID: "audit", Tool: "view", Effect: ExecutionEffectRead, DependsOn: []string{"produce"}, References: []ExecutionStepReference{{Target: "artifact_ref", StepID: "produce", Output: "transcript", Kind: ExecutionOutputArtifact}}},
@@ -142,6 +145,7 @@ func TestRunStructuredExecutionInjectsOpaqueArtifactRefAndReceiptsProvenance(t *
 }
 
 func TestValidateExecutionContractStructuredStepsRejectUnsafeShapes(t *testing.T) {
+	t.Parallel()
 	validSteps := []ExecutionStep{
 		{ID: "produce", Tool: "writer", Effect: ExecutionEffectProduce, Outputs: []ExecutionStepOutput{{Name: "draft"}}},
 		{ID: "validate", Tool: "validator", Effect: ExecutionEffectValidate, DependsOn: []string{"produce"}, Consumes: []string{"draft"}, OnFailure: StepFailureRepairable, MaxRepairs: 1},
@@ -208,6 +212,7 @@ func TestValidateExecutionContractStructuredStepsRejectUnsafeShapes(t *testing.T
 }
 
 func TestRunStructuredExecutionRepairsValidatorBeforeFreezeAndMutation(t *testing.T) {
+	t.Parallel()
 	contract := ExecutionContract{Steps: []ExecutionStep{
 		{ID: "produce", Tool: "producer", Effect: ExecutionEffectProduce, Outputs: []ExecutionStepOutput{{Name: "draft"}}},
 		{ID: "validate", Tool: "validator", Effect: ExecutionEffectValidate, DependsOn: []string{"produce"}, Consumes: []string{"draft"}, OnFailure: StepFailureRepairable, MaxRepairs: 1},
@@ -289,6 +294,7 @@ func TestRunStructuredExecutionRepairsValidatorBeforeFreezeAndMutation(t *testin
 }
 
 func TestCoordinatorStructuredLifecycleAcceptsOnlyReceiptCompleteSuccess(t *testing.T) {
+	t.Parallel()
 	contract := ExecutionContract{Steps: []ExecutionStep{
 		{ID: "produce", Tool: "producer", Effect: ExecutionEffectProduce, Outputs: []ExecutionStepOutput{{Name: "draft", Kind: ExecutionOutputArtifact}}},
 		{ID: "validate", Tool: "validator", Effect: ExecutionEffectValidate, DependsOn: []string{"produce"}, Consumes: []string{"draft"}, OnFailure: StepFailureRepairable, MaxRepairs: 1},
@@ -351,6 +357,7 @@ func TestCoordinatorStructuredLifecycleAcceptsOnlyReceiptCompleteSuccess(t *test
 }
 
 func TestExecuteTaskRoutesStructuredContractThroughCoordinatorRunner(t *testing.T) {
+	t.Parallel()
 	contract := ExecutionContract{Steps: []ExecutionStep{
 		{ID: "produce", Tool: "producer", Effect: ExecutionEffectProduce, Outputs: []ExecutionStepOutput{{Name: "draft", Kind: ExecutionOutputArtifact}}},
 		{ID: "validate", Tool: "validator", Effect: ExecutionEffectValidate, DependsOn: []string{"produce"}, Consumes: []string{"draft"}},
@@ -398,6 +405,7 @@ func TestExecuteTaskRoutesStructuredContractThroughCoordinatorRunner(t *testing.
 }
 
 func TestCoordinatorDeclaredToolRunnerExecutesTypedInputAndRehashesArtifact(t *testing.T) {
+	t.Parallel()
 	projectDir := t.TempDir()
 	var calls []string
 	writer := &artifactAwareStructuredTestTool{structuredTestTool: &structuredTestTool{name: "writer", run: func(_ context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
@@ -452,6 +460,7 @@ func TestCoordinatorDeclaredToolRunnerExecutesTypedInputAndRehashesArtifact(t *t
 }
 
 func TestCoordinatorResolvesSuccessfulCrossTaskTypedOutput(t *testing.T) {
+	t.Parallel()
 	upstreamContract := ExecutionContract{Steps: []ExecutionStep{{
 		ID: "discover", Tool: "probe", Effect: ExecutionEffectRead,
 		Outputs: []ExecutionStepOutput{{Name: "role_index", Kind: ExecutionOutputFact, Schema: "integer", Scope: "task"}},
@@ -503,6 +512,7 @@ func TestCoordinatorResolvesSuccessfulCrossTaskTypedOutput(t *testing.T) {
 }
 
 func TestRunStructuredExecutionDoesNotMutateAfterRepairBudgetIsExhausted(t *testing.T) {
+	t.Parallel()
 	contract := ExecutionContract{Steps: []ExecutionStep{
 		{ID: "produce", Tool: "producer", Effect: ExecutionEffectProduce, Outputs: []ExecutionStepOutput{{Name: "draft"}}},
 		{ID: "validate", Tool: "validator", Effect: ExecutionEffectValidate, DependsOn: []string{"produce"}, Consumes: []string{"draft"}, OnFailure: StepFailureRepairable, MaxRepairs: 1},
@@ -537,6 +547,7 @@ func TestRunStructuredExecutionDoesNotMutateAfterRepairBudgetIsExhausted(t *test
 }
 
 func TestExecutionStepReceiptRegistryRejectsOtherAttempt(t *testing.T) {
+	t.Parallel()
 	registry := NewExecutionStepReceiptRegistry()
 	receipt := ExecutionStepReceipt{ID: "receipt-1", TaskID: "task", Attempt: 2, StepID: "validate", Tool: "validator", InputSHA256: "digest", ExitCode: 0}
 	if err := registry.Record(receipt); err != nil {
@@ -548,6 +559,7 @@ func TestExecutionStepReceiptRegistryRejectsOtherAttempt(t *testing.T) {
 }
 
 func TestFailureEventPreservesFirstCausalStepReceipt(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker(), projectDir: "/workspace"}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "validate then report"}})[0]
 	item.LastOperation = "submit_result"
@@ -580,6 +592,7 @@ func TestFailureEventPreservesFirstCausalStepReceipt(t *testing.T) {
 }
 
 func TestCancellationFailureDoesNotInheritPriorStepFailure(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker(), projectDir: "/workspace"}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "validate then wait"}})[0]
 	item.LastOperation = "view"
@@ -602,6 +615,7 @@ func TestCancellationFailureDoesNotInheritPriorStepFailure(t *testing.T) {
 }
 
 func TestReceiptRegistryIgnoresRepairedValidatorWhenFindingCausalFailure(t *testing.T) {
+	t.Parallel()
 	registry := NewExecutionStepReceiptRegistry()
 	started := time.Now().UTC()
 	for _, receipt := range []ExecutionStepReceipt{
@@ -620,6 +634,7 @@ func TestReceiptRegistryIgnoresRepairedValidatorWhenFindingCausalFailure(t *test
 }
 
 func TestRunStructuredExecutionDoesNotRepairOrReplayAfterMutationStarts(t *testing.T) {
+	t.Parallel()
 	contract := ExecutionContract{Steps: []ExecutionStep{
 		{ID: "produce", Tool: "producer", Effect: ExecutionEffectProduce, Outputs: []ExecutionStepOutput{{Name: "draft"}}},
 		{ID: "validate", Tool: "validator", Effect: ExecutionEffectValidate, DependsOn: []string{"produce"}, Consumes: []string{"draft"}, OnFailure: StepFailureRepairable, MaxRepairs: 2},
@@ -682,6 +697,7 @@ func (r *changingArtifactRunner) InspectStructuredArtifact(_ context.Context, ar
 }
 
 func TestRunStructuredExecutionRejectsArtifactChangedAfterValidation(t *testing.T) {
+	t.Parallel()
 	contract := ExecutionContract{Steps: []ExecutionStep{
 		{ID: "produce", Tool: "producer", Effect: ExecutionEffectProduce, Outputs: []ExecutionStepOutput{{Name: "draft"}}},
 		{ID: "validate", Tool: "validator", Effect: ExecutionEffectValidate, DependsOn: []string{"produce"}, Consumes: []string{"draft"}},
@@ -702,6 +718,7 @@ func TestRunStructuredExecutionRejectsArtifactChangedAfterValidation(t *testing.
 }
 
 func TestRunStructuredExecutionIsProviderNameNeutral(t *testing.T) {
+	t.Parallel()
 	providerPrefix := "fake-provider-7f3a9"
 	contract := ExecutionContract{Steps: []ExecutionStep{
 		{ID: "produce", Tool: providerPrefix + "-produce", Effect: ExecutionEffectProduce, Outputs: []ExecutionStepOutput{{Name: "artifact"}}},

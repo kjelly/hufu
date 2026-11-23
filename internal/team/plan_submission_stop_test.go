@@ -6,6 +6,7 @@ import "testing"
 // worker holds its full tool set, so its stream must end once its plan is
 // submitted, while the execution of an approved plan runs to completion.
 func TestPlanSubmissionStopEndsOnlyThePlanningPhase(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		task       TaskDef

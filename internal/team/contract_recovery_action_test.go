@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -69,9 +71,9 @@ func nativeActionRecoveryWithTasks(t *testing.T, taskCount int, report *Compiled
 	if err = SaveSessionTree(f.control, f.tree); err != nil {
 		t.Fatal(err)
 	}
-	c := newTestCoordinator(t)
-	c.session.Workspace = f.control
-	c.session.Config = workflowTestSession(t).Config
+	flow := workflowTestSession(t)
+	c := newTestCoordinator(t, withCoordinatorWorkspace(f.control))
+	c.session.Config = flow.Config
 	c.session.Config.Name = "generic-action"
 	c.session.Config.DefaultLLMBackend = "ollama"
 	c.session.WorkspaceVersion = f.version
@@ -91,7 +93,6 @@ func nativeActionRecoveryWithTasks(t *testing.T, taskCount int, report *Compiled
 	c.session.ProviderRegistry = NewProviderRegistry()
 	calls := new(int)
 	c.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("original", strconv.Itoa(taskCount), calls, nil))
-	flow := workflowTestSession(t)
 	flow.Workspace = f.control
 	if err = flow.SetCompatibilityWorkspaceScope(f.subject); err != nil {
 		t.Fatal(err)
@@ -162,10 +163,16 @@ func nativeActionRecoveryWithTasks(t *testing.T, taskCount int, report *Compiled
 }
 
 func TestContractRecoveryActionRetainsCompletedTasksAndResumesChild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	testNativeActionRecoveryChild(t, false)
 }
 
 func TestContractRecoveryActionUpgradesUnstartedConsumer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	old, err := CompileResultContractDocument("report.json", []byte(`{"type":"object","properties":{"coverage":{"type":"array"}}}`))
 	if err != nil {
 		t.Fatal(err)
@@ -401,18 +408,48 @@ func testNativeActionRecoveryChild(t *testing.T, rebuild bool) {
 }
 
 func TestContractRecoveryActionRefusesChangedAuthorityOrLostEvidence(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	const taskCount = 2 // One accepted result and one failed action suffice.
 	failedTaskID := strconv.Itoa(taskCount)
+	baseCoordinator, baseFixture, baseSource, baseCalls := nativeActionRecoveryWithTasks(t, taskCount, nil)
 	for _, name := range []string{"unchanged_program", "unknown_family", "model", "static_payload", "schema", "stored_payload", "source_head", "cancelled", "missing_failure", "side_effect"} {
 		t.Run(name, func(t *testing.T) {
-			c, f, source, calls := nativeActionRecoveryWithTasks(t, taskCount, nil)
+			c, f, baseline, calls := baseCoordinator, baseFixture, baseSource, baseCalls
+			if name == "source_head" {
+				// This case appends an event, so it needs a separate durable history.
+				c, f, baseline, calls = nativeActionRecoveryWithTasks(t, taskCount, nil)
+			}
+			original := c.session
+			c.session = cloneSession(original, original.Workspace)
+			t.Cleanup(func() { c.session = original })
+			c.session.Config.ActionProviders = maps.Clone(original.Config.ActionProviders)
+			c.session.Agents = maps.Clone(original.Agents)
+			c.session.Agents["worker"] = new(*original.Agents["worker"])
+			c.session.ContractTasks = slices.Clone(original.ContractTasks)
+			c.session.ContractTasks[0] = cloneTaskDef(original.ContractTasks[0])
+			registry, err := original.ProviderRegistry.Clone()
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.session.ProviderRegistry = registry
+			source := *baseline
+			source.Session = new(*baseline.Session)
+			source.Session.Tasks = slices.Clone(baseline.Session.Tasks)
+			for i, item := range source.Session.Tasks {
+				source.Session.Tasks[i] = cloneTodoItem(item)
+			}
+			recoveryCalls := new(int)
+			registry.Register("structured-actions", actionRecoveryProvider("fixed", "", recoveryCalls, nil))
 			ctx := WithReadOnlyActionRepair(WithMetadataOnlyContractRecovery(t.Context()), failedTaskID)
 			switch name {
 			case "unchanged_program":
-				c.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("original", "", new(int), nil))
+				registry.Register("structured-actions", actionRecoveryProvider("original", "", recoveryCalls, nil))
 			case "unknown_family":
 				c.session.Config.ActionProviders["unobserved"] = agent.ActionProviderConfig{Runtime: "golang", Source: "./other", Mode: golangruntime.TrustedStaticMode}
-				c.session.ProviderRegistry.Register("unobserved", actionRecoveryProvider("unrelated", "", new(int), nil))
+				registry.Register("unobserved", actionRecoveryProvider("unrelated", "", recoveryCalls, nil))
 			case "model":
 				c.session.Agents["worker"].Generation.Model = "ollama/other"
 			case "static_payload":
@@ -433,17 +470,17 @@ func TestContractRecoveryActionRefusesChangedAuthorityOrLostEvidence(t *testing.
 				todoItemByID(source.Session.Tasks, failedTaskID).SideEffect = SideEffectExternalWrite
 			}
 			before := mustReadEvents(t, f.events)
-			plan, err := c.AssessContractRecovery(ctx, source)
+			plan, err := c.AssessContractRecovery(ctx, &source)
 			if name == "source_head" {
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, err = c.ApplyContractRecovery(ctx, source, "stale-source", plan.SHA256)
+				_, err = c.ApplyContractRecovery(ctx, &source, "stale-source", plan.SHA256)
 			}
 			if err == nil {
 				t.Fatal("unsafe recovery accepted")
 			}
-			if *calls != taskCount || !reflect.DeepEqual(before, mustReadEvents(t, f.events)) {
+			if *calls != taskCount || *recoveryCalls != 0 || !reflect.DeepEqual(before, mustReadEvents(t, f.events)) {
 				t.Fatal("refusal executed work or changed history")
 			}
 		})

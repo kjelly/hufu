@@ -9,6 +9,7 @@ import (
 // not be able to set runtime-owned fields, so the wire shape is decoded into a
 // separate struct and copied field by field (Phase 3.5).
 func TestJudgeResponseCannotSetRuntimeOwnedFields(t *testing.T) {
+	t.Parallel()
 	response := `{
 	  "option_scores": [{"option_id": "a", "criteria": {"cost": 7}}],
 	  "preferred_option": "a",
@@ -40,6 +41,7 @@ func TestJudgeResponseCannotSetRuntimeOwnedFields(t *testing.T) {
 }
 
 func TestDecodeStageAcceptsFencedJSON(t *testing.T) {
+	t.Parallel()
 	fenced := "Here is my answer:\n```json\n{\"preferred_option\": \"a\", \"success_probability\": 0.4}\n```\n"
 	var decoded judgeResponse
 	if err := decodeStage(fenced, &decoded); err != nil {
@@ -53,6 +55,7 @@ func TestDecodeStageAcceptsFencedJSON(t *testing.T) {
 // Malformed output is an error the engine turns into its one bounded repair
 // attempt; it is never patched into a plausible-looking judgment.
 func TestDecodeStageRejectsMalformedOutput(t *testing.T) {
+	t.Parallel()
 	for _, response := range []string{
 		"I think we should migrate.",
 		"{\"preferred_option\": ",
@@ -68,6 +71,7 @@ func TestDecodeStageRejectsMalformedOutput(t *testing.T) {
 }
 
 func TestDecodeStageChallengeAndPremortem(t *testing.T) {
+	t.Parallel()
 	var challenge challengeResponse
 	if err := decodeStage(`{"target_option":"a","severity":0.8,"fragile_assumptions":["x"]}`, &challenge); err != nil {
 		t.Fatal(err)
@@ -96,6 +100,7 @@ func TestDecodeStageChallengeAndPremortem(t *testing.T) {
 
 // Without a judge model there is no way to form a decision at all.
 func TestRunnersUnavailableWithoutAJudgeSidecar(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	runners := newDecisionRunners(c, "todo-1")
 	if runners.available() {

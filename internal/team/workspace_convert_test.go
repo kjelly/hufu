@@ -106,6 +106,7 @@ func treeSnapshot(t *testing.T, root string) map[string]string {
 }
 
 func TestConvertFileBasedWorkspaceKeepsEveryRecord(t *testing.T) {
+	t.Parallel()
 	fixture := newLegacyFixture(t)
 	ws := fixture.workspace
 	result, err := ConvertFileBasedWorkspace(context.Background(), ws, false)
@@ -172,6 +173,7 @@ func TestConvertFileBasedWorkspaceKeepsEveryRecord(t *testing.T) {
 // TestConvertFileBasedWorkspaceChangesNothingUnlessItSucceeds covers a dry
 // run and every refusal: the workspace keeps its exact files.
 func TestConvertFileBasedWorkspaceChangesNothingUnlessItSucceeds(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		dryRun  bool
@@ -262,6 +264,7 @@ func archiveConversionOriginal(t *testing.T, ws, name string) {
 }
 
 func TestConvertFileBasedWorkspaceFinishesAnInterruptedConversion(t *testing.T) {
+	t.Parallel()
 	// Exercise every boundary, including all originals moved but the note not
 	// yet written. Recovery must preserve the imported data, not just move files.
 	for moved := range len(legacyRuntimeFiles()) + 1 {
@@ -304,6 +307,7 @@ func TestConvertFileBasedWorkspaceFinishesAnInterruptedConversion(t *testing.T) 
 }
 
 func TestConvertFileBasedWorkspaceRefusesUnprovenDatabase(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"empty_valid", "zero_bytes", "corrupt", "directory", "symlink"} {
 		for _, dryRun := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s/dry_%t", kind, dryRun), func(t *testing.T) {
@@ -359,6 +363,7 @@ func assertConversionRefusalUnchanged(t *testing.T, ws string, dryRun bool) {
 }
 
 func TestConvertFileBasedWorkspacePreflightsEveryBackupPath(t *testing.T) {
+	t.Parallel()
 	cases := append(legacyRuntimeFiles(), "CONVERTED", "logs", "logs/decisions", ".")
 	for _, name := range cases {
 		for _, dryRun := range []bool{true, false} {
@@ -378,6 +383,7 @@ func TestConvertFileBasedWorkspacePreflightsEveryBackupPath(t *testing.T) {
 }
 
 func TestConvertFileBasedWorkspaceRefusesChangedImport(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		change func(*testing.T, string)
@@ -449,6 +455,7 @@ func TestConvertFileBasedWorkspaceRefusesChangedImport(t *testing.T) {
 }
 
 func TestConvertFileBasedWorkspaceRefusesSymlinkedBackup(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{".", "logs", "logs/decisions", "session.json", "CONVERTED"} {
 		t.Run(name, func(t *testing.T) {
 			ws := newLegacyFixture(t).workspace
@@ -466,6 +473,7 @@ func TestConvertFileBasedWorkspaceRefusesSymlinkedBackup(t *testing.T) {
 }
 
 func TestConvertFileBasedWorkspaceRecoversAfterArchivingError(t *testing.T) {
+	t.Parallel()
 	fixture := newLegacyFixture(t)
 	ws := fixture.workspace
 	installInterruptedConversion(t, fixture)
@@ -503,6 +511,7 @@ func TestConvertFileBasedWorkspaceRecoversAfterArchivingError(t *testing.T) {
 }
 
 func TestConvertFileBasedWorkspaceRefusesWorkspacesWithoutFiles(t *testing.T) {
+	t.Parallel()
 	if _, err := ConvertFileBasedWorkspace(context.Background(), t.TempDir(), false); !errors.Is(err, ErrNotFileBased) {
 		t.Fatalf("conversion of an empty workspace = %v, want ErrNotFileBased", err)
 	}

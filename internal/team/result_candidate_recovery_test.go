@@ -59,6 +59,7 @@ func preparedCandidateFixture(t *testing.T) (*Coordinator, *TodoItem) {
 }
 
 func TestPreparedCandidateResumesWithoutGeneration(t *testing.T) {
+	t.Parallel()
 	for _, committed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "before_commit", true: "after_commit"}[committed], func(t *testing.T) {
 			c, item := preparedCandidateFixture(t)
@@ -122,6 +123,7 @@ func TestPreparedCandidateResumesWithoutGeneration(t *testing.T) {
 }
 
 func TestPreparedCandidateFailsClosed(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"branch", "source", "transcript", "policy"} {
 		t.Run(mode, func(t *testing.T) {
 			c, item := preparedCandidateFixture(t)
@@ -155,6 +157,7 @@ func TestPreparedCandidateFailsClosed(t *testing.T) {
 }
 
 func TestCandidateRepairReusesAcceptedSourcesWithoutWorkerReplay(t *testing.T) {
+	t.Parallel()
 	c, _ := resumeEvidenceFixture(t, true)
 	worker := scriptWorker(failTurn(errors.New("worker replay forbidden")))
 	c.workerAgentOverride = worker
@@ -235,6 +238,7 @@ func TestCandidateRepairReusesAcceptedSourcesWithoutWorkerReplay(t *testing.T) {
 }
 
 func TestCandidateResetDoesNotReusePriorAttempt(t *testing.T) {
+	t.Parallel()
 	c, item, ctx, journal := resultCandidateFixture(t)
 	rejectCandidate(t, c, item, ctx, candidateMisplaced)
 	if err := c.CommitTaskTransition(ctx, item.ID, TaskInProgress, TaskError, "failed", "", nil); err != nil {
@@ -253,6 +257,7 @@ func TestCandidateResetDoesNotReusePriorAttempt(t *testing.T) {
 }
 
 func TestPreparedCandidateWithProvisionalResultFinishesLocally(t *testing.T) {
+	t.Parallel()
 	c, item := preparedCandidateFixture(t)
 	item.TypedResult = &TaskResult{Status: TaskResultStatusPartial, Source: "free_text", Summary: "unaccepted progress"}
 	if err := c.taskTracker.TodoList().TryApplyProjectedItem(item); err != nil {
@@ -269,6 +274,7 @@ func TestPreparedCandidateWithProvisionalResultFinishesLocally(t *testing.T) {
 }
 
 func TestPreparedCandidateOperatorContinuationGrantsNoModelTurns(t *testing.T) {
+	t.Parallel()
 	c, item := preparedCandidateFixture(t)
 	receipt := cloneExecutionReceipt(item.ExecutionReceipt)
 	receipt.RepairProvenance.FailureReason = RepairFailureCommit
@@ -298,6 +304,7 @@ func TestPreparedCandidateOperatorContinuationGrantsNoModelTurns(t *testing.T) {
 }
 
 func TestPreparedPartialCandidateCannotCompleteTask(t *testing.T) {
+	t.Parallel()
 	c, item := preparedCandidateFixture(t)
 	value, err := c.loadResultCandidate(t.Context(), item, item.ResultCandidate)
 	if err != nil {
@@ -324,6 +331,7 @@ func TestPreparedPartialCandidateCannotCompleteTask(t *testing.T) {
 }
 
 func TestPreparedCandidateInterruptedWorkerDoesNotReplay(t *testing.T) {
+	t.Parallel()
 	c, item := preparedCandidateFixture(t)
 	// Model a crash before the result-only lifecycle checkpoint was published.
 	item.Status = TaskInProgress

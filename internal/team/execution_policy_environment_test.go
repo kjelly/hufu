@@ -8,6 +8,7 @@ import (
 )
 
 func TestUnusedAgentEnvironmentCompatibilityRevokesAgentExecution(t *testing.T) {
+	t.Parallel()
 	c := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 2)
 	delete(c.session.Agents, "codex-worker")
 	state, err := newExecutionPolicyState(c)

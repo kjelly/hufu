@@ -24,6 +24,7 @@ func repairDiagnosticTurn(reason fantasy.FinishReason) scriptedTurn {
 }
 
 func TestProtocolRepairGenerationDiagnosticsPersist(t *testing.T) {
+	t.Parallel()
 	for _, resumed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "live", true: "resumed"}[resumed], func(t *testing.T) {
 			c, id, task := toolEvidenceRepairFixture(t)
@@ -88,6 +89,7 @@ func TestProtocolRepairGenerationDiagnosticsPersist(t *testing.T) {
 }
 
 func TestRepairGenerationDiagnosticLoadsLegacyRedaction(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{`90`, `"[REDACTED]"`, `"invalid"`} {
 		t.Run(raw, func(t *testing.T) {
 			var diagnostic RepairGenerationDiagnostic
@@ -119,6 +121,7 @@ func TestRepairGenerationDiagnosticLoadsLegacyRedaction(t *testing.T) {
 }
 
 func TestProtocolRepairGenerationDiagnosticAvailability(t *testing.T) {
+	t.Parallel()
 	for _, steps := range [][]fantasy.StepResult{nil, {{}}} {
 		d := protocolRepairGenerationDiagnostic(steps)
 		if d.Steps != len(steps) || (d.FinishReason == "unknown") != (len(steps) > 0) {

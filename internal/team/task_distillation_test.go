@@ -47,6 +47,7 @@ func distillationTaskFixture(t *testing.T) (string, *EventStore) {
 }
 
 func TestTaskDistillationRemovalCommitsEventsCheckpointAndReplay(t *testing.T) {
+	t.Parallel()
 	workspace, es := distillationTaskFixture(t)
 	snapshot, err := SnapshotTasksForDistillation(t.Context(), workspace, []string{"1"})
 	if err != nil {
@@ -92,6 +93,7 @@ func TestTaskDistillationRemovalCommitsEventsCheckpointAndReplay(t *testing.T) {
 }
 
 func TestTaskDistillationExtractOnlyKeepsTasksAndHistoricalEvidence(t *testing.T) {
+	t.Parallel()
 	workspace, es := distillationTaskFixture(t)
 	snapshot, err := SnapshotTasksForDistillation(t.Context(), workspace, []string{"1"})
 	if err != nil {
@@ -121,6 +123,7 @@ func TestTaskDistillationExtractOnlyKeepsTasksAndHistoricalEvidence(t *testing.T
 }
 
 func TestTaskDistillationProtectsDependenciesBranchesAndStaleSources(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"dependency", "branch", "incomplete", "stale"} {
 		t.Run(mode, func(t *testing.T) {
 			workspace, es := distillationTaskFixture(t)
@@ -172,6 +175,7 @@ func TestTaskDistillationProtectsDependenciesBranchesAndStaleSources(t *testing.
 }
 
 func TestTaskDistillationProjectionFailureRollsBackEvent(t *testing.T) {
+	t.Parallel()
 	workspace, es := distillationTaskFixture(t)
 	snapshot, err := SnapshotTasksForDistillation(t.Context(), workspace, []string{"1"})
 	if err != nil {
@@ -206,6 +210,7 @@ func TestTaskDistillationProjectionFailureRollsBackEvent(t *testing.T) {
 }
 
 func TestTaskDistillationReservesRemovedIDsAfterRestartAndReplay(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	sd := NewSession()
 	sd.Tasks = []*TodoItem{{ID: "9", Agent: "worker", Desc: "finished", Status: TaskDone}}
@@ -254,6 +259,7 @@ func TestTaskDistillationReservesRemovedIDsAfterRestartAndReplay(t *testing.T) {
 }
 
 func TestTaskDistillationRejectsCheckpointBehindCanonicalEvents(t *testing.T) {
+	t.Parallel()
 	workspace, es := distillationTaskFixture(t)
 	if err := es.Append(RunEvent{Type: string(EventTaskCreated), BranchID: "main", TaskID: "1", Payload: []byte(`{"id":"1","status":"pending","reset_for_retry":true}`)}); err != nil {
 		t.Fatal(err)
@@ -264,6 +270,7 @@ func TestTaskDistillationRejectsCheckpointBehindCanonicalEvents(t *testing.T) {
 }
 
 func TestTaskDistillationProtectsCanonicalDependencyMissingFromCheckpoint(t *testing.T) {
+	t.Parallel()
 	workspace, es := distillationTaskFixture(t)
 	if err := es.Append(RunEvent{Type: string(EventTaskCreated), BranchID: "main", TaskID: "3", Payload: []byte(`{"id":"3","status":"pending","depends_on":["1"]}`)}); err != nil {
 		t.Fatal(err)

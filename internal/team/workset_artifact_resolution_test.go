@@ -14,6 +14,7 @@ import (
 )
 
 func TestStructuredFanOutResolvesBytesOnlyInputToCanonicalOccurrence(t *testing.T) {
+	t.Parallel()
 	workspace, c, producer, store := newWorksetArtifactFixture(t)
 	input, err := store.Put(context.Background(), PutArtifactRequest{
 		Content: []byte("diff contents"), Path: "diff.patch", Kind: "diff", RunID: "run-1", TaskID: producer.ID, Attempt: 4, Agent: "reviewprep",
@@ -33,6 +34,7 @@ func TestStructuredFanOutResolvesBytesOnlyInputToCanonicalOccurrence(t *testing.
 }
 
 func TestStructuredFanOutRejectsConflictingInputSizeClaims(t *testing.T) {
+	t.Parallel()
 	for name, mutate := range map[string]func(*ArtifactRef){
 		"bytes":     func(ref *ArtifactRef) { ref.Bytes++ },
 		"byte_size": func(ref *ArtifactRef) { ref.ByteSize++ },
@@ -52,6 +54,7 @@ func TestStructuredFanOutRejectsConflictingInputSizeClaims(t *testing.T) {
 }
 
 func TestStructuredFanOutRejectsWrongDigestAndTamperedData(t *testing.T) {
+	t.Parallel()
 	t.Run("wrong digest", func(t *testing.T) {
 		workspace, c, producer, store := newWorksetArtifactFixture(t)
 		input, err := store.Put(context.Background(), PutArtifactRequest{Content: []byte("content"), Path: "input", RunID: "run-1", TaskID: producer.ID, Attempt: 4, Agent: "reviewprep"})
@@ -81,6 +84,7 @@ func TestStructuredFanOutRejectsWrongDigestAndTamperedData(t *testing.T) {
 }
 
 func TestStructuredFanOutResolvesZeroByteInput(t *testing.T) {
+	t.Parallel()
 	workspace, c, producer, store := newWorksetArtifactFixture(t)
 	input, err := store.Put(context.Background(), PutArtifactRequest{Content: nil, Path: "empty", RunID: "run-1", TaskID: producer.ID, Attempt: 4, Agent: "reviewprep"})
 	if err != nil {
@@ -95,6 +99,7 @@ func TestStructuredFanOutResolvesZeroByteInput(t *testing.T) {
 }
 
 func TestStructuredFanOutRejectsClearedSourceSizeClaims(t *testing.T) {
+	t.Parallel()
 	_, c, producer, store := newWorksetArtifactFixture(t)
 	manifestBytes := []byte(`{"schema_version":1,"items":[{"key":"one","bindings":{"name":"one"}}]}`)
 	manifest, err := store.Put(context.Background(), PutArtifactRequest{
@@ -117,6 +122,7 @@ func TestStructuredFanOutRejectsClearedSourceSizeClaims(t *testing.T) {
 }
 
 func TestStructuredProducerOutputFeedsWorksetFanOutAndAcceptance(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	tracker := NewTaskTracker()
 	contract := ExecutionContract{Steps: []ExecutionStep{
@@ -193,6 +199,7 @@ func TestStructuredProducerOutputFeedsWorksetFanOutAndAcceptance(t *testing.T) {
 }
 
 func TestStructuredFanOutRejectsInputUndeclaredBySelectedProducer(t *testing.T) {
+	t.Parallel()
 	workspace, c, producer, store := newWorksetArtifactFixture(t)
 	input, err := store.Put(context.Background(), PutArtifactRequest{Content: []byte("content"), Path: "input", RunID: "run-1", TaskID: producer.ID, Attempt: 4, Agent: "reviewprep"})
 	if err != nil {
@@ -204,6 +211,7 @@ func TestStructuredFanOutRejectsInputUndeclaredBySelectedProducer(t *testing.T) 
 }
 
 func TestGeneratedWorksetChildCanViewAssignedInput(t *testing.T) {
+	t.Parallel()
 	workspace, c, producer, store := newWorksetArtifactFixture(t)
 	input, err := store.Put(context.Background(), PutArtifactRequest{Content: []byte("assigned diff\n"), Path: "input", RunID: "run-1", TaskID: producer.ID, Attempt: 4, Agent: "reviewprep"})
 	if err != nil {
@@ -227,6 +235,7 @@ func TestGeneratedWorksetChildCanViewAssignedInput(t *testing.T) {
 }
 
 func TestStructuredFanOutRejectsStaleOccurrencesButAcceptsRepeatedContent(t *testing.T) {
+	t.Parallel()
 	t.Run("stale manifest occurrence", func(t *testing.T) {
 		_, c, producer, store := newWorksetArtifactFixture(t)
 		manifestBytes := []byte(`{"schema_version":1,"items":[{"key":"one","bindings":{"name":"one"}}]}`)
@@ -305,6 +314,7 @@ func TestStructuredFanOutRejectsStaleOccurrencesButAcceptsRepeatedContent(t *tes
 }
 
 func TestStructuredFanOutRejectsMissingCurrentProducerOccurrence(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"sparse manifest", "repeated content id without current evidence"} {
 		t.Run(name, func(t *testing.T) {
 			_, c, producer, store := newWorksetArtifactFixture(t)
@@ -388,6 +398,7 @@ func expandWorksetWithInputResult(_ string, c *Coordinator, producer *TodoItem, 
 }
 
 func TestStructuredFanOutReportsDeclarationConflict(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	producers, err := c.CommitTaskCreation(t.Context(), []TodoSpec{{PlanTaskID: "producer", Agent: "producer", Desc: "produce inputs"}})
 	if err != nil {

@@ -48,6 +48,7 @@ func textEvidenceTestRecords() []taskTranscriptRecord {
 }
 
 func TestResultContractTextEvidence(t *testing.T) {
+	t.Parallel()
 	for _, targetFromOutput := range []bool{false, true} {
 		compiled := textEvidenceTestContract(t, targetFromOutput)
 		for _, name := range []string{"matched", "second_tool", "failed", "empty", "truncated", "metadata_only", "wrong_quote", "wrong_target", "wrong_tool", "cross_tool_id", "unpaired", "ambiguous_text", "ambiguous_target", "argument_target_mismatch", "duplicate_call", "duplicate_result"} {
@@ -111,6 +112,7 @@ func TestResultContractTextEvidence(t *testing.T) {
 }
 
 func TestResultContractTextEvidenceConfiguration(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"invalid_format", "json_output_pointer", "invalid_pattern", "no_capture", "two_captures", "empty_tools", "duplicate_tools", "two_tools_fields", "ambiguous_target_fields"} {
 		t.Run(name, func(t *testing.T) {
 			var root map[string]any
@@ -146,6 +148,7 @@ func TestResultContractTextEvidenceConfiguration(t *testing.T) {
 }
 
 func TestResultContractTextEvidenceWithoutSectionPattern(t *testing.T) {
+	t.Parallel()
 	var root map[string]any
 	if err := json.Unmarshal([]byte(textEvidenceTestSchema(t, false)), &root); err != nil {
 		t.Fatal(err)

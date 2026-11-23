@@ -118,6 +118,7 @@ func newAcceptedTerminalResultStopCoordinator(t *testing.T, worker fantasy.Agent
 }
 
 func TestAcceptedTerminalResultStopsWorkerBeforeDuplicateAndPostResultTools(t *testing.T) {
+	t.Parallel()
 	worker := &acceptedTerminalResultScriptAgent{}
 	c, item := newAcceptedTerminalResultStopCoordinator(t, worker)
 	worker.tool = &submitResultTool{coordinator: c, todoID: item.ID}
@@ -143,6 +144,7 @@ func TestAcceptedTerminalResultStopsWorkerBeforeDuplicateAndPostResultTools(t *t
 }
 
 func TestInvalidSubmitResultDoesNotStopWorkerBeforeSchemaCorrection(t *testing.T) {
+	t.Parallel()
 	worker := &acceptedTerminalResultScriptAgent{invalidFirst: true}
 	c, item := newAcceptedTerminalResultStopCoordinator(t, worker)
 	worker.tool = &submitResultTool{coordinator: c, todoID: item.ID}

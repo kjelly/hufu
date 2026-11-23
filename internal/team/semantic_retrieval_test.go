@@ -16,6 +16,7 @@ import (
 )
 
 func TestWorkerMemorySemanticOptionsPreserveOffShadowAndLegacyContracts(t *testing.T) {
+	t.Parallel()
 	repo := wp3SetupRepo(t)
 	scope := contextstore.Scope{ProjectID: "project", TeamID: "team", SessionID: "session", BranchID: "main", AgentID: "worker"}
 	wp3AppendItems(t, repo, contextstore.ContextItem{
@@ -81,6 +82,7 @@ func TestWorkerMemorySemanticOptionsPreserveOffShadowAndLegacyContracts(t *testi
 }
 
 func TestSemanticIdentityConditionallyChangesManifestFingerprints(t *testing.T) {
+	t.Parallel()
 	policy := agent.DefaultMemoryLearningPolicy()
 	policy.Mode = agent.MemoryLearningObserve
 	policy.PolicyVersion = "memory-policy-v1"
@@ -123,6 +125,7 @@ func TestSemanticIdentityConditionallyChangesManifestFingerprints(t *testing.T) 
 }
 
 func TestLegacyManifestJSONRemainsByteIdenticalWithoutSemanticIdentity(t *testing.T) {
+	t.Parallel()
 	fixtures := []struct {
 		name string
 		raw  string
@@ -157,6 +160,7 @@ func TestLegacyManifestJSONRemainsByteIdenticalWithoutSemanticIdentity(t *testin
 }
 
 func TestSemanticIdentityPropagatesThroughCloneCheckpointEventAndReceipt(t *testing.T) {
+	t.Parallel()
 	identity := semanticIdentityFixture()
 	contextManifest := ContextInjectionManifest{RequestID: "request", Semantic: identity}
 	memoryManifest := MemoryInjectionManifest{RetrievalID: "retrieval", Semantic: identity}
@@ -220,6 +224,7 @@ func TestSemanticIdentityPropagatesThroughCloneCheckpointEventAndReceipt(t *test
 }
 
 func TestExecutionReceiptSemanticIdentityFailsClosedOnManifestMismatch(t *testing.T) {
+	t.Parallel()
 	identity := semanticIdentityFixture()
 	mismatch := *identity
 	mismatch.GenerationID = "other-generation"
@@ -251,6 +256,7 @@ func TestExecutionReceiptSemanticIdentityFailsClosedOnManifestMismatch(t *testin
 }
 
 func TestCompileAndManifestPropagationKeepsShadowNilAndActiveConsistent(t *testing.T) {
+	t.Parallel()
 	item := WorkerMemoryItem{ContextItem: contextstore.ContextItem{
 		ID: "memory-1", Content: "prior semantic memory", ContentHash: "content-hash",
 	}, Tier: "session", BaseScore: .7, FinalScore: .8}
@@ -284,6 +290,7 @@ func TestCompileAndManifestPropagationKeepsShadowNilAndActiveConsistent(t *testi
 }
 
 func TestSemanticReceiptPropagationMatchesDirectAndDAGWorkerPaths(t *testing.T) {
+	t.Parallel()
 	t.Run("direct", func(t *testing.T) {
 		coordinator := newDirectTerminationCoordinator(t, directTerminationAgent{})
 		policy := agent.DefaultMemoryLearningPolicy()

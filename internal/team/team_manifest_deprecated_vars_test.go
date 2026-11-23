@@ -7,6 +7,7 @@ import (
 )
 
 func TestParseTeamYMLDeprecatedVars(t *testing.T) {
+	t.Parallel()
 	for _, manifest := range []string{
 		"name: independent\ndeprecated-vars:\n  legacy.option: use --input scope=<json>\n",
 		"apiVersion: hufu.io/v1alpha1\nkind: AgentTeam\nmetadata:\n  name: independent\nspec:\n  deprecated-vars:\n    legacy.option: use --input scope=<json>\n",

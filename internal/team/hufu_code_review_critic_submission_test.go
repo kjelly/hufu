@@ -14,6 +14,7 @@ import (
 )
 
 func TestHufuCodeReviewCriticSubmitsDirectly(t *testing.T) {
+	t.Parallel()
 	for _, id := range []string{"critic-review", "review-documentation-escalation"} {
 		t.Run(id, func(t *testing.T) {
 			loaded := loadHufuCodeReviewTeam(t)

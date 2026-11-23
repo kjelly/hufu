@@ -7,6 +7,7 @@ import (
 )
 
 func TestDAGWorkerRuntimeContextTreatsRuntimeArtifactsAsOutputStaging(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join("workspace", "runtime")
 	context := formatRuntimeWorkflowContext(PhaseExecute, ExecutionContext{
 		RuntimeWorkspace: RuntimeWorkspace{Root: root},
@@ -25,6 +26,7 @@ func TestDAGWorkerRuntimeContextTreatsRuntimeArtifactsAsOutputStaging(t *testing
 }
 
 func TestDirectAgentRuntimeContextPreservesOpaqueArtifactRefs(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "", nil, nil)
 	c.phaseWorkflow = &runtimeWorkflow{
 		enabled:   true,

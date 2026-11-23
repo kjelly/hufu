@@ -13,6 +13,7 @@ import (
 )
 
 func TestMaterializeActionReplacesExistingPointersCanonically(t *testing.T) {
+	t.Parallel()
 	snapshot := mustRunInputSnapshot(t, []RunInputDefinition{
 		{Name: "review.scope", Schema: RunInputSchema{Type: "object"}, Required: true},
 		{Name: "label", Schema: RunInputSchema{Type: "string"}, Required: true},
@@ -48,6 +49,7 @@ func TestMaterializeActionReplacesExistingPointersCanonically(t *testing.T) {
 }
 
 func TestExecutionRunInputPolicyHashIncludesGolangProviderDigest(t *testing.T) {
+	t.Parallel()
 	definition := RunInputDefinition{
 		Name: "scope", Schema: RunInputSchema{Type: "object"},
 		Resolver: &RunInputResolverSpec{Capability: "review"},
@@ -81,6 +83,7 @@ func TestExecutionRunInputPolicyHashIncludesGolangProviderDigest(t *testing.T) {
 }
 
 func TestMaterializeActionRejectsInvalidBindingContracts(t *testing.T) {
+	t.Parallel()
 	snapshot := mustRunInputSnapshot(t, []RunInputDefinition{{Name: "scope", Schema: RunInputSchema{Type: "object"}, Required: true}}, []RunInputAssignment{{Name: "scope", RawValue: []byte(`{"count":1}`), Source: RunInputSourceCLI}})
 	action := Action{Capability: "review", Type: "prepare", Payload: `{"scope":{"count":0},"other":1}`}
 	tests := []struct {
@@ -104,6 +107,7 @@ func TestMaterializeActionRejectsInvalidBindingContracts(t *testing.T) {
 }
 
 func TestActionInputBindingsAreExcludedFromJSON(t *testing.T) {
+	t.Parallel()
 	action := Action{Capability: "review", Type: "prepare", Payload: `{}`, InputBindings: []ActionInputBinding{{Input: "scope", Target: "/scope"}}}
 	encoded, err := json.Marshal(action)
 	if err != nil {
@@ -122,6 +126,7 @@ func TestActionInputBindingsAreExcludedFromJSON(t *testing.T) {
 }
 
 func TestCoordinatorMaterializesActionBeforeOccurrenceAdmissionAndDetectsDrift(t *testing.T) {
+	t.Parallel()
 	definitions := []RunInputDefinition{{Name: "scope", Schema: RunInputSchema{Type: "object"}, Required: true}}
 	snapshot := mustRunInputSnapshot(t, definitions, []RunInputAssignment{{Name: "scope", RawValue: []byte(`{"count":10}`), Source: RunInputSourceCLI}})
 	c := newTestCoordinator(t)
@@ -159,6 +164,7 @@ func TestCoordinatorMaterializesActionBeforeOccurrenceAdmissionAndDetectsDrift(t
 }
 
 func TestValidateTeamTaskContractsRejectsInvalidActionInputBinding(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{
 		RunInputDefinitions: []RunInputDefinition{{Name: "scope", Schema: RunInputSchema{Type: "object"}, Required: true}},
 		ContractTasks: []TaskDef{{Action: &Action{
@@ -179,6 +185,7 @@ func TestValidateTeamTaskContractsRejectsInvalidActionInputBinding(t *testing.T)
 }
 
 func TestActionInputBindingsSurviveOccurrenceJSONReplay(t *testing.T) {
+	t.Parallel()
 	action := &Action{Capability: "review", Type: "prepare", Payload: `{"scope":{}}`, InputBindings: []ActionInputBinding{{Input: "scope", Target: "/scope"}}}
 	item := todoItemFromSpec(TodoSpec{Action: action, Agent: "reviewer", Goal: "review"}, "1")
 	encoded, err := json.Marshal(item)
@@ -199,6 +206,7 @@ func TestActionInputBindingsSurviveOccurrenceJSONReplay(t *testing.T) {
 }
 
 func TestTaskExecutionInputCacheIdentitySeparatesMaterializedScopes(t *testing.T) {
+	t.Parallel()
 	first := TaskDef{RunInputSnapshotHash: runInputHash([]byte("one")), MaterializedActionPayloadHash: runInputHash([]byte("payload-one"))}
 	second := TaskDef{RunInputSnapshotHash: runInputHash([]byte("ten")), MaterializedActionPayloadHash: runInputHash([]byte("payload-ten"))}
 	if taskExecutionInputCacheIdentity(first) == taskExecutionInputCacheIdentity(second) {
@@ -210,6 +218,7 @@ func TestTaskExecutionInputCacheIdentitySeparatesMaterializedScopes(t *testing.T
 }
 
 func TestLoadTeamContractTasksParsesActionInputBindings(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	manifest := `name: review
 inputs:
@@ -240,6 +249,7 @@ tasks:
 }
 
 func TestExecutionRunInputPolicyHashIncludesActionBindings(t *testing.T) {
+	t.Parallel()
 	definition := RunInputDefinition{Name: "scope", Schema: RunInputSchema{Type: "object"}, Required: true}
 	first := &TeamSession{RunInputDefinitions: []RunInputDefinition{definition}, ContractTasks: []TaskDef{{Action: &Action{
 		Capability: "review", Type: "prepare", Payload: `{"scope":{}}`, InputBindings: []ActionInputBinding{{Input: "scope", Target: "/scope"}},

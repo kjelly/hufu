@@ -52,6 +52,7 @@ func TestExplainPersistentMemoryMatchesRuntimeSelection(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration: mise run test-integration")
 	}
+	t.Parallel()
 	queries := []string{"sqlite", "retry", "cache lint", "migration\nphase: implement", "duplicate guidance"}
 	for _, mode := range []agent.MemoryLearningMode{agent.MemoryLearningOff, agent.MemoryLearningObserve, agent.MemoryLearningShadow, agent.MemoryLearningActive} {
 		t.Run(string(mode), func(t *testing.T) {
@@ -105,6 +106,7 @@ func TestExplainPersistentMemoryMatchesRuntimeSelection(t *testing.T) {
 }
 
 func TestExplainPersistentMemoryHidesOtherScopes(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	if err := repo.Append(context.Background(), contextstore.ContextItem{ID: "other-project", Kind: contextstore.ContextPattern, Content: "procedure other", Scope: contextstore.Scope{ProjectID: "elsewhere", TeamID: "team"}, Lifecycle: contextstore.LifecycleConfirmed}); err != nil {
 		t.Fatal(err)
@@ -126,6 +128,7 @@ func TestExplainPersistentMemoryHidesOtherScopes(t *testing.T) {
 }
 
 func TestExplainPersistentMemoryReasons(t *testing.T) {
+	t.Parallel()
 	past := time.Unix(1, 0).UTC()
 	cases := []struct {
 		name      string
@@ -182,6 +185,7 @@ func TestExplainPersistentMemoryReasons(t *testing.T) {
 }
 
 func TestExplainPersistentMemoryHasNoSideEffects(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningActive)
 	adoptExplainTestPolicy(t, c, repo, agent.MemoryLearningActive, nil)
 	before, err := repo.Revision(context.Background())

@@ -8,6 +8,7 @@ import (
 )
 
 func TestMixedCaseTaskReferencePolicyMatchesRuntimeFactAndFanOut(t *testing.T) {
+	t.Parallel()
 	staticTasks := []TaskDef{
 		{ID: "Producer", Agent: "producer"},
 		{ID: "consumer", Agent: "worker", FactRefs: []FactRef{{Name: "value", TaskID: "producer", Fact: "answer"}}},
@@ -81,6 +82,7 @@ func TestMixedCaseTaskReferencePolicyMatchesRuntimeFactAndFanOut(t *testing.T) {
 }
 
 func TestMixedCaseTaskReferenceSurvivesTodoReplay(t *testing.T) {
+	t.Parallel()
 	original := NewTaskTracker().TodoList()
 	item := original.AddBatch([]TodoSpec{{PlanTaskID: "Producer", Agent: "producer", Desc: "produce"}})[0]
 	replayed := ReduceToTodoList([]RunEvent{{Type: "task_created", TaskID: item.ID, Payload: mustJSON(t, item)}})
@@ -100,6 +102,7 @@ func TestMixedCaseTaskReferenceSurvivesTodoReplay(t *testing.T) {
 }
 
 func TestTaskReferenceKeepsExactRuntimeIDAndAmbiguityDetection(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	items := tracker.TodoList().AddBatch([]TodoSpec{
 		{PlanTaskID: "Producer", Agent: "one", Desc: "one"},

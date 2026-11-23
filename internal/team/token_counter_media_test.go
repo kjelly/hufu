@@ -12,6 +12,7 @@ import (
 )
 
 func TestNativeImageCounterIncludesRepeatedImagesAndCompleteText(t *testing.T) {
+	t.Parallel()
 	for _, shape := range []string{"call", "object", "messages"} {
 		t.Run(shape, func(t *testing.T) {
 			c, ctx, _, request := nativeMediaProviderFixture(t)
@@ -51,6 +52,7 @@ func TestNativeImageCounterIncludesRepeatedImagesAndCompleteText(t *testing.T) {
 }
 
 func TestNativeImageCounterKeepsSystemAndToolSchemaCosts(t *testing.T) {
+	t.Parallel()
 	c, ctx, _, request := nativeMediaProviderFixture(t)
 	ctx = withNativeProviderCounter(ctx, c)
 	baseline, err := defaultCounter.CountProviderRequest(ctx, request.ModelID, request)
@@ -74,6 +76,7 @@ func (unserializableCounterMedia) MarshalJSON() ([]byte, error) {
 }
 
 func TestNativeImageCounterRejectsUnadmittedMediaBeforeSerialization(t *testing.T) {
+	t.Parallel()
 	c, ctx, _, request := nativeMediaProviderFixture(t)
 	_, err := defaultCounter.CountProviderRequest(ctx, request.ModelID, request)
 	requireMediaCode(t, err, media.Unsupported)
@@ -88,6 +91,7 @@ func TestNativeImageCounterRejectsUnadmittedMediaBeforeSerialization(t *testing.
 }
 
 func TestNativeImageCounterRejectsUnavailableOrOverflowingBounds(t *testing.T) {
+	t.Parallel()
 	_, ctx, _, request := nativeMediaProviderFixture(t)
 	for _, bound := range []int64{0, -1, math.MaxInt64} {
 		if _, err := defaultCounter.countAdmittedNativeRequest(ctx, request, bound); err == nil {

@@ -32,6 +32,7 @@ func (f *recordingFinalizer) RunJudgeFinalization(_ context.Context, req JudgeFi
 }
 
 func TestDecisionFinalizationModesPersistRuntimeOwnedResult(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name          string
 		mode          string
@@ -82,6 +83,7 @@ func TestDecisionFinalizationModesPersistRuntimeOwnedResult(t *testing.T) {
 }
 
 func TestDecisionFinalizationPolicyPreflightPrecedesModelAndReferenceStages(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name      string
 		finalizer FinalizationPolicy
@@ -151,6 +153,7 @@ func TestDecisionFinalizationPolicyPreflightPrecedesModelAndReferenceStages(t *t
 }
 
 func TestFinalizationRequestIsHistoryFreeAndRejectsForgedWireFields(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	finalizer := &recordingFinalizer{coordinatorWire: FinalizationWireResult{OptionID: "migrate"}}
 	policy := enginePolicy(1)
@@ -179,6 +182,7 @@ func TestFinalizationRequestIsHistoryFreeAndRejectsForgedWireFields(t *testing.T
 }
 
 func TestFinalizationRejectsForgedOptionReasonAndJudge(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name   string
 		policy DecisionPolicy
@@ -230,6 +234,7 @@ func (s *failDecisionRecordStore) Put(ctx context.Context, req PutArtifactReques
 }
 
 func TestFinalizationResumeReusesDurableResultWithoutRecall(t *testing.T) {
+	t.Parallel()
 	base, err := NewFileArtifactStore(t.TempDir(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -255,6 +260,7 @@ func TestFinalizationResumeReusesDurableResultWithoutRecall(t *testing.T) {
 }
 
 func TestFinalizationSchemaV1ReadAndProjectionCompatibility(t *testing.T) {
+	t.Parallel()
 	legacy := DecisionRecord{SchemaVersion: 1, ID: "legacy-1", EvidenceHash: "evidence", FinalOption: "wait", FinalizationMode: agent.FinalizationAggregate}
 	if err := legacy.ValidateSchemaVersion(); err != nil {
 		t.Fatalf("legacy schema was rejected: %v", err)

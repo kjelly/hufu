@@ -47,6 +47,7 @@ func TestSessionDataConcurrentCheckpointNoRace(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration: mise run test-integration")
 	}
+	t.Parallel()
 	c := newSessionRaceCoordinator(t)
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "worker", Desc: "race-task-1"},
@@ -126,6 +127,7 @@ func TestSessionDataConcurrentCheckpointNoRace(t *testing.T) {
 // and the acceptance/manifest report path) observe a consistent copy while
 // writers mutate the shared state, exercising the RWMutex read/write split.
 func TestSessionDataConcurrentReadWhileWrite(t *testing.T) {
+	t.Parallel()
 	c := newSessionRaceCoordinator(t)
 
 	var wg sync.WaitGroup
@@ -159,6 +161,7 @@ func TestSessionDataConcurrentReadWhileWrite(t *testing.T) {
 }
 
 func TestPersistSessionRoundsUsesSynchronizedPersistence(t *testing.T) {
+	t.Parallel()
 	c := newSessionRaceCoordinator(t)
 	c.baseRounds = 2
 	c.round = 3
@@ -172,6 +175,7 @@ func TestPersistSessionRoundsUsesSynchronizedPersistence(t *testing.T) {
 }
 
 func TestPersistSessionRoundsConcurrentWithCheckpointNoRace(t *testing.T) {
+	t.Parallel()
 	c := newSessionRaceCoordinator(t)
 	c.round = 1
 	c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "checkpoint"}})

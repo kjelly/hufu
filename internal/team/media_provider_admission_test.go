@@ -70,6 +70,7 @@ func nativeMediaProviderRequest(t *testing.T, c *Coordinator, messages []fantasy
 }
 
 func TestNativeProviderMediaValidatesCanonicalMetadataWithoutReadingImages(t *testing.T) {
+	t.Parallel()
 	for _, shape := range []string{"call", "object", "messages"} {
 		t.Run(shape, func(t *testing.T) {
 			c, ctx, item, request := nativeMediaProviderFixture(t)
@@ -104,6 +105,10 @@ func TestNativeProviderMediaValidatesCanonicalMetadataWithoutReadingImages(t *te
 }
 
 func TestNativeProviderMediaRejectsUnboundOrChangedRequests(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		mutate func(context.Context, *agent.ProviderRequest) context.Context
@@ -186,6 +191,7 @@ func (b imageCapabilityBackend) AgentProvider(context.Context, execution.Executi
 }
 
 func TestNativeProviderMediaRequiresBackendAndAdapterCapabilities(t *testing.T) {
+	t.Parallel()
 	for _, native := range []bool{false, true} {
 		name := "backend missing capability"
 		if native {

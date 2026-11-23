@@ -48,6 +48,7 @@ func stepGenerationEvidence(t *testing.T, governed bool) (*Coordinator, []RunEve
 }
 
 func TestStructuredStepReplayRejectsSubstitutedInvocationSources(t *testing.T) {
+	t.Parallel()
 	c, events, _ := stepGenerationEvidence(t, false)
 	index := slices.IndexFunc(events, func(e RunEvent) bool { return e.Type == string(EventStructuredStepInvocationObserved) })
 	for _, tc := range []struct {
@@ -93,6 +94,7 @@ func TestStructuredStepReplayRejectsSubstitutedInvocationSources(t *testing.T) {
 }
 
 func TestStructuredStepReceiptViewsSeparateReusedCallIDs(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	c.initEventStore()
 	id := addTodo(t, c, "inspect")
@@ -136,6 +138,7 @@ func TestStructuredStepReceiptViewsSeparateReusedCallIDs(t *testing.T) {
 }
 
 func TestStructuredStepInvocationIDsAreDetachedFromRegistry(t *testing.T) {
+	t.Parallel()
 	c, _, receipt := stepGenerationEvidence(t, false)
 	want := receipt.ModelExecutionIDs[0]
 	receipt.ModelExecutionIDs[0] = "overridden"
@@ -151,6 +154,7 @@ func TestStructuredStepInvocationIDsAreDetachedFromRegistry(t *testing.T) {
 }
 
 func TestStructuredStepRejectsUnjoinedProviderInvocation(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	c.initEventStore()
 	contract := ExecutionContract{Steps: []ExecutionStep{{ID: "inspect", Tool: "inspector", Effect: ExecutionEffectRead}}}
@@ -188,6 +192,7 @@ func TestStructuredStepRejectsUnjoinedProviderInvocation(t *testing.T) {
 }
 
 func TestStructuredStepAttributionDoesNotChangeGenerationCost(t *testing.T) {
+	t.Parallel()
 	c, events, receipt := stepGenerationEvidence(t, true)
 	rows, err := LoadStructuredStepReceipts(t.Context(), c.session.Workspace, events)
 	if err != nil {
@@ -213,6 +218,7 @@ func TestStructuredStepAttributionDoesNotChangeGenerationCost(t *testing.T) {
 }
 
 func TestStructuredStepCodecPreservesCompleteRedactedDiagnostics(t *testing.T) {
+	t.Parallel()
 	c, _, receipt := stepGenerationEvidence(t, false)
 	store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
 	if err != nil {

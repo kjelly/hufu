@@ -22,6 +22,10 @@ func changeResolverPolicy(c *Coordinator) {
 }
 
 func TestContractRecoveryInputPolicyPreservesFrozenEvidence(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, test := range []struct {
 		name      string
 		metadata  bool
@@ -121,6 +125,7 @@ func TestContractRecoveryInputPolicyPreservesFrozenEvidence(t *testing.T) {
 }
 
 func TestContractRecoveryInputPolicyRejectsAuthorityDrift(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"model", "schema", "default", "action", "future_write", "dynamic", "mutation"} {
 		t.Run(name, func(t *testing.T) {
 			c, f, source := metadataContractRecoveryFixture(t, configureResolverPolicyRecovery)
@@ -154,6 +159,7 @@ func TestContractRecoveryInputPolicyRejectsAuthorityDrift(t *testing.T) {
 }
 
 func TestContractRecoveryInputPolicyReplayRejectsSubstitution(t *testing.T) {
+	t.Parallel()
 	c, f, source := metadataContractRecoveryFixture(t, configureResolverPolicyRecovery)
 	changeResolverPolicy(c)
 	ctx := WithFrozenInputPolicyRecovery(t.Context())

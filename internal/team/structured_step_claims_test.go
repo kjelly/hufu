@@ -6,6 +6,7 @@ import (
 )
 
 func TestDurableReceiptClaimsRejectUnscopedMemoryEvidence(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	id := addTodo(t, c, "inspect")
 	c.setCurrentTaskAttempt(id, 1)
@@ -22,6 +23,7 @@ func TestDurableReceiptClaimsRejectUnscopedMemoryEvidence(t *testing.T) {
 }
 
 func TestOrdinaryToolReceiptRetainsRuntimeOccurrence(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	c.initEventStore()
 	id := addTodo(t, c, "inspect")

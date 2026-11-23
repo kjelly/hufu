@@ -13,6 +13,7 @@ import (
 )
 
 func TestAcceptanceRevisionPersistsToSessionAndEventStore(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "revision"}}, sessionData: NewSession(), taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}}
 	c.SetAcceptanceSpec(AcceptanceSpec{Commands: []string{"test -f initial"}})
@@ -57,6 +58,7 @@ func TestAcceptanceRevisionPersistsToSessionAndEventStore(t *testing.T) {
 }
 
 func TestContinuationCheckpointSurvivesRestartAndAbort(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "checkpoint"}}, sessionData: NewSession(), taskTracker: NewTaskTracker()}
 	c.saveContinuationCheckpoint(2, 5, "step_limit", "pending")
@@ -81,6 +83,7 @@ func TestContinuationCheckpointSurvivesRestartAndAbort(t *testing.T) {
 }
 
 func TestCoordinatorMetricsAreExternallyQueryableAndCopied(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.recordRetry(FailureProtocol)
 	c.recordRetry(FailureProtocol)
@@ -97,6 +100,7 @@ func TestCoordinatorMetricsAreExternallyQueryableAndCopied(t *testing.T) {
 }
 
 func TestAcceptanceSpecDeepCopyPreventsCallerMutation(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	commands := []string{"test -f required-artifact"}
 	artifacts := []string{"required-artifact"}
@@ -140,6 +144,7 @@ func TestAcceptanceSpecDeepCopyPreventsCallerMutation(t *testing.T) {
 }
 
 func TestCriterionCheckpointPersistsAndRejectsStaleAcceptanceContract(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "ready"), []byte("ok"), 0o600); err != nil {
 		t.Fatal(err)
@@ -181,6 +186,7 @@ func TestCriterionCheckpointPersistsAndRejectsStaleAcceptanceContract(t *testing
 }
 
 func TestMetricsIncludeOutcomeReliabilitySignals(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "external", Advances: []string{"ready"}}})[0]
 	item.Status = TaskError
@@ -195,6 +201,7 @@ func TestMetricsIncludeOutcomeReliabilitySignals(t *testing.T) {
 }
 
 func TestMetricsScopeProtocolRepairsToInvocationRun(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "resumed repair"}})[0]
 	item.ExecutionReceipts = []ExecutionReceipt{{
@@ -225,6 +232,7 @@ func TestMetricsScopeProtocolRepairsToInvocationRun(t *testing.T) {
 }
 
 func TestMetricsIncludeWP17ContractAndVerifierSignals(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	tracker.TodoList().Restore([]*TodoItem{
 		{
@@ -279,6 +287,7 @@ func TestMetricsIncludeWP17ContractAndVerifierSignals(t *testing.T) {
 // from a clean submission even though the content was never validated by the
 // worker's own protocol.
 func TestMetricsCountDegradedResultsAcceptedViaProtocolRecovery(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	tracker.TodoList().Restore([]*TodoItem{
 		{
@@ -304,6 +313,7 @@ func TestMetricsCountDegradedResultsAcceptedViaProtocolRecovery(t *testing.T) {
 }
 
 func TestMetricsIncludeReceiptVerificationAndAllFailureEvents(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	eventStore, err := NewEventStore(workspace, "metrics-run", "metrics-session")
 	if err != nil {
@@ -347,6 +357,7 @@ func TestMetricsIncludeReceiptVerificationAndAllFailureEvents(t *testing.T) {
 }
 
 func TestMetricsScopeFailureEventsToActiveRun(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	appendFailure := func(store *EventStore, taskID string, failure FailureEventPayload) {
 		t.Helper()
@@ -393,6 +404,7 @@ func TestMetricsScopeFailureEventsToActiveRun(t *testing.T) {
 }
 
 func TestRetrySuppressionMetricsQueryPreservesRunScopeAndMalformedPayload(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "active-run", "metrics-session")
 	if err != nil {
 		t.Fatal(err)
@@ -423,6 +435,7 @@ func TestRetrySuppressionMetricsQueryPreservesRunScopeAndMalformedPayload(t *tes
 }
 
 func TestFailureMetricsQueryPreservesEmptyResultAndFallback(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "active-run", "metrics-session")
 	if err != nil {
 		t.Fatal(err)
@@ -452,6 +465,7 @@ func TestFailureMetricsQueryPreservesEmptyResultAndFallback(t *testing.T) {
 }
 
 func TestMetricsTrackProgressTimestampAndPlanUsageWithoutDoubleCounting(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{sessionData: &SessionData{
 		LastCriterionProgressAt: time.Now().Add(-90 * time.Second).UTC().Format(time.RFC3339Nano),
 		CriterionResults:        []CriterionResult{{ID: "ready", State: CriterionPassed, EvaluatedAt: time.Now()}},
@@ -470,6 +484,7 @@ func TestMetricsTrackProgressTimestampAndPlanUsageWithoutDoubleCounting(t *testi
 }
 
 func TestResumeReconcileRevalidatesCurrentCriterionBeforeMarkingDone(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	makeCoordinator := func() (*Coordinator, *TodoItem) {
 		tracker := NewTaskTracker()
@@ -544,6 +559,7 @@ func TestResumeReconcileRevalidatesCurrentCriterionBeforeMarkingDone(t *testing.
 }
 
 func TestCriterionCheckpointSurvivesEventReplay(t *testing.T) {
+	t.Parallel()
 	checkpoint := CriterionCheckpoint{ID: "cp-1", TaskID: "task-1", CriterionID: "ready", Proven: true, InputFingerprint: "fingerprint", CreatedAt: "2026-07-30T00:00:00Z"}
 	payload, err := json.Marshal(map[string]any{"checkpoint": checkpoint})
 	if err != nil {

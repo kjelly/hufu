@@ -8,6 +8,7 @@ import (
 )
 
 func TestDependencyResultViewSourceBindsCanonicalCompletion(t *testing.T) {
+	t.Parallel()
 	result, source := dependencyViewRenderFixture()
 	item := &TodoItem{ID: result.TaskID, Agent: result.Agent, Status: TaskDone, OccurrenceRevision: source.OccurrenceRevision, TypedResult: &result}
 	payload, err := json.Marshal(dependencyViewTerminalSource{ID: item.ID, Status: TaskDone, OccurrenceRevision: item.OccurrenceRevision, TypedResult: &result}, jsonv1.DefaultOptionsV1())
@@ -48,6 +49,7 @@ func TestDependencyResultViewSourceBindsCanonicalCompletion(t *testing.T) {
 }
 
 func TestDependencyResultViewSourceRespectsBranchCutoff(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name             string
 		beforeCompletion bool

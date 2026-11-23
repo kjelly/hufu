@@ -9,6 +9,7 @@ import (
 )
 
 func TestRequestRunTerminationRunsOnePreparationForConcurrentFinishers(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{executionRunID: "run-terminal-decision"}
 	logicalID := "ldr_01010101010101010101010101010101"
 	binding := terminalTestBinding(t, logicalID)
@@ -62,6 +63,7 @@ func TestRequestRunTerminationRunsOnePreparationForConcurrentFinishers(t *testin
 }
 
 func TestDecisionTerminalPromotesUnverifiedOnlyAfterPrimaryBinding(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{executionRunID: "run-unverified-primary"}
 	logicalID := "ldr_09090909090909090909090909090909"
 	binding := terminalTestBinding(t, logicalID)
@@ -84,6 +86,7 @@ func TestDecisionTerminalPromotesUnverifiedOnlyAfterPrimaryBinding(t *testing.T)
 }
 
 func TestHardStopCancelsDecisionPreparationAndOwnsTerminalCandidate(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{executionRunID: "run-terminal-signal"}
 	logicalID := "ldr_02020202020202020202020202020202"
 	started := make(chan struct{})
@@ -125,6 +128,7 @@ func TestHardStopCancelsDecisionPreparationAndOwnsTerminalCandidate(t *testing.T
 }
 
 func TestFinalizeRunDecisionIntentRejectsSuccessWithoutPreparationProof(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{executionRunID: "run-terminal-missing-proof"}
 	if err := c.ConfigureDecisionTerminal(DecisionTerminalConfig{
 		LogicalRunID: "ldr_03030303030303030303030303030303", BranchID: "main", Generation: 1,
@@ -141,6 +145,7 @@ func TestFinalizeRunDecisionIntentRejectsSuccessWithoutPreparationProof(t *testi
 }
 
 func TestEveryTerminalEntryPointUsesItsPrimaryAuthorizationMode(t *testing.T) {
+	t.Parallel()
 	for _, entryPoint := range TerminalEntryPoints() {
 		t.Run(string(entryPoint), func(t *testing.T) {
 			logicalID := "ldr_04040404040404040404040404040404"
@@ -182,6 +187,7 @@ func TestEveryTerminalEntryPointUsesItsPrimaryAuthorizationMode(t *testing.T) {
 }
 
 func TestSetLastRunResultDoesNotPublishUnpreparedDecisionSuccess(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	if err := c.ConfigureDecisionTerminal(DecisionTerminalConfig{
 		LogicalRunID: "ldr_05050505050505050505050505050505", BranchID: "main", Generation: 1,

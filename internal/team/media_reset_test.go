@@ -10,6 +10,7 @@ import (
 )
 
 func TestMediaTaskResetRejectsChangedAuthority(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	item := createMediaOccurrence(t, c, ctx, nativeInvocationTask(t, c, ctx, media.InvocationSingleTask))
@@ -90,6 +91,7 @@ func TestMediaTaskResetRejectsChangedAuthority(t *testing.T) {
 }
 
 func TestMediaInputAdmissionUsesInheritedPolicy(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx, end, err := c.beginPublicInvocationExecutionRun(t.Context())
 	if err != nil {

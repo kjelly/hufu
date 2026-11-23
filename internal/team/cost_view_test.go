@@ -7,6 +7,7 @@ import (
 )
 
 func TestProjectCostViewRejectsUnmatchedSettlement(t *testing.T) {
+	t.Parallel()
 	settlement := cost.SettlementEvent{
 		SchemaVersion: cost.EventSchemaVersion,
 		InvocationIdentity: cost.InvocationIdentity{

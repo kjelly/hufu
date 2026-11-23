@@ -44,6 +44,7 @@ func pinnedCodexUserInputSchema(t *testing.T) *jsonschema.Schema {
 }
 
 func TestPinnedCodexUserInputSchema(t *testing.T) {
+	t.Parallel()
 	schema := pinnedCodexUserInputSchema(t)
 	for _, tc := range []struct {
 		name  string
@@ -68,6 +69,7 @@ func TestPinnedCodexUserInputSchema(t *testing.T) {
 }
 
 func TestCodexTextInputMatchesPinnedSchema(t *testing.T) {
+	t.Parallel()
 	schema := pinnedCodexUserInputSchema(t)
 	raw, err := json.Marshal(codexUserInput{Type: "text", Text: "Preserve text-only input"})
 	if err != nil {

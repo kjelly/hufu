@@ -17,6 +17,7 @@ func (p fakeSubagentProvider) RunAttempt(context.Context, AttemptRequest) (Attem
 }
 
 func TestSubagentRegistryFailsClosedForUnknownProvider(t *testing.T) {
+	t.Parallel()
 	registry := NewSubagentRegistry(fakeSubagentProvider{name: localSubagentProviderName})
 	if _, err := registry.Resolve("untrusted-command"); err == nil || !strings.Contains(err.Error(), "unknown subagent provider") {
 		t.Fatalf("unknown provider did not fail closed: %v", err)
@@ -27,6 +28,7 @@ func TestSubagentRegistryFailsClosedForUnknownProvider(t *testing.T) {
 }
 
 func TestSubagentProviderCannotDeclareAcceptance(t *testing.T) {
+	t.Parallel()
 	// The public attempt DTO contains only execution evidence. Acceptance and
 	// verification are deliberately absent and therefore remain coordinator
 	// responsibilities even when a provider returns a successful attempt.
@@ -47,6 +49,7 @@ func (s *recordingTaskResultSink) Submit(_ context.Context, taskID string, resul
 }
 
 func TestSubmitResultToolUsesTaskScopedSink(t *testing.T) {
+	t.Parallel()
 	sink := &recordingTaskResultSink{}
 	tool := &submitResultTool{todoID: "task-1", sink: sink}
 	response, err := tool.Run(context.Background(), fantasy.ToolCall{Name: submitResultToolName, Input: `{"status":"success","summary":"done"}`})

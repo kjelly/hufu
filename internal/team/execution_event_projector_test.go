@@ -97,6 +97,7 @@ func TestExecutionEventProjectionOnRealAttempts(t *testing.T) {
 }
 
 func TestEmergencyFinalizedRunProjectsCancelledFinish(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	const runID = "run-emergency-projection"
 	store, err := NewEventStore(workspace, runID, "session-emergency-projection")

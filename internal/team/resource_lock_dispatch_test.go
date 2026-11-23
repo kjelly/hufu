@@ -24,6 +24,7 @@ func missingRequiredResourceConfig(name string) agent.TeamConfig {
 }
 
 func TestRunFailsAdmissionBeforeProviderStartWhenRequiredResourceMissing(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		providerManager: &agent.ProviderManager{},
@@ -46,6 +47,7 @@ func TestRunFailsAdmissionBeforeProviderStartWhenRequiredResourceMissing(t *test
 }
 
 func TestRunDirectAgentRespectsRequiredResourceLock(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session:     &TeamSession{Workspace: workspace, Config: missingRequiredResourceConfig("direct-admission")},
@@ -68,6 +70,7 @@ func TestRunDirectAgentRespectsRequiredResourceLock(t *testing.T) {
 // either, so before this wiring it would have silently continued despite a
 // missing required resource.
 func TestContinueWithPromptEnforcesRequiredResourceLock(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		providerManager: &agent.ProviderManager{},
@@ -87,6 +90,7 @@ func TestContinueWithPromptEnforcesRequiredResourceLock(t *testing.T) {
 }
 
 func TestTargetedRecoveryRespectsRequiredResourceLock(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session:     &TeamSession{Workspace: workspace, Config: missingRequiredResourceConfig("recovery-admission")},
@@ -110,6 +114,7 @@ func TestTargetedRecoveryRespectsRequiredResourceLock(t *testing.T) {
 // second call on the same coordinator must fail with drift detected instead
 // of silently accepting the changed content.
 func TestExecuteTasksRevalidatesLockOnEachDispatchBatch(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	projectDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(projectDir, "AGENTS.md"), []byte("original content"), 0o644); err != nil {
@@ -151,6 +156,7 @@ func TestExecuteTasksRevalidatesLockOnEachDispatchBatch(t *testing.T) {
 // see zero behavior change from ValidateRequiredResourceLocks being called
 // at every admission boundary.
 func TestLegacyTeamWithoutRequiredResourcesUnaffectedAtEveryCallSite(t *testing.T) {
+	t.Parallel()
 	legacyConfig := agent.TeamConfig{Name: "legacy-team"}
 
 	t.Run("run direct agent", func(t *testing.T) {

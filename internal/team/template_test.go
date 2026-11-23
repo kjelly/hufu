@@ -7,6 +7,7 @@ import (
 )
 
 func TestApplyTemplateNoVars(t *testing.T) {
+	t.Parallel()
 	content := "---\nname: agent1\nrole: worker\n---\nHello world"
 	result, err := applyTemplate(content, "test.md", nil)
 	if err != nil {
@@ -18,6 +19,7 @@ func TestApplyTemplateNoVars(t *testing.T) {
 }
 
 func TestApplyTemplateEmptyVars(t *testing.T) {
+	t.Parallel()
 	content := "---\nname: agent1\nrole: worker\n---\nHello world"
 	result, err := applyTemplate(content, "test.md", map[string]string{})
 	if err != nil {
@@ -29,6 +31,7 @@ func TestApplyTemplateEmptyVars(t *testing.T) {
 }
 
 func TestApplyTemplateNoTemplateDelimiters(t *testing.T) {
+	t.Parallel()
 	vars := map[string]string{"model": "qwen3:8b"}
 	content := "---\nname: agent1\nrole: worker\n---\nHello world"
 	result, err := applyTemplate(content, "test.md", vars)
@@ -41,6 +44,7 @@ func TestApplyTemplateNoTemplateDelimiters(t *testing.T) {
 }
 
 func TestApplyTemplateBasicSubstitution(t *testing.T) {
+	t.Parallel()
 	vars := map[string]string{
 		"model":   "qwen3:8b",
 		"project": "myapp",
@@ -57,6 +61,7 @@ func TestApplyTemplateBasicSubstitution(t *testing.T) {
 }
 
 func TestApplyTemplateSpacesVariants(t *testing.T) {
+	t.Parallel()
 	vars := map[string]string{"name": "test"}
 	tests := []struct {
 		name     string
@@ -83,6 +88,7 @@ func TestApplyTemplateSpacesVariants(t *testing.T) {
 }
 
 func TestApplyTemplateDottedKeys(t *testing.T) {
+	t.Parallel()
 	vars := map[string]string{
 		"project.name": "myapp",
 		"project.env":  "staging",
@@ -99,6 +105,7 @@ func TestApplyTemplateDottedKeys(t *testing.T) {
 }
 
 func TestApplyTemplateMissingVar(t *testing.T) {
+	t.Parallel()
 	vars := map[string]string{"model": "qwen3:8b"}
 	content := "model: {@ .model @}\ntools: {@ .missing_var @}"
 	_, err := applyTemplate(content, "test.md", vars)
@@ -108,6 +115,7 @@ func TestApplyTemplateMissingVar(t *testing.T) {
 }
 
 func TestApplyTemplateGitHubActionsUnchanged(t *testing.T) {
+	t.Parallel()
 	vars := map[string]string{"model": "qwen3:8b"}
 	content := "deploy: ${{ secrets.GITHUB_TOKEN }}\nmodel: {@ .model @}"
 	expected := "deploy: ${{ secrets.GITHUB_TOKEN }}\nmodel: qwen3:8b"
@@ -121,6 +129,7 @@ func TestApplyTemplateGitHubActionsUnchanged(t *testing.T) {
 }
 
 func TestApplyTemplateHugoShortcodesUnchanged(t *testing.T) {
+	t.Parallel()
 	vars := map[string]string{"title": "My Page"}
 	content := "---\ntitle: {@ .title @}\n---\n{{< highlight go >}}code{{< /highlight >}}"
 	expected := "---\ntitle: My Page\n---\n{{< highlight go >}}code{{< /highlight >}}"
@@ -134,6 +143,7 @@ func TestApplyTemplateHugoShortcodesUnchanged(t *testing.T) {
 }
 
 func TestApplyTemplateGoTemplateLogicUnchanged(t *testing.T) {
+	t.Parallel()
 	vars := map[string]string{"name": "test"}
 	content := "---\nname: {@ .name @}\n---\n{{ if .verbose }}detailed{{ end }}"
 	expected := "---\nname: test\n---\n{{ if .verbose }}detailed{{ end }}"
@@ -147,6 +157,7 @@ func TestApplyTemplateGoTemplateLogicUnchanged(t *testing.T) {
 }
 
 func TestApplyTemplateConditionals(t *testing.T) {
+	t.Parallel()
 	vars := map[string]string{
 		"env":     "production",
 		"verbose": "true",
@@ -163,6 +174,7 @@ func TestApplyTemplateConditionals(t *testing.T) {
 }
 
 func TestApplyTemplateMultipleOccurrences(t *testing.T) {
+	t.Parallel()
 	vars := map[string]string{"name": "agent-x"}
 	content := "---\nname: {@ .name @}\n---\nHello {@ .name @}, welcome {@ .name @}!"
 	expected := "---\nname: agent-x\n---\nHello agent-x, welcome agent-x!"
@@ -176,6 +188,7 @@ func TestApplyTemplateMultipleOccurrences(t *testing.T) {
 }
 
 func TestApplyTemplateRealWorldSidecarModel(t *testing.T) {
+	t.Parallel()
 	vars := map[string]string{
 		"big_model":   "ollama/glm-5.1:cloud",
 		"small_model": "ollama/gemma4:31b-cloud",
@@ -192,6 +205,7 @@ func TestApplyTemplateRealWorldSidecarModel(t *testing.T) {
 }
 
 func TestParseAgentFileWithTemplate(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	content := "---\nname: {@ .agent_name @}\nmodel: {@ .model @}\n---\nYou are {@ .agent_name @} working on {@ .project @}."
 	agentPath := filepath.Join(tmpDir, "dev.md")
@@ -225,6 +239,7 @@ func TestParseAgentFileWithTemplate(t *testing.T) {
 }
 
 func TestParseAgentFileWithTemplateMissingVar(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	content := "---\nname: {@ .agent_name @}\ntools: {@ .missing @}\n---\nBody"
 	agentPath := filepath.Join(tmpDir, "dev.md")
@@ -243,6 +258,7 @@ func TestParseAgentFileWithTemplateMissingVar(t *testing.T) {
 }
 
 func TestParseAgentFileNoTemplateWithoutVars(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	content := "---\nname: developer\nmodel: qwen3:8b\n---\nYou are a developer."
 	agentPath := filepath.Join(tmpDir, "dev.md")
@@ -263,6 +279,7 @@ func TestParseAgentFileNoTemplateWithoutVars(t *testing.T) {
 }
 
 func TestParseAgentFileGitHubActionsUnchanged(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	content := "---\nname: developer\n---\nDeploy: ${{ secrets.GITHUB_TOKEN }}\nModel: {@ .model @}"
 	agentPath := filepath.Join(tmpDir, "dev.md")
@@ -285,6 +302,7 @@ func TestParseAgentFileGitHubActionsUnchanged(t *testing.T) {
 }
 
 func TestParseTeamYMLWithTemplate(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	yamlContent := "name: {@ .team_name @}\nacceptance: 'true'\nmodel: {@ .model @}\nmax-rounds: 5\n"
 	teamPath := filepath.Join(tmpDir, "team.yml")
@@ -313,6 +331,7 @@ func TestParseTeamYMLWithTemplate(t *testing.T) {
 }
 
 func TestParseTeamYMLTemplateMissingVar(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	yamlContent := "name: {@ .team_name @}\nmodel: {@ .undefined_var @}\n"
 	teamPath := filepath.Join(tmpDir, "team.yml")
@@ -328,6 +347,7 @@ func TestParseTeamYMLTemplateMissingVar(t *testing.T) {
 }
 
 func TestExpandToNestedMapConflictScalarThenNested(t *testing.T) {
+	t.Parallel()
 	// "project" as scalar and "project.name" as nested should conflict
 	vars := map[string]string{
 		"project":      "myapp",
@@ -340,6 +360,7 @@ func TestExpandToNestedMapConflictScalarThenNested(t *testing.T) {
 }
 
 func TestExpandToNestedMapConflictNestedThenScalar(t *testing.T) {
+	t.Parallel()
 	// "project.name" as nested and "project" as scalar should conflict
 	vars := map[string]string{
 		"project.name": "myapp-nested",
@@ -352,6 +373,7 @@ func TestExpandToNestedMapConflictNestedThenScalar(t *testing.T) {
 }
 
 func TestExpandToNestedMapNoConflict(t *testing.T) {
+	t.Parallel()
 	vars := map[string]string{
 		"project.name": "myapp",
 		"project.env":  "staging",
@@ -373,6 +395,7 @@ func TestExpandToNestedMapNoConflict(t *testing.T) {
 }
 
 func TestApplyTemplateConflictingVars(t *testing.T) {
+	t.Parallel()
 	vars := map[string]string{
 		"project":      "myapp",
 		"project.name": "myapp-nested",

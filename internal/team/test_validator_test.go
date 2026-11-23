@@ -8,6 +8,7 @@ import (
 )
 
 func TestValidationErrIsNil(t *testing.T) {
+	t.Parallel()
 	input := "{\"tasks\":\"[{\\\"agent\\\": \\\"config-applier\\\", \\\"goal\\\": \\\"do it\\\"}]\"}"
 
 	// Create tasksSchema exactly as in coordinator_tools.go

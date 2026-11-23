@@ -9,6 +9,7 @@ import (
 )
 
 func TestWorkerContextDistinguishesProjectRootFromControlWorkspace(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		projectDir: "/project",
 		session:    &TeamSession{Workspace: "/control"},

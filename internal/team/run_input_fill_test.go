@@ -6,6 +6,7 @@ import (
 )
 
 func TestFillSingleValueRequiredProperties(t *testing.T) {
+	t.Parallel()
 	one := func(value string) []json.RawMessage { return []json.RawMessage{json.RawMessage(value)} }
 	scope := RunInputSchema{
 		Type: "object",
@@ -46,6 +47,7 @@ func TestFillSingleValueRequiredProperties(t *testing.T) {
 // Reproduces the failing review run: the semantic model omits history, which
 // the schema pins to first_parent, on both the first answer and the repair.
 func TestSemanticRunInputFillsSingleValueRequiredProperty(t *testing.T) {
+	t.Parallel()
 	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
 	coordinator.session.RunInputDefinitions = []RunInputDefinition{semanticScopeDefinition(runInputResolverModeSemanticJSON)}
 	semantic := &recordingSemanticRunInputResolver{value: json.RawMessage(`{"kind":"last_n","count":2,"head":"HEAD"}`)}

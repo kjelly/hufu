@@ -9,6 +9,7 @@ import (
 )
 
 func TestRecordContextBreakdownAndReport(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	added := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "do thing"}})
 	if len(added) == 0 {
@@ -82,6 +83,7 @@ func TestRecordContextBreakdownAndReport(t *testing.T) {
 }
 
 func TestRenderContextUsageSectionEmptyWhenNotReady(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{}}
 	if got := c.RenderContextUsageSection(); got != "" {
 		t.Errorf("expected empty section before any recording, got %q", got)
@@ -89,6 +91,7 @@ func TestRenderContextUsageSectionEmptyWhenNotReady(t *testing.T) {
 }
 
 func TestEstimatedContextModelFallback(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{}}
 	c.recordContextBreakdown(context.Background(), "totally-unknown-model-xyz", "core", "project", "memory")
 	if !c.EstimatedContextModel() {

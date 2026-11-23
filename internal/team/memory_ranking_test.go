@@ -15,6 +15,7 @@ import (
 )
 
 func TestUtilityCannotOverrideLowRelevance(t *testing.T) {
+	t.Parallel()
 	c, _ := rankingTestCoordinator(t, agent.MemoryLearningActive)
 	entries, _, _, err := c.reinforceSearchResults(context.Background(), []contextstore.SearchResult{{Item: rankingItem("low", 1), Score: .001}}, c.session.Config.MemoryLearning)
 	if err != nil {
@@ -26,6 +27,7 @@ func TestUtilityCannotOverrideLowRelevance(t *testing.T) {
 }
 
 func TestActiveRankingIsDeterministic(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningActive)
 	results := []contextstore.SearchResult{
 		{Item: rankingItem("a", 10), Score: .5},
@@ -46,6 +48,7 @@ func TestActiveRankingIsDeterministic(t *testing.T) {
 }
 
 func TestCandidateExpiredSupersededRejectedAreNeverInjected(t *testing.T) {
+	t.Parallel()
 	expiredAt := time.Unix(50, 0)
 	items := []contextstore.ContextItem{
 		rankingItem("confirmed", 10),
@@ -61,6 +64,7 @@ func TestCandidateExpiredSupersededRejectedAreNeverInjected(t *testing.T) {
 }
 
 func TestUntrustedMemoryCannotOverrideNormativeContext(t *testing.T) {
+	t.Parallel()
 	normative := ContextItem{ID: "constraint", Kind: "hard_constraints", Content: "never deploy", Priority: PriorityHardConstraints, Authority: ContextAuthorityNormative}
 	memory := ContextItem{ID: "context:memory", Kind: "pattern", Content: "deploy", Priority: PriorityRelevantLTM, Authority: ContextAuthorityHistorical, FinalScore: 100, ScoreParts: MemoryScoreParts{Applicability: 1}, Freshness: time.Now(), Confidence: 1}
 	ranked := RankContextItems([]ContextItem{memory, normative})
@@ -70,6 +74,7 @@ func TestUntrustedMemoryCannotOverrideNormativeContext(t *testing.T) {
 }
 
 func TestVerifiedEvidenceRaisesComparableMemoryRank(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningActive)
 	_, err := repo.ApplyExperienceObservation(context.Background(), contextstore.ExperienceObservation{IdempotencyKey: "support-a", ContextItemID: "a", PolicyVersion: "memory-policy-v1", TaskID: "task", PositiveWeight: 1, VerifiedSupportDelta: 1})
 	if err != nil {
@@ -86,6 +91,7 @@ func TestVerifiedEvidenceRaisesComparableMemoryRank(t *testing.T) {
 }
 
 func TestActiveRankingExcludesStaleAndCausallyHarmfulMemory(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningActive)
 	_, err := repo.ApplyExperienceObservation(context.Background(), contextstore.ExperienceObservation{IdempotencyKey: "harm-b", ContextItemID: "b", PolicyVersion: "memory-policy-v1", TaskID: "task", NegativeWeight: 1, CausalFailureDelta: 1})
 	if err != nil {
@@ -105,6 +111,7 @@ func TestActiveRankingExcludesStaleAndCausallyHarmfulMemory(t *testing.T) {
 }
 
 func TestActiveRankingPolicyMatchesCompilerSelection(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningActive)
 	// Adopt a non-default runtime policy: utility and freshness are ignored, so
 	// ordering is pure base relevance. Under the default policy (utility 0.5,
@@ -165,6 +172,7 @@ func TestActiveRankingPolicyMatchesCompilerSelection(t *testing.T) {
 }
 
 func TestShadowModeDoesNotChangePrompt(t *testing.T) {
+	t.Parallel()
 	c, _ := rankingTestCoordinator(t, agent.MemoryLearningShadow)
 	observe, _ := rankingTestCoordinator(t, agent.MemoryLearningObserve)
 	base := []contextstore.ContextItem{rankingItem("base-a", 10), rankingItem("base-b", 20)}
@@ -189,6 +197,7 @@ func TestShadowModeDoesNotChangePrompt(t *testing.T) {
 }
 
 func TestDefaultRankingInjectsAtMostFourCandidates(t *testing.T) {
+	t.Parallel()
 	results := make([]contextstore.SearchResult, 20)
 	for i := range results {
 		results[i] = contextstore.SearchResult{Item: rankingItem(fmt.Sprintf("item-%02d", i), 10), Score: 1 - float64(i)/100}
@@ -206,6 +215,7 @@ func TestDefaultRankingInjectsAtMostFourCandidates(t *testing.T) {
 }
 
 func TestEmptyQueryNeverDropsMustKeepForInjectLimit(t *testing.T) {
+	t.Parallel()
 	c, _ := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	c.memoryRankingPolicy = MemoryRuntimeRankingPolicy{CandidateTopK: 2, InjectTopK: 1, MinimumRelevance: .05}
 	base := []contextstore.ContextItem{
@@ -223,6 +233,7 @@ func TestEmptyQueryNeverDropsMustKeepForInjectLimit(t *testing.T) {
 }
 
 func TestExplainMemoryScoreUsesAdoptedRuntimePolicy(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -271,6 +282,7 @@ func TestExplainMemoryScoreUsesAdoptedRuntimePolicy(t *testing.T) {
 }
 
 func TestRetrievalIDForItemBindsPolicyAndQuery(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	now := time.Now().UTC()
 	manifestV1 := MemoryInjectionManifest{
@@ -315,6 +327,7 @@ func TestRetrievalIDForItemBindsPolicyAndQuery(t *testing.T) {
 }
 
 func TestLoadMemoryPolicyResolvesRequestedVersion(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {

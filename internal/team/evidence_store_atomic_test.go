@@ -7,6 +7,7 @@ import (
 )
 
 func TestArtifactStoreConcurrentPublication(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	content := bytes.Repeat([]byte("immutable evidence\n"), 64*1024)
 	const writers = 8

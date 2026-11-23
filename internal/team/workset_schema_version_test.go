@@ -10,6 +10,7 @@ import (
 )
 
 func TestDecodeWorksetManifestSchemaVersions(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		version int
@@ -48,6 +49,7 @@ func TestDecodeWorksetManifestSchemaVersions(t *testing.T) {
 // runtime still accepted only 1 and 2, and every review run then failed in
 // PREPARE; reviewprep's own tests could not see it.
 func TestHufuCodeReviewProducerWorksetVersionIsAccepted(t *testing.T) {
+	t.Parallel()
 	source, err := os.ReadFile(filepath.Join(hufuCodeReviewTeamDir(t), "reviewprep", "main.go"))
 	if err != nil {
 		t.Fatalf("read reviewprep source: %v", err)

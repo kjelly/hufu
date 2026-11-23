@@ -9,6 +9,7 @@ import (
 )
 
 func TestSubmitResultUnknownFindingFieldIdentifiesParentPath(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeResultContractSchema(t, dir, "nested.json", `{"type":"object","properties":{"record":{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"evidence":{"type":"array","items":{"type":"string"}},"location":{"type":"string"}},"required":["evidence","location"],"additionalProperties":false}}},"required":["findings"],"additionalProperties":false}},"required":["record"],"additionalProperties":false}`)
 	compiled, err := compileResultContractSchema(dir, "nested.json")
@@ -64,6 +65,7 @@ func TestSubmitResultUnknownFindingFieldIdentifiesParentPath(t *testing.T) {
 }
 
 func TestCompactExamplePreservesConstantsAndOptionalEmptyArrays(t *testing.T) {
+	t.Parallel()
 	for _, value := range []any{"review", false, nil} {
 		if got := generateCompactExample(map[string]any{"const": value}); got != value {
 			t.Fatalf("const example = %#v, want %#v", got, value)

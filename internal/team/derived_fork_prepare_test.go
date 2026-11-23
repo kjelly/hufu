@@ -33,6 +33,7 @@ func derivedForkPreparationFixture(t *testing.T) (*versionFixture, *WorkspaceSes
 }
 
 func TestDerivedForkPreparationIsReadOnly(t *testing.T) {
+	t.Parallel()
 	f, ops := derivedForkPreparationFixture(t)
 	before := mustReadEvents(t, f.events)
 	prepared, err := ops.PrepareDerivedFork(t.Context(), "main")
@@ -55,6 +56,7 @@ func TestDerivedForkPreparationIsReadOnly(t *testing.T) {
 }
 
 func TestDerivedForkPreparationRefusesWithoutRecovery(t *testing.T) {
+	t.Parallel()
 	for _, failure := range []string{"observe", "unmanaged", "no_project_lock", "workspace_recovery", "deferred_checkpoint", "wrong_owner", "incomplete_operation", "terminal_commit", "unknown_effect", "wrong_team", "missing_cutoff"} {
 		t.Run(failure, func(t *testing.T) {
 			f, ops := derivedForkPreparationFixture(t)
@@ -129,6 +131,7 @@ func TestDerivedForkPreparationRefusesWithoutRecovery(t *testing.T) {
 }
 
 func TestDerivedForkTaskSafetyUsesTypedEffectState(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name  string
 		item  TodoItem
@@ -154,6 +157,7 @@ func TestDerivedForkTaskSafetyUsesTypedEffectState(t *testing.T) {
 }
 
 func TestDerivedForkWorldSafetyRequiresCompletionAfterApply(t *testing.T) {
+	t.Parallel()
 	prepared := RunEvent{Type: string(EventAttemptWorkspacePrepared), BranchID: "main", TaskID: "1", RunID: "original-run", Payload: []byte(`{"world_id":"world","attempt":1,"occurrence_attempt":1}`)}
 	applied := RunEvent{Type: string(EventAttemptWorkspaceApplied), BranchID: "main", TaskID: "1", Payload: []byte(`{"world_id":"world"}`)}
 	completed := RunEvent{Type: string(EventTaskCompleted), BranchID: "main", TaskID: "1", Payload: []byte(`{"status":"done","execution_receipt":{"execution_world_id":"world"}}`)}

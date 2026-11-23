@@ -6,6 +6,7 @@ import (
 )
 
 func TestExpandPipelineDeps(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		tasks []TaskDef
@@ -75,6 +76,7 @@ func TestExpandPipelineDeps(t *testing.T) {
 }
 
 func TestExpandPipelineDepsDoesNotMutateInput(t *testing.T) {
+	t.Parallel()
 	orig := []TaskDef{
 		{Agent: "a"},
 		{Agent: "b", Pipeline: true, DependsOn: []int{0}},

@@ -33,6 +33,7 @@ func proposalPolicy() DecisionPolicy {
 }
 
 func TestSlugifyOptionID(t *testing.T) {
+	t.Parallel()
 	tests := map[string]string{
 		"Migrate Now":           "migrate-now",
 		"  REDUCE_scope  ":      "reduce-scope",
@@ -50,6 +51,7 @@ func TestSlugifyOptionID(t *testing.T) {
 }
 
 func TestNormalizeProposedOptions(t *testing.T) {
+	t.Parallel()
 	proposed := []DecisionOption{
 		{ID: "Migrate Now", Kind: OptionExecute, Title: "Migrate now"},
 		{ID: "migrate now", Kind: OptionExecute},         // duplicate slug
@@ -82,6 +84,7 @@ func TestNormalizeProposedOptions(t *testing.T) {
 // be proposed: the runtime puts "do nothing" on the table itself rather than
 // trusting the proposer to remember (spec §19.1).
 func TestEnsureRequiredAlternativesInjectsWhatThePolicyRequires(t *testing.T) {
+	t.Parallel()
 	proposed := []DecisionOption{{ID: "migrate", Kind: OptionExecute, Origin: OptionOriginProposed}}
 
 	options, injected := EnsureRequiredAlternatives(proposed, AlternativesPolicy{
@@ -118,6 +121,7 @@ func TestEnsureRequiredAlternativesInjectsWhatThePolicyRequires(t *testing.T) {
 }
 
 func TestEnsureRequiredAlternativesLeavesSatisfiedSetsAlone(t *testing.T) {
+	t.Parallel()
 	proposed := []DecisionOption{
 		{ID: "migrate", Kind: OptionExecute},
 		{ID: "wait", Kind: OptionDefer},
@@ -137,6 +141,7 @@ func TestEnsureRequiredAlternativesLeavesSatisfiedSetsAlone(t *testing.T) {
 // A task that declared its own options is authoritative; the proposal stage
 // must not second-guess a written contract.
 func TestDeclaredOptionsSkipProposal(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	proposer := &stubProposer{}
 	engine := newTestEngineWithStages(journal, spreadRunner(), nil, DecisionServices{Proposer: proposer})
@@ -162,6 +167,7 @@ func TestDeclaredOptionsSkipProposal(t *testing.T) {
 // With no declared options, the proposal stage produces them and the runtime
 // completes the set so the alternatives gate passes on substance.
 func TestProposedOptionsReachTheDecision(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	proposer := &stubProposer{}
 	engine := newTestEngineWithStages(journal, newRecordingRunner(func(string, int) (DecisionOpinion, error) {
@@ -209,6 +215,7 @@ func TestProposedOptionsReachTheDecision(t *testing.T) {
 // Options are material evidence, so a resume must reuse the durable proposal
 // rather than proposing again and invalidating the round (spec §15.4).
 func TestProposalIsReusedOnResume(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	proposer := &stubProposer{}
 	failing := newRecordingRunner(func(judgeID string, _ int) (DecisionOpinion, error) {
@@ -255,6 +262,7 @@ func TestProposalIsReusedOnResume(t *testing.T) {
 }
 
 func TestProposalDisabledIsAConfigurationError(t *testing.T) {
+	t.Parallel()
 	policy := enginePolicy(2)
 	req := engineRequest(policy)
 	req.Options = nil
@@ -267,6 +275,7 @@ func TestProposalDisabledIsAConfigurationError(t *testing.T) {
 }
 
 func TestProposalEnabledWithoutAProposerFailsClosed(t *testing.T) {
+	t.Parallel()
 	req := engineRequest(proposalPolicy())
 	req.Options = nil
 
@@ -278,6 +287,7 @@ func TestProposalEnabledWithoutAProposerFailsClosed(t *testing.T) {
 }
 
 func TestProposalProducingNothingIsBlocked(t *testing.T) {
+	t.Parallel()
 	req := engineRequest(proposalPolicy())
 	req.Options = nil
 	req.Policy.Discipline.Alternatives = AlternativesPolicy{}
@@ -292,6 +302,7 @@ func TestProposalProducingNothingIsBlocked(t *testing.T) {
 }
 
 func TestOptionProposalPolicyValidation(t *testing.T) {
+	t.Parallel()
 	policy := enginePolicy(2)
 	policy.OptionProposal = OptionProposalPolicy{Enabled: true, MaxOptions: 2}
 	policy.Discipline.Alternatives = AlternativesPolicy{MinOptions: 3}

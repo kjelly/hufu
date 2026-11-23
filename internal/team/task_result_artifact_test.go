@@ -7,6 +7,7 @@ import (
 )
 
 func TestResolveTaskResultArtifactCanonicalProjections(t *testing.T) {
+	t.Parallel()
 	artifact := ArtifactRef{ID: "artifact-id", Description: "artifact-name", SHA256: "digest", Bytes: 3, ByteSize: 3}
 	raw := ArtifactRef{ID: "raw-id", SHA256: "raw-digest", Bytes: 4, ByteSize: 4}
 	tests := []struct {
@@ -62,6 +63,7 @@ func TestResolveTaskResultArtifactCanonicalProjections(t *testing.T) {
 }
 
 func TestResolveTaskResultArtifactEquivalentOccurrences(t *testing.T) {
+	t.Parallel()
 	base := ArtifactRef{ID: "sha256-content", SHA256: "content", Bytes: 3, ByteSize: 3, RunID: "run", TaskID: "task", Attempt: 1, Agent: "producer", Provider: "native", Kind: "input", Path: "first", CreatedAt: time.Unix(1, 0)}
 	for _, tc := range []struct {
 		name    string

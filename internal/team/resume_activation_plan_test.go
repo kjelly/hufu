@@ -8,6 +8,7 @@ import (
 )
 
 func TestResumeActivationPlanIsReadOnlyAndPinsTargetGeneration(t *testing.T) {
+	t.Parallel()
 	f := resumeVersionFixture(t)
 	source, err := ReadResumeSource(f.control, "main", "")
 	if err != nil {
@@ -48,6 +49,7 @@ func TestResumeActivationPlanIsReadOnlyAndPinsTargetGeneration(t *testing.T) {
 }
 
 func TestResumeActivationRefusesForeignMaterializedWorkspace(t *testing.T) {
+	t.Parallel()
 	f := resumeVersionFixture(t)
 	if err := f.store.UpdateSubjectState(t.Context(), f.subject, func(state *versionstore.SubjectState) { state.MaterializedWorkspaceID = "another-workspace" }); err != nil {
 		t.Fatal(err)
@@ -66,6 +68,7 @@ func TestResumeActivationRefusesForeignMaterializedWorkspace(t *testing.T) {
 }
 
 func TestResumeActivationRefusesExistingMetadataFileMismatch(t *testing.T) {
+	t.Parallel()
 	f := resumeVersionFixture(t)
 	// Simulate a workspace left by the old metadata-only resume path.
 	if _, _, err := CheckoutSessionBranch(t.Context(), f.control, f.tree, f.events, "main"); err != nil {

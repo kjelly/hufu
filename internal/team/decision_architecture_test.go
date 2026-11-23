@@ -9,6 +9,7 @@ import (
 )
 
 func TestDecisionRuntimeDoesNotBranchOnProfileDisplayNames(t *testing.T) {
+	t.Parallel()
 	files, err := filepath.Glob("decision*.go")
 	if err != nil {
 		t.Fatal(err)

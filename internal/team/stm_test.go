@@ -8,6 +8,7 @@ import (
 )
 
 func TestLoadSTMNonexistent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if got := LoadSTM(dir); got != "" {
 		t.Errorf("LoadSTM() = %q, want empty", got)
@@ -15,6 +16,7 @@ func TestLoadSTMNonexistent(t *testing.T) {
 }
 
 func TestSaveAndLoadSTM(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := "## findings\n- API is /v2"
 	if err := SaveSTM(dir, content); err != nil {
@@ -27,6 +29,7 @@ func TestSaveAndLoadSTM(t *testing.T) {
 }
 
 func TestTruncateSTMUnderLimit(t *testing.T) {
+	t.Parallel()
 	s := "hello"
 	if got := TruncateSTM(s); got != s {
 		t.Errorf("TruncateSTM() = %q, want %q", got, s)
@@ -34,6 +37,7 @@ func TestTruncateSTMUnderLimit(t *testing.T) {
 }
 
 func TestTruncateSTMOverLimit(t *testing.T) {
+	t.Parallel()
 	runes := make([]rune, maxSTMChars+100)
 	for i := range runes {
 		runes[i] = 'x'
@@ -46,6 +50,7 @@ func TestTruncateSTMOverLimit(t *testing.T) {
 }
 
 func TestTruncateSTMPreservesCriticalSectionsAndAnchors(t *testing.T) {
+	t.Parallel()
 	content := "# 進度\n- " + strings.Repeat("routine progress ", 300) + "\n\n" +
 		"# 錯誤與修復\n- " + strings.Repeat("noise ", 250) + "ERROR: database migration failed; run `go test ./internal/team/...`; inspect /srv/hufu/migrations/0042.sql\n\n" +
 		"# 決策\n- Use atomic STM writes\n\n# 待解決\n- Resolve migration failure"
@@ -61,6 +66,7 @@ func TestTruncateSTMPreservesCriticalSectionsAndAnchors(t *testing.T) {
 }
 
 func TestArchiveSTMEmpty(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path, err := ArchiveSTM(dir)
 	if err != nil {
@@ -72,6 +78,7 @@ func TestArchiveSTMEmpty(t *testing.T) {
 }
 
 func TestArchiveSTMWithContent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	SaveSTM(dir, "some working memory")
 
@@ -97,6 +104,7 @@ func TestArchiveSTMWithContent(t *testing.T) {
 }
 
 func TestInitSTMCreatesFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := InitSTM(dir); err != nil {
 		t.Fatalf("InitSTM() error: %v", err)
@@ -107,6 +115,7 @@ func TestInitSTMCreatesFile(t *testing.T) {
 }
 
 func TestInitSTMClearsExistingContent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	SaveSTM(dir, "previous session content")
 	if err := InitSTM(dir); err != nil {
@@ -119,6 +128,7 @@ func TestInitSTMClearsExistingContent(t *testing.T) {
 }
 
 func TestSTMPath(t *testing.T) {
+	t.Parallel()
 	got := STMPath("/tmp/ws")
 	want := filepath.Join("/tmp/ws", "stm.md")
 	if got != want {
@@ -127,6 +137,7 @@ func TestSTMPath(t *testing.T) {
 }
 
 func TestParseSTMSections(t *testing.T) {
+	t.Parallel()
 	content := "# 進度\n- researcher: checked login.go\n- writer: drafted report\n\n# 發現\n- SQL injection in login.go:123\n\n# 決策\n- Use prepared statements"
 	sections := ParseSTMSections(content)
 	if len(sections) != 3 {
@@ -144,6 +155,7 @@ func TestParseSTMSections(t *testing.T) {
 }
 
 func TestParseSTMSectionsEmpty(t *testing.T) {
+	t.Parallel()
 	sections := ParseSTMSections("")
 	if len(sections) != 0 {
 		t.Errorf("ParseSTMSections(\"\") len = %d, want 0", len(sections))
@@ -151,6 +163,7 @@ func TestParseSTMSectionsEmpty(t *testing.T) {
 }
 
 func TestFormatSTMSections(t *testing.T) {
+	t.Parallel()
 	sections := []STMSection{
 		{Title: "# 進度", Entries: []string{"- task1", "- task2"}},
 		{Title: "# 發現", Entries: []string{"- found something"}},
@@ -165,6 +178,7 @@ func TestFormatSTMSections(t *testing.T) {
 }
 
 func TestAppendSTMEntry(t *testing.T) {
+	t.Parallel()
 	content := "# 進度\n- old entry"
 	newContent := appendSTMEntry(content, "- new entry", "# 進度")
 	if !contains(newContent, "- new entry") {
@@ -176,6 +190,7 @@ func TestAppendSTMEntry(t *testing.T) {
 }
 
 func TestAppendSTMEntryNewSection(t *testing.T) {
+	t.Parallel()
 	content := "# 進度\n- task1"
 	newContent := appendSTMEntry(content, "- found bug", "# 發現")
 	if !contains(newContent, "# 發現") {
@@ -187,6 +202,7 @@ func TestAppendSTMEntryNewSection(t *testing.T) {
 }
 
 func TestAppendSTMEntryEmpty(t *testing.T) {
+	t.Parallel()
 	newContent := appendSTMEntry("", "- first", "# 進度")
 	if !contains(newContent, "- first") {
 		t.Errorf("appendSTMEntry on empty: %s", newContent)
@@ -194,6 +210,7 @@ func TestAppendSTMEntryEmpty(t *testing.T) {
 }
 
 func TestFormatSTMDoneEntry(t *testing.T) {
+	t.Parallel()
 	got := formatSTMDoneEntry("researcher", "check security", "found SQL injection")
 	if got == "" {
 		t.Fatal("formatSTMDoneEntry returned empty")
@@ -204,6 +221,7 @@ func TestFormatSTMDoneEntry(t *testing.T) {
 }
 
 func TestFormatSTMErrorEntry(t *testing.T) {
+	t.Parallel()
 	got := formatSTMErrorEntry("writer", "draft report", "timeout")
 	if got == "" {
 		t.Fatal("formatSTMErrorEntry returned empty")
@@ -214,6 +232,7 @@ func TestFormatSTMErrorEntry(t *testing.T) {
 }
 
 func TestFilterSTMSectionsByRole(t *testing.T) {
+	t.Parallel()
 	sections := []STMSection{
 		{Title: "# 進度", Entries: []string{"- task1"}},
 		{Title: "# 發現", Entries: []string{"- found bug"}},
@@ -249,6 +268,7 @@ func TestFilterSTMSectionsByRole(t *testing.T) {
 }
 
 func TestFilterSTMSectionsByRole_DecisionsAndQuestionsAlwaysVisible(t *testing.T) {
+	t.Parallel()
 	sections := []STMSection{
 		{Title: "# 決策", Entries: []string{"- use postgres"}},
 		{Title: "# 待解決", Entries: []string{"- which auth provider?"}},

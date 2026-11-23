@@ -116,6 +116,9 @@ func TestResultCollectionSourceFieldsFollowOriginalWork(t *testing.T) {
 }
 
 func TestResultCollectionRecollectsInapplicableSourceFields(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, tc := range []struct {
 		name, fields    string
 		admitted        bool

@@ -15,6 +15,7 @@ import (
 )
 
 func TestHufuCodeReviewRuntimeOwnsAll51GapIdentities(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodeReviewTeam(t)
 	c := newBudgetCoordinator(t)
 	c.session.ResultContracts = session.ResultContracts
@@ -145,6 +146,7 @@ func TestHufuCodeReviewRuntimeOwnsAll51GapIdentities(t *testing.T) {
 }
 
 func TestHufuCodeReviewEmptyCritiqueOwnsSource(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, schema, key, lens string }{
 		{"documentation", "schemas/documentation-review-v1.json", "unit-0000", "documentation-risk"},
 		{"supplement", "schemas/review-v1.json", "supplement-0000", "general"},
@@ -365,6 +367,7 @@ func bindHufuCodeReviewReceiptFixture(t *testing.T, c *Coordinator, report map[s
 }
 
 func TestHufuCodeReviewCriticSubmitsOnlyDecisionsForAllFindings(t *testing.T) {
+	t.Parallel()
 	for _, route := range []string{"local", "external"} {
 		t.Run(route, func(t *testing.T) {
 			session := loadHufuCodeReviewTeam(t)
@@ -485,6 +488,7 @@ func TestHufuCodeReviewCriticSubmitsOnlyDecisionsForAllFindings(t *testing.T) {
 }
 
 func TestHufuCodeReviewContractSourcesReachCritiqueAndReport(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodeReviewTeam(t)
 	for _, task := range session.ContractTasks {
 		if task.ID != "review-primary-workset" && task.ID != "review-documentation-workset" && task.ID != "review-documentation-escalation" && task.ID != "review-supplement-workset" {

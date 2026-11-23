@@ -14,6 +14,7 @@ import (
 )
 
 func TestTeamToolDenyRemovesAlwaysIncludedStateWriters(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{Config: agent.TeamConfig{
 			ToolsDenied: []string{"stm_write", "ltm_update", "memory_save"},
@@ -39,6 +40,7 @@ func TestTeamToolDenyRemovesAlwaysIncludedStateWriters(t *testing.T) {
 }
 
 func TestWorkerSurfaceRemovesCoordinatorOnlyTools(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session:   &TeamSession{Config: agent.TeamConfig{}},
 		coreTools: workerInvariantCoreTools(t),
@@ -58,6 +60,7 @@ func TestWorkerSurfaceRemovesCoordinatorOnlyTools(t *testing.T) {
 }
 
 func TestStaticPhaseContractCanGrantDeclaredPrepareTool(t *testing.T) {
+	t.Parallel()
 	def := &agent.AgentDef{Name: "inventory", Tools: "view,bash"}
 	task := TaskDef{Agent: "inventory", ContractID: "inventory", Execution: ExecutionContract{ToolSequence: []string{"bash", "submit_result"}, TemplateToolGrants: []string{"bash"}}}
 	session := &TeamSession{ContractTasks: []TaskDef{{ID: "inventory", Agent: "inventory", Execution: task.Execution}}}
@@ -80,6 +83,7 @@ func TestStaticPhaseContractCanGrantDeclaredPrepareTool(t *testing.T) {
 }
 
 func TestBoundedWorkflowBashCommandRequiresVerifiedCanonicalStaticContract(t *testing.T) {
+	t.Parallel()
 	contract := TaskDef{ID: "inventory", Agent: "inventory", OutputMode: TaskOutputModeSummary, Execution: ExecutionContract{
 		ToolSequence:               []string{"bash", "submit_result"},
 		ToolInputSequence:          []map[string]any{{"command": "printf bounded"}, {}},
@@ -102,6 +106,7 @@ func TestBoundedWorkflowBashCommandRequiresVerifiedCanonicalStaticContract(t *te
 }
 
 func TestContextToolsRequireExplicitDeclarationAndRemainForceMCPCompatible(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{}}, forceMCP: true}
 	c.coreTools = []fantasy.AgentTool{&contextQueryTool{coordinator: c}, &contextGetTool{coordinator: c}}
 	if got := agentToolNames(c.selectWorkerTools(&agent.AgentDef{Name: "worker", Tools: "view"})); slices.Contains(got, "context_query") || slices.Contains(got, "context_get") {
@@ -114,6 +119,7 @@ func TestContextToolsRequireExplicitDeclarationAndRemainForceMCPCompatible(t *te
 }
 
 func TestLegacyMemoryMutationExposureRequiresExactScopedOptIn(t *testing.T) {
+	t.Parallel()
 	aliases := []string{"stm_write", "ltm_update", "memory_save"}
 	base := func(cfg agent.TeamConfig) *Coordinator {
 		return &Coordinator{session: &TeamSession{Config: cfg}, coreTools: workerInvariantCoreTools(t)}
@@ -155,6 +161,7 @@ func TestLegacyMemoryMutationExposureRequiresExactScopedOptIn(t *testing.T) {
 }
 
 func TestTemplateGrantCannotEnableLegacyMemoryMutation(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{}, coreTools: workerInvariantCoreTools(t)}
 	def := &agent.AgentDef{Name: "worker", Tools: "view"}
 	task := TaskDef{ContractID: "contract", Execution: ExecutionContract{TemplateToolGrants: []string{"memory_save"}}}
@@ -165,6 +172,7 @@ func TestTemplateGrantCannotEnableLegacyMemoryMutation(t *testing.T) {
 }
 
 func TestParseTeamToolDeny(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: deny-test\ntools:\n  denied: [stm_write]\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -179,6 +187,7 @@ func TestParseTeamToolDeny(t *testing.T) {
 }
 
 func TestTemplateScopedToolGrantDoesNotLoosenTeamDeny(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session:   &TeamSession{Config: agent.TeamConfig{ToolsDenied: []string{"terminal"}}},
 		coreTools: workerInvariantCoreTools(t),
@@ -214,6 +223,7 @@ func TestTemplateScopedToolGrantDoesNotLoosenTeamDeny(t *testing.T) {
 }
 
 func TestDeniedToolInstructionsAreRemovedWithoutSyntheticToolNames(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{Config: agent.TeamConfig{
 			ToolsDenied: []string{"custom_memory_tool", "load_skill"},
@@ -229,6 +239,7 @@ func TestDeniedToolInstructionsAreRemovedWithoutSyntheticToolNames(t *testing.T)
 }
 
 func TestPhaseCapabilityOverridesTemplateGrant(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Config: agent.TeamConfig{}}
 	w, err := newRuntimeWorkflow(&TeamSession{
 		Config: agent.TeamConfig{

@@ -25,6 +25,7 @@ func (m *synchronizedStepTransport) Generate(ctx context.Context, call fantasy.C
 }
 
 func TestStructuredStepTracksConcurrentProviderInvocations(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	c.initEventStore()
 	inner := &costAdmissionLanguageModel{}
@@ -72,6 +73,7 @@ func TestStructuredStepTracksConcurrentProviderInvocations(t *testing.T) {
 }
 
 func TestProviderProfileInputCannotOverrideRuntimeTarget(t *testing.T) {
+	t.Parallel()
 	for _, target := range []string{"ollama/gpt", "other/gpt"} {
 		t.Run(target, func(t *testing.T) {
 			c := newTestCoordinator(t)

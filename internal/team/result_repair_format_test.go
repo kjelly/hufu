@@ -9,6 +9,7 @@ import (
 )
 
 func TestResultOnlyRepairRequiresProviderToolCall(t *testing.T) {
+	t.Parallel()
 	for _, repair := range []bool{false, true} {
 		name := "normal_worker"
 		if repair {
@@ -44,6 +45,7 @@ func TestResultOnlyRepairRequiresProviderToolCall(t *testing.T) {
 }
 
 func TestResultRepairUsesBoundSubmissionFormat(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{"missing_result", "schema_retry", "step_budget", "resume", "legacy"} {
 		t.Run(path, func(t *testing.T) {
 			c, item := newEvidenceRepairCoordinator(t, "repair-format-"+path)
@@ -157,6 +159,7 @@ func TestResultRepairUsesBoundSubmissionFormat(t *testing.T) {
 }
 
 func TestFinalizationFormatUsesDurableContract(t *testing.T) {
+	t.Parallel()
 	c, _ := newEvidenceRepairCoordinator(t, "durable-result-format")
 	_, ref := compiledReviewContract(t, false)
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", ResultContract: &ref}})[0]
@@ -173,6 +176,7 @@ func TestFinalizationFormatUsesDurableContract(t *testing.T) {
 }
 
 func TestFinalizationFormatPreservesFreeTextProtocol(t *testing.T) {
+	t.Parallel()
 	c, item := newEvidenceRepairCoordinator(t, "free-text-finalization")
 	prompt := c.taskFinalizationBinding(item.ID, true)
 	if !strings.Contains(prompt, "Todo ID: "+item.ID) || !strings.Contains(prompt, "complete Markdown final response") {

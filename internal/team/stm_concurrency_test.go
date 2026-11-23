@@ -16,6 +16,7 @@ import (
 )
 
 func TestUpdateSTM_ConcurrencyNoLostUpdates(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	session := &TeamSession{Workspace: tmpDir}
 	// Separate Coordinators model concurrently resumed/nested runs sharing one
@@ -55,6 +56,7 @@ func TestUpdateSTM_ConcurrencyNoLostUpdates(t *testing.T) {
 }
 
 func TestSTMWriterConcurrentAppendKeepsParseableDocument(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	const writers = 100
 	var wg sync.WaitGroup
@@ -84,6 +86,7 @@ func TestSTMWriterConcurrentAppendKeepsParseableDocument(t *testing.T) {
 }
 
 func TestSTMWriteTool_Concurrency(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(tmpDir)
 	if err != nil {
@@ -131,6 +134,7 @@ func TestSTMWriteTool_Concurrency(t *testing.T) {
 }
 
 func TestUpdateSTM_EmitsEventStoreEvent(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	es, err := NewEventStore(tmpDir, "run-test", "session-test")
 	if err != nil {
@@ -170,6 +174,7 @@ func TestUpdateSTM_EmitsEventStoreEvent(t *testing.T) {
 }
 
 func TestSaveSTMUsesAtomicWrite(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	content := "test atomic stm"
 
@@ -190,6 +195,7 @@ func TestSaveSTMUsesAtomicWrite(t *testing.T) {
 }
 
 func TestSTMWriteToolRejectsLegacyReplaceMode(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	c := &Coordinator{session: &TeamSession{Workspace: tmpDir}}
 	if err := SaveSTM(tmpDir, "# 進度\n- keep"); err != nil {

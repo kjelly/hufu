@@ -23,6 +23,7 @@ func newMemoryTestCoordinator(t *testing.T) *Coordinator {
 // survivors — which silently hid the freshest lessons (including one from
 // the very same run) from every agent that read them.
 func TestBuildLTMContextKeepsMostRecentEntries(t *testing.T) {
+	t.Parallel()
 	c := newMemoryTestCoordinator(t)
 	content := "# 常見模式\n" +
 		"- [2026-07-13] newest lesson\n" +
@@ -48,6 +49,7 @@ func TestBuildLTMContextKeepsMostRecentEntries(t *testing.T) {
 }
 
 func TestBuildMemorySuffixKeepsMostRecentLTMEntries(t *testing.T) {
+	t.Parallel()
 	c := newMemoryTestCoordinator(t)
 	content := "# 常見模式\n" +
 		"- [2026-07-13] newest lesson\n" +

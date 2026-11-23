@@ -10,6 +10,7 @@ import (
 )
 
 func TestTerminalTransferRequiresExplicitAuthorizationAndMovesControlNotProvenance(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var events []struct {
 		typ     string
@@ -94,6 +95,7 @@ func TestTerminalTransferRequiresExplicitAuthorizationAndMovesControlNotProvenan
 }
 
 func TestTerminalTransferPersistenceFailureRetainsControl(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	transfers := 0
 	manager, err := NewTerminalSessionManager(workspace, func(typ, _ string, _ map[string]interface{}) {
@@ -144,6 +146,7 @@ func TestTerminalTransferPersistenceFailureRetainsControl(t *testing.T) {
 }
 
 func TestCoordinatorTransferTerminalRejectsUnsafeRequests(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		mutate  func(*Coordinator, *TaskTracker, []*TodoItem, *TerminalTransferRequest)
@@ -189,6 +192,7 @@ func TestCoordinatorTransferTerminalRejectsUnsafeRequests(t *testing.T) {
 }
 
 func TestTerminalTransferManagerRejectsUnsafeRequests(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		mutate  func(*TerminalSessionManager, *TerminalTransferRequest, string)
@@ -309,6 +313,7 @@ func transferRequest(session *TerminalSession, sourceTaskID, destinationTaskID s
 }
 
 func TestCoordinatorTransferTerminalRequiresPausedSourceAndDeclaredDestination(t *testing.T) {
+	t.Parallel()
 	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -342,6 +347,7 @@ func TestCoordinatorTransferTerminalRequiresPausedSourceAndDeclaredDestination(t
 }
 
 func TestTerminalTransferMakesDestinationResponsibleForCleanup(t *testing.T) {
+	t.Parallel()
 	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)

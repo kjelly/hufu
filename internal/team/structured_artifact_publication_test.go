@@ -32,6 +32,7 @@ func structuredPublicationFixture(t *testing.T) (*Coordinator, *TodoItem, TaskDe
 }
 
 func TestStructuredPublicationRejectsMissingProvenanceBeforeCanonicalResult(t *testing.T) {
+	t.Parallel()
 	c, item, task, store := structuredPublicationFixture(t)
 	ref, err := store.Put(context.Background(), PutArtifactRequest{Content: []byte("draft"), Path: "draft.txt", RunID: c.executionRunID, TaskID: item.ID, Attempt: 1, Agent: item.Agent})
 	if err != nil {
@@ -51,6 +52,7 @@ func TestStructuredPublicationRejectsMissingProvenanceBeforeCanonicalResult(t *t
 }
 
 func TestStructuredPublicationRejectsStaleOccurrenceAndForgedContentClaims(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		mutate func(*ArtifactRef)
@@ -87,6 +89,7 @@ func TestStructuredPublicationRejectsStaleOccurrenceAndForgedContentClaims(t *te
 }
 
 func TestStructuredPublicationRejectsOmittedSizeClaimsForExistingNonEmptyArtifact(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		mutate func(*ArtifactRef)
@@ -121,6 +124,7 @@ func TestStructuredPublicationRejectsOmittedSizeClaimsForExistingNonEmptyArtifac
 }
 
 func TestStructuredPublicationAcceptsExactZeroByteClaims(t *testing.T) {
+	t.Parallel()
 	c, item, task, store := structuredPublicationFixture(t)
 	ref, err := store.Put(context.Background(), PutArtifactRequest{
 		Content: []byte{}, Path: "empty.txt", RunID: c.executionRunID,
@@ -147,6 +151,7 @@ func TestStructuredPublicationAcceptsExactZeroByteClaims(t *testing.T) {
 }
 
 func TestStructuredPublicationMaterializesSourceAndAttestsCurrentOccurrence(t *testing.T) {
+	t.Parallel()
 	c, item, task, _ := structuredPublicationFixture(t)
 	path := "generated/draft.txt"
 	if err := os.MkdirAll(c.session.Workspace+"/generated", 0o755); err != nil {
@@ -175,6 +180,7 @@ func TestStructuredPublicationMaterializesSourceAndAttestsCurrentOccurrence(t *t
 }
 
 func TestStructuredPublicationRejectsCASTampering(t *testing.T) {
+	t.Parallel()
 	c, item, task, store := structuredPublicationFixture(t)
 	ref, err := store.Put(context.Background(), PutArtifactRequest{Content: []byte("draft"), Path: "draft.txt", RunID: c.executionRunID, TaskID: item.ID, Attempt: 1, Agent: item.Agent})
 	if err != nil {

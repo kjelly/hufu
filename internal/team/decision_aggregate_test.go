@@ -49,6 +49,7 @@ func validated(t *testing.T, packet DecisionEvidencePacket, weights map[string]f
 // A judge-supplied overall is ignored when criteria are configured: the runtime
 // owns the arithmetic (spec §14.2).
 func TestValidateOpinionComputesOverall(t *testing.T) {
+	t.Parallel()
 	packet := aggregatePacket(t)
 	weights, err := normalizedWeights(packet.Criteria)
 	if err != nil {
@@ -69,6 +70,7 @@ func TestValidateOpinionComputesOverall(t *testing.T) {
 }
 
 func TestValidateOpinionRejections(t *testing.T) {
+	t.Parallel()
 	packet := aggregatePacket(t)
 	weights, _ := normalizedWeights(packet.Criteria)
 
@@ -152,6 +154,7 @@ func TestValidateOpinionRejections(t *testing.T) {
 
 // Out-of-range values must be rejected, never clamped into a plausible score.
 func TestValidateOpinionNeverClamps(t *testing.T) {
+	t.Parallel()
 	packet := aggregatePacket(t)
 	weights, _ := normalizedWeights(packet.Criteria)
 	o := opinion("judge-1", packet.Hash, [2]float64{12, 6}, [2]float64{4, 4}, "a", 0.7)
@@ -164,6 +167,7 @@ func TestValidateOpinionNeverClamps(t *testing.T) {
 }
 
 func TestAggregateStatistics(t *testing.T) {
+	t.Parallel()
 	packet := aggregatePacket(t)
 	weights, _ := normalizedWeights(packet.Criteria)
 	opinions := validated(t, packet, weights,
@@ -201,6 +205,7 @@ func TestAggregateStatistics(t *testing.T) {
 // The same opinions must produce a byte-identical aggregate regardless of the
 // order they arrive in (spec §14.4, test matrix C).
 func TestAggregateIsDeterministic(t *testing.T) {
+	t.Parallel()
 	packet := aggregatePacket(t)
 	weights, _ := normalizedWeights(packet.Criteria)
 	opinions := validated(t, packet, weights,
@@ -236,6 +241,7 @@ func TestAggregateIsDeterministic(t *testing.T) {
 }
 
 func TestAggregateMethods(t *testing.T) {
+	t.Parallel()
 	packet := aggregatePacket(t)
 	weights, _ := normalizedWeights(packet.Criteria)
 	// a wins on mean, b wins on majority vote.
@@ -268,6 +274,7 @@ func TestAggregateMethods(t *testing.T) {
 // Ties resolve by dispersion, then by the byte-wise smallest option ID, so the
 // same inputs never pick different winners on different runs (spec §14.6).
 func TestAggregateTieBreak(t *testing.T) {
+	t.Parallel()
 	packet := aggregatePacket(t)
 	weights, _ := normalizedWeights(packet.Criteria)
 
@@ -302,6 +309,7 @@ func TestAggregateTieBreak(t *testing.T) {
 }
 
 func TestAggregateExcludesRejectedOpinions(t *testing.T) {
+	t.Parallel()
 	packet := aggregatePacket(t)
 	weights, _ := normalizedWeights(packet.Criteria)
 	opinions := validated(t, packet, weights,
@@ -324,6 +332,7 @@ func TestAggregateExcludesRejectedOpinions(t *testing.T) {
 }
 
 func TestChallengeTrigger(t *testing.T) {
+	t.Parallel()
 	aggregate := DecisionAggregate{PreferredOption: "a", StdDev: map[string]float64{"a": 2.5}}
 
 	if run, _ := ChallengeShouldRun(ChallengePolicy{Enabled: false, Count: 1}, aggregate); run {

@@ -7,6 +7,7 @@ import (
 )
 
 func TestResultRepairModelRequiresOriginalAndCurrentLLMAdmission(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"accepted", "unknown", "bare", "missing_original", "missing_current", "agent_backend"} {
 		t.Run(mode, func(t *testing.T) {
 			policy := &ExecutionPolicySnapshot{

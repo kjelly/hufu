@@ -9,6 +9,7 @@ import (
 )
 
 func TestExecutionReceiptProjectionPreservesOutOfOrderCompletions(t *testing.T) {
+	t.Parallel()
 	list := NewTaskTracker().TodoList()
 	id := list.AddBatch([]TodoSpec{{Agent: "worker", Desc: "parallel models"}})[0].ID
 	started := time.Unix(100, 0)
@@ -64,6 +65,7 @@ func seedReceipts(t *testing.T, tl *TodoList, todoID string, receipts ...Executi
 }
 
 func TestTodoListUpdateReceiptVerifyResult(t *testing.T) {
+	t.Parallel()
 	vr := &VerificationResult{Command: "test -f x", ExitCode: 1, Stderr: "missing"}
 	tests := []struct {
 		name     string
@@ -123,6 +125,7 @@ func TestTodoListUpdateReceiptVerifyResult(t *testing.T) {
 }
 
 func TestTodoListItemsDeepCopyReceiptVerifyResult(t *testing.T) {
+	t.Parallel()
 	tl := NewTaskTracker().TodoList()
 	todoID := tl.AddBatch([]TodoSpec{{Agent: "worker", Desc: "do work"}})[0].ID
 	seedReceipts(t, tl, todoID, ExecutionReceipt{RunID: "r", Attempt: 1})
@@ -141,6 +144,7 @@ func TestTodoListItemsDeepCopyReceiptVerifyResult(t *testing.T) {
 }
 
 func TestTodoListVerificationSelectsActiveModelExecution(t *testing.T) {
+	t.Parallel()
 	for _, lifecycle := range []int{1, 2} {
 		t.Run(strconv.Itoa(lifecycle), func(t *testing.T) {
 			list := NewTaskTracker().TodoList()

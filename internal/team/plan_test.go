@@ -10,6 +10,7 @@ import (
 )
 
 func TestPlanFirstTaskCloningAndErrorPropagation(t *testing.T) {
+	t.Parallel()
 	// Initialize coordinator with necessary structs
 	c := &Coordinator{
 		session: &TeamSession{
@@ -82,6 +83,7 @@ func TestPlanFirstTaskCloningAndErrorPropagation(t *testing.T) {
 // covered by config.TestResolvePlanReviewerModel; this test only guards the
 // wiring between that resolved value and the agent actually created.
 func TestPlanReviewerUsesConfiguredModel(t *testing.T) {
+	t.Parallel()
 	pm, err := agent.NewProviderManager("http://localhost:11434", "", nil)
 	if err != nil {
 		t.Fatalf("NewProviderManager failed: %v", err)
@@ -141,6 +143,7 @@ func TestPlanReviewerPrimitivePromptIsNotRewrittenByCompiler(t *testing.T) {
 }
 
 func TestCloneCoordinatorCopiesCompactionState(t *testing.T) {
+	t.Parallel()
 	orig := &Coordinator{
 		initialPrompt: "implement feature x",
 		lastCompactionSummary: &StructuredSummary{
@@ -179,6 +182,7 @@ func TestCloneCoordinatorCopiesCompactionState(t *testing.T) {
 }
 
 func TestCloneCoordinatorKeepsNilCompactionSummary(t *testing.T) {
+	t.Parallel()
 	orig := &Coordinator{
 		initialPrompt:         "initial goal",
 		lastCompactionSummary: nil,
@@ -195,6 +199,7 @@ func TestCloneCoordinatorKeepsNilCompactionSummary(t *testing.T) {
 }
 
 func TestCloneCoordinatorCopiesInitialPromptEvenWhenLastSummaryNil(t *testing.T) {
+	t.Parallel()
 	orig := &Coordinator{
 		initialPrompt:         "initial prompt should survive",
 		lastCompactionSummary: nil,
@@ -211,6 +216,7 @@ func TestCloneCoordinatorCopiesInitialPromptEvenWhenLastSummaryNil(t *testing.T)
 }
 
 func TestCloneCoordinatorPreservesContextRoutingRuntimeState(t *testing.T) {
+	t.Parallel()
 	orig := &Coordinator{
 		session: &TeamSession{}, executionRunID: "run-extra-model",
 		memoryRankingPolicy: MemoryRuntimeRankingPolicy{CandidateTopK: 20, InjectTopK: 4, MinimumRelevance: .2},

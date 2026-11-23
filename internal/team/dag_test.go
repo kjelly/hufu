@@ -10,6 +10,7 @@ import (
 func intPtr(i int) *int { return &i }
 
 func TestValidateOnFailureTargets(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		tasks   []TaskDef
@@ -85,6 +86,7 @@ func TestValidateOnFailureTargets(t *testing.T) {
 }
 
 func TestTodoListResetForRetry(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		fromStatus TaskStatus
@@ -147,6 +149,7 @@ func TestTodoListResetForRetry(t *testing.T) {
 }
 
 func TestMarkStrandedBlocksDependentWithProducerVerifierEvidence(t *testing.T) {
+	t.Parallel()
 	coord := &Coordinator{taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}}
 	tasks := []TaskDef{{Agent: "builder"}, {Agent: "tester", DependsOn: []int{0}}}
 	items := coord.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "builder", Desc: "produce artifact"}, {Agent: "tester", Desc: "consume artifact"}})
@@ -190,6 +193,7 @@ func TestMarkStrandedBlocksDependentWithProducerVerifierEvidence(t *testing.T) {
 }
 
 func TestResetTaskAllowsFirstExecutionOfNonReplayablePendingTask(t *testing.T) {
+	t.Parallel()
 	coord := &Coordinator{taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}, taskCache: newDefaultTaskCache(taskCacheDependencies{}), maxConcurrent: 1}
 	tasks := []TaskDef{
 		{Agent: "repair", Kind: TaskKindRepair, Advances: []string{"build"}, SideEffect: SideEffectExternalWrite, Recovery: RecoveryManual},
@@ -209,6 +213,7 @@ func TestResetTaskAllowsFirstExecutionOfNonReplayablePendingTask(t *testing.T) {
 }
 
 func TestInvalidateTaskCache(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		taskCache: newDefaultTaskCache(taskCacheDependencies{}),
 	}
@@ -243,6 +248,7 @@ func TestInvalidateTaskCache(t *testing.T) {
 }
 
 func TestExecuteTasksDefaultsMaxRetriesForOnFailure(t *testing.T) {
+	t.Parallel()
 	// Mirrors the defaulting logic in ExecuteTasks: on_failure without
 	// max_retries must still trigger at least one retry.
 	tasks := []TaskDef{
@@ -263,6 +269,7 @@ func TestExecuteTasksDefaultsMaxRetriesForOnFailure(t *testing.T) {
 }
 
 func TestResetForRetryTimingReclock(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 	tl.AddBatch([]TodoSpec{{Agent: "a", Desc: "task"}})
 	tl.UpdateStatus("1", TaskInProgress, "")
@@ -280,6 +287,7 @@ func TestResetForRetryTimingReclock(t *testing.T) {
 }
 
 func TestCriterionRetryRoutingHonorsTaskRetriesAndBudget(t *testing.T) {
+	t.Parallel()
 	coord := &Coordinator{
 		taskTracker:  NewTaskTracker(),
 		reportStatus: func(StatusEvent) {},
@@ -324,6 +332,7 @@ func TestCriterionRetryRoutingHonorsTaskRetriesAndBudget(t *testing.T) {
 }
 
 func TestCriterionRetryRoutingHonorsMaxRetriesAfterBudgetReset(t *testing.T) {
+	t.Parallel()
 	coord := &Coordinator{taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}, sessionData: NewSession(), taskCache: newDefaultTaskCache(taskCacheDependencies{})}
 	coord.sessionData.CriterionResults = []CriterionResult{{ID: "build", State: CriterionFailed}}
 	tasks := []TaskDef{
@@ -359,6 +368,7 @@ func TestCriterionRetryRoutingHonorsMaxRetriesAfterBudgetReset(t *testing.T) {
 }
 
 func TestDAGSchedulerRoutesSuccessfulNoProgressWithBoundedBudget(t *testing.T) {
+	t.Parallel()
 	coord := &Coordinator{
 		taskTracker:   NewTaskTracker(),
 		reportStatus:  func(StatusEvent) {},
@@ -405,6 +415,7 @@ func TestDAGSchedulerRoutesSuccessfulNoProgressWithBoundedBudget(t *testing.T) {
 }
 
 func TestStrandedDependentKeepsDelegationOpenAndReportsProducerOutcome(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		producerStatus TaskStatus

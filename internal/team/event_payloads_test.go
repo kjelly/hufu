@@ -14,6 +14,7 @@ import (
 )
 
 func TestValidateEventPayloadSchemaV2FailsClosedForMalformedTerminalTask(t *testing.T) {
+	t.Parallel()
 	err := ValidateEventPayload(RunEvent{
 		SchemaVersion: eventStoreSchemaVersion + 1,
 		ID:            "evt-1",
@@ -31,6 +32,7 @@ func TestValidateEventPayloadSchemaV2FailsClosedForMalformedTerminalTask(t *test
 }
 
 func TestValidateEventPayloadAllowsLegacyAndUnknownEvents(t *testing.T) {
+	t.Parallel()
 	legacy := RunEvent{SchemaVersion: 1, Type: "task_started", Payload: []byte(`{}`)}
 	if err := ValidateEventPayload(legacy); err != nil {
 		t.Fatalf("legacy event rejected: %v", err)
@@ -42,6 +44,7 @@ func TestValidateEventPayloadAllowsLegacyAndUnknownEvents(t *testing.T) {
 }
 
 func TestValidateEventPayloadAcceptsTaskRemovedAndResolution(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		eventType string
 		payload   string
@@ -68,6 +71,7 @@ func TestValidateEventPayloadAcceptsTaskRemovedAndResolution(t *testing.T) {
 }
 
 func TestEventStoreRedactsBeforeHashAndPersistence(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "run-1", "session-1")
 	if err != nil {
 		t.Fatal(err)
@@ -86,6 +90,7 @@ func TestEventStoreRedactsBeforeHashAndPersistence(t *testing.T) {
 }
 
 func TestEventStorePreservesRunFinishedContextTelemetryTypes(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "run-finished-telemetry", "session-1")
 	if err != nil {
 		t.Fatal(err)
@@ -125,6 +130,7 @@ func TestEventStorePreservesRunFinishedContextTelemetryTypes(t *testing.T) {
 }
 
 func TestEventStoreIdempotencyReturnsOriginalDurableEvent(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "run-1", "session-1")
 	if err != nil {
 		t.Fatal(err)
@@ -144,6 +150,7 @@ func TestEventStoreIdempotencyReturnsOriginalDurableEvent(t *testing.T) {
 }
 
 func TestAppendPersistedWritesCurrentStrictSchema(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "run-1", "session-1")
 	if err != nil {
 		t.Fatal(err)
@@ -168,6 +175,7 @@ func (j failingJournal) ReadEvents(context.Context) ([]RunEvent, error)     { re
 func (j failingJournal) VerifyHashChain(context.Context) error              { return j.err }
 
 func TestCoordinatorSessionMessageAppendFailureDoesNotAdvanceProjection(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{sessionData: NewSession()}
 	c.SetEventJournal(failingJournal{err: errors.New("disk unavailable")})
 	c.addSessionUserMessage("do not persist this")
@@ -206,6 +214,7 @@ func (j *uniqueRecordingJournal) ReadEvents(context.Context) ([]RunEvent, error)
 func (j *uniqueRecordingJournal) VerifyHashChain(context.Context) error { return nil }
 
 func TestCommitTaskTransitionAppendsBeforeMutatingTodo(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "write report"}})[0]
 	c.SetEventJournal(failingJournal{err: errors.New("sync failed")})
@@ -230,6 +239,7 @@ func TestCommitTaskTransitionAppendsBeforeMutatingTodo(t *testing.T) {
 }
 
 func TestCommitTaskTransition_FailingJournalDoesNotMutateFailureEvidenceOrCheckpoint(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		taskTracker: NewTaskTracker(),
 		sessionData: NewSession(),
@@ -329,6 +339,7 @@ func (j *nthFailingJournal) ReadEvents(context.Context) ([]RunEvent, error) { re
 func (j *nthFailingJournal) VerifyHashChain(context.Context) error          { return nil }
 
 func TestExecuteTask_FailingJournalRetryDoesNotInvokeModelAndPreservesErrorStatus(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	worker := &failOnAttemptAgent{}
 	journal := &conditionalFailingJournal{err: errors.New("journal append failed")}
@@ -382,6 +393,7 @@ func TestExecuteTask_FailingJournalRetryDoesNotInvokeModelAndPreservesErrorStatu
 }
 
 func TestCommitTaskResetForRetry_FailingJournalPreservesTodoListAndCheckpoint(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		taskTracker: NewTaskTracker(),
 		sessionData: NewSession(),
@@ -410,6 +422,7 @@ func TestCommitTaskResetForRetry_FailingJournalPreservesTodoListAndCheckpoint(t 
 }
 
 func TestDAGScheduler_CacheHitFailingJournalDoesNotAdvanceCheckpointOrReleaseDependents(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{
@@ -453,6 +466,7 @@ func TestDAGScheduler_CacheHitFailingJournalDoesNotAdvanceCheckpointOrReleaseDep
 }
 
 func TestDAGScheduler_ResetWaveFailingJournalDoesNotResetStateOrLaunchWorker(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	worker := &failOnAttemptAgent{}
 	journal := &conditionalFailingJournal{err: errors.New("reset append failed")}
@@ -511,6 +525,7 @@ func TestDAGScheduler_ResetWaveFailingJournalDoesNotResetStateOrLaunchWorker(t *
 }
 
 func TestResumeInterruptedTasks_FailingJournalAbortDoesNotResetOrLaunch(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	worker := &failOnAttemptAgent{}
 	c := &Coordinator{
@@ -557,6 +572,7 @@ func TestResumeInterruptedTasks_FailingJournalAbortDoesNotResetOrLaunch(t *testi
 }
 
 func TestReduceToTodoList_TaskResetForRetry(t *testing.T) {
+	t.Parallel()
 	events := []RunEvent{
 		{
 			Type:    string(EventTaskCreated),
@@ -599,6 +615,7 @@ func TestReduceToTodoList_TaskResetForRetry(t *testing.T) {
 }
 
 func TestCommitTaskCreation_FailingJournalDoesNotAdvanceProjectionOrCheckpoint(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		taskTracker: NewTaskTracker(),
 		sessionData: NewSession(),
@@ -637,6 +654,7 @@ func TestCommitTaskCreation_FailingJournalDoesNotAdvanceProjectionOrCheckpoint(t
 }
 
 func TestCommitTaskRemoval_AppendsBeforeDeletingAndReplayRemoves(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "worker", Desc: "keep"},
@@ -667,6 +685,7 @@ func TestCommitTaskRemoval_AppendsBeforeDeletingAndReplayRemoves(t *testing.T) {
 }
 
 func TestCommitTaskRemoval_FailingJournalDoesNotDelete(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "keep me"}})
 	c.SetEventJournal(failingJournal{err: errors.New("event store write failed")})
@@ -679,6 +698,7 @@ func TestCommitTaskRemoval_FailingJournalDoesNotDelete(t *testing.T) {
 }
 
 func TestCommitTaskResolution_AppendsBeforeMutatingAndReplayRestores(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "failed task"}})[0]
 	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskError, "failed", "error output"); err != nil {
@@ -722,6 +742,7 @@ func TestCommitTaskResolution_AppendsBeforeMutatingAndReplayRestores(t *testing.
 }
 
 func TestCommitTaskResolution_FailingJournalDoesNotMutate(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "failed task"}})[0]
 	_ = c.taskTracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskError, "failed", "error output")
@@ -741,6 +762,7 @@ func TestCommitTaskResolution_FailingJournalDoesNotMutate(t *testing.T) {
 }
 
 func TestCommitTaskCreationResolved_AppendsDAGEdgesAndReplayRestores(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	journal := &uniqueRecordingJournal{}
 	c.SetEventJournal(journal)
@@ -807,6 +829,7 @@ func TestCommitTaskCreationResolved_AppendsDAGEdgesAndReplayRestores(t *testing.
 }
 
 func TestCommitTaskCreation_PartialAppendFailureLeavesCommittedTasksVisible(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker(), sessionData: NewSession()}
 	checkpointCalls := 0
 	c.taskTracker.TodoList().onChange = func() { checkpointCalls++ }
@@ -846,6 +869,7 @@ func TestCommitTaskCreation_PartialAppendFailureLeavesCommittedTasksVisible(t *t
 }
 
 func TestExecuteTasks_AppendsDAGEdgesInTaskCreatedPayload(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	journal := &uniqueRecordingJournal{}
 	c := &Coordinator{

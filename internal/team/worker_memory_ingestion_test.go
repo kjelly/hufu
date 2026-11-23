@@ -49,6 +49,7 @@ func wp4QueryAll(t *testing.T, repo contextstore.Repository, scope contextstore.
 }
 
 func TestWP4_VerifiedSuccessProducesConfirmedSessionMemory(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 
@@ -113,6 +114,7 @@ func TestWP4_VerifiedSuccessProducesConfirmedSessionMemory(t *testing.T) {
 }
 
 func TestWP4_UnverifiedSuccessProducesCandidateSessionMemory(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 
@@ -159,6 +161,7 @@ func TestWP4_UnverifiedSuccessProducesCandidateSessionMemory(t *testing.T) {
 }
 
 func TestWP4_ModeOffDoesNotIngest(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 
@@ -185,6 +188,7 @@ func TestWP4_ModeOffDoesNotIngest(t *testing.T) {
 }
 
 func TestWP4_AutoSaveDisabledDoesNotIngest(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 
@@ -211,6 +215,7 @@ func TestWP4_AutoSaveDisabledDoesNotIngest(t *testing.T) {
 }
 
 func TestWP4_EmptySummaryDoesNotIngest(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 
@@ -232,6 +237,7 @@ func TestWP4_EmptySummaryDoesNotIngest(t *testing.T) {
 }
 
 func TestWP4_IdempotentReIngestSameExecutionIdentity(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 
@@ -283,6 +289,7 @@ func TestWP4_IdempotentReIngestSameExecutionIdentity(t *testing.T) {
 }
 
 func TestWP4_DifferentAttemptProducesSeparateItem(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 
@@ -332,6 +339,7 @@ func TestWP4_DifferentAttemptProducesSeparateItem(t *testing.T) {
 }
 
 func TestWP4_ArtifactsBoundAsEvidence(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 
@@ -387,6 +395,7 @@ func TestWP4_ArtifactsBoundAsEvidence(t *testing.T) {
 }
 
 func TestWP4_SecretRedactionBeforePersist(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 
@@ -430,6 +439,7 @@ func TestWP4_SecretRedactionBeforePersist(t *testing.T) {
 }
 
 func TestWP4_PrivateItemNotInSharedProjection(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 
@@ -491,6 +501,7 @@ func wp4SetupCoordinator(t *testing.T, workspace string) (*Coordinator, contexts
 }
 
 func TestWP4_CoordinatorIngestVerifiedSuccess(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c, repo := wp4SetupCoordinator(t, workspace)
 
@@ -541,6 +552,7 @@ func TestWP4_CoordinatorIngestVerifiedSuccess(t *testing.T) {
 }
 
 func TestWP4_CoordinatorIngestUnverifiedIsCandidate(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c, repo := wp4SetupCoordinator(t, workspace)
 
@@ -581,6 +593,7 @@ func TestWP4_CoordinatorIngestUnverifiedIsCandidate(t *testing.T) {
 }
 
 func TestWP4_CoordinatorIngestModeOffNoWrite(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c, repo := wp4SetupCoordinator(t, workspace)
 
@@ -607,6 +620,7 @@ func TestWP4_CoordinatorIngestModeOffNoWrite(t *testing.T) {
 }
 
 func TestWP4_CoordinatorIngestDisabledProfileNoWrite(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c, repo := wp4SetupCoordinator(t, workspace)
 
@@ -637,6 +651,7 @@ func TestWP4_CoordinatorIngestDisabledProfileNoWrite(t *testing.T) {
 }
 
 func TestWP4_CoordinatorIngestIdempotentOnRetry(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c, repo := wp4SetupCoordinator(t, workspace)
 
@@ -670,6 +685,7 @@ func TestWP4_CoordinatorIngestIdempotentOnRetry(t *testing.T) {
 }
 
 func TestWP4_CoordinatorIngestFailureDoesNotPanic(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c, _ := wp4SetupCoordinator(t, workspace)
 
@@ -690,6 +706,7 @@ func TestWP4_CoordinatorIngestFailureDoesNotPanic(t *testing.T) {
 }
 
 func TestWP4_BuildWorkerSessionSummaryBounded(t *testing.T) {
+	t.Parallel()
 	goal := strings.Repeat("a", 1000)
 	result := &TaskResult{
 		Summary: strings.Repeat("b", 1000),
@@ -711,6 +728,7 @@ func TestWP4_BuildWorkerSessionSummaryBounded(t *testing.T) {
 }
 
 func TestWP4_BuildWorkerSessionSummaryFreeTextFallback(t *testing.T) {
+	t.Parallel()
 	summary := buildWorkerSessionSummary("do the thing", nil, "free text output here")
 	if !strings.Contains(summary, "Output:") {
 		t.Errorf("summary with nil result should use Output fallback: %q", summary)
@@ -721,6 +739,7 @@ func TestWP4_BuildWorkerSessionSummaryFreeTextFallback(t *testing.T) {
 }
 
 func TestWP4_ShouldIngestWorkerMemory(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		agentDef *agent.AgentDef
@@ -777,6 +796,7 @@ func TestWP4_ShouldIngestWorkerMemory(t *testing.T) {
 // --- Cross-agent isolation test ---
 
 func TestWP4_AgentAIngestNotVisibleToAgentB(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 

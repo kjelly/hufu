@@ -105,6 +105,7 @@ func assertDecisionAdmissionIntent(t *testing.T, want, got TaskDef) {
 }
 
 func TestDecisionAdmissionIntentSurvivesTodoCheckpointAndEventReplay(t *testing.T) {
+	t.Parallel()
 	task := decisionAdmissionTask()
 	item := todoItemFromSpec(decisionAdmissionTodoSpec(task), "todo-1")
 	assertDecisionAdmissionIntent(t, task, taskDefFromTodoItem(item))
@@ -131,6 +132,7 @@ func TestDecisionAdmissionIntentSurvivesTodoCheckpointAndEventReplay(t *testing.
 }
 
 func TestExecuteTasksPersistsDecisionAdmissionIntent(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	c.delegatedTasks = make(map[string]int)
 	c.SetSessionData(NewSession())
@@ -164,6 +166,7 @@ func TestExecuteTasksPersistsDecisionAdmissionIntent(t *testing.T) {
 }
 
 func TestTaskDefFromTodoItemPreservesMarkerlessLogicalID(t *testing.T) {
+	t.Parallel()
 	item := todoItemFromSpec(TodoSpec{Agent: "worker", Desc: "markerless occurrence"}, "todo-runtime-1")
 	got := taskDefFromTodoItem(item)
 	if got.ID != "" {
@@ -172,6 +175,7 @@ func TestTaskDefFromTodoItemPreservesMarkerlessLogicalID(t *testing.T) {
 }
 
 func TestResumeInterruptedDecisionTaskRetainsAdmissionBeforeFirstDecisionEvent(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	journal := &memoryJournal{}
 	const runID = "run-resume-decision-admission"
@@ -266,6 +270,7 @@ func TestResumeInterruptedDecisionTaskRetainsAdmissionBeforeFirstDecisionEvent(t
 // arming, and the tool hooks stay no-ops. This is the compatibility guarantee
 // for every team that has not adopted decision profiles (Phase 3.5 invariant 1).
 func TestPrepareTaskDecisionIsInertWithoutAProfile(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	journal := c.eventJournal.(*memoryJournal)
 
@@ -287,6 +292,7 @@ func TestPrepareTaskDecisionIsInertWithoutAProfile(t *testing.T) {
 }
 
 func TestPrepareTaskDecisionRejectsDurableTaskWithoutAdmission(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	task := decisionAdmissionTask()
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{decisionAdmissionTodoSpec(task)})[0]
@@ -297,6 +303,7 @@ func TestPrepareTaskDecisionRejectsDurableTaskWithoutAdmission(t *testing.T) {
 }
 
 func TestPrepareTaskDecisionWithoutProfileAndJournalIsInert(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	c.eventJournal = eventStoreJournal{}
 
@@ -311,6 +318,7 @@ func TestPrepareTaskDecisionWithoutProfileAndJournalIsInert(t *testing.T) {
 }
 
 func TestPrepareTaskDecisionEnabledProfileWithoutJournalFailsClosed(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	c.eventJournal = eventStoreJournal{}
 	task := decisionTask()
@@ -327,6 +335,7 @@ func TestPrepareTaskDecisionEnabledProfileWithoutJournalFailsClosed(t *testing.T
 
 // The reserved off profile is equally inert, even when set explicitly.
 func TestPrepareTaskDecisionOffProfileIsInert(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	c.SetDecisionProfile(agent.DecisionProfileOff)
 
@@ -343,6 +352,7 @@ func TestPrepareTaskDecisionOffProfileIsInert(t *testing.T) {
 }
 
 func TestPrepareTaskDecisionUnreadableJournalFailsClosedWithProfileOff(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	c.eventJournal = failingJournal{err: errors.New("journal read failed")}
 
@@ -353,6 +363,7 @@ func TestPrepareTaskDecisionUnreadableJournalFailsClosedWithProfileOff(t *testin
 }
 
 func TestPrepareTaskDecisionReadableEmptyJournalWithProfileOffIsInert(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 
 	disarm, err := c.prepareTaskDecision(context.Background(), decisionTask(), "todo-1")
@@ -370,6 +381,7 @@ func TestPrepareTaskDecisionReadableEmptyJournalWithProfileOffIsInert(t *testing
 
 // An unknown profile fails before any work starts, whichever layer set it.
 func TestPrepareTaskDecisionRejectsUnknownProfile(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	task := decisionTask()
 	task.DecisionProfile = "paranoid"
@@ -383,6 +395,7 @@ func TestPrepareTaskDecisionRejectsUnknownProfile(t *testing.T) {
 // A task that selects a profile but declares no alternatives is a
 // configuration error, not an empty decision.
 func TestFormTaskDecisionRequiresDeclaredOptions(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	task := decisionTask()
 	task.DecisionProfile = "standard"
@@ -397,6 +410,7 @@ func TestFormTaskDecisionRequiresDeclaredOptions(t *testing.T) {
 // Running with no judge model would be a silent reduction to zero judges,
 // which §34 forbids. It must fail closed instead.
 func TestFormTaskDecisionFailsClosedWithoutAJudgeModel(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	task := decisionTask()
 	task.DecisionProfile = "standard"
@@ -411,6 +425,7 @@ func TestFormTaskDecisionFailsClosedWithoutAJudgeModel(t *testing.T) {
 }
 
 func TestValidateDecisionProfiles(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 
 	if err := c.ValidateDecisionProfiles([]TaskDef{{ID: "t1"}, {ID: "t2", DecisionProfile: "standard"}}); err != nil {
@@ -440,6 +455,7 @@ func TestValidateDecisionProfiles(t *testing.T) {
 
 // The precedence chain's top layer has to actually reach the resolver.
 func TestDecisionProfileOverrideReachesResolution(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	c.SetDecisionProfile("standard")
 
@@ -460,6 +476,7 @@ func TestDecisionProfileOverrideReachesResolution(t *testing.T) {
 // always zero, so the attempts kill criterion could never fire. It must now
 // track the task's real attempt.
 func TestArmedDisciplineTracksRealAttempt(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "migrate"}})
 	todoID := items[0].ID
@@ -495,6 +512,7 @@ func TestArmedDisciplineTracksRealAttempt(t *testing.T) {
 }
 
 func TestTaskAttemptDefaultsToOne(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	if got := c.taskAttempt("unknown-todo"); got != 1 {
 		t.Fatalf("taskAttempt = %d, want 1", got)
@@ -508,6 +526,7 @@ func TestTaskAttemptDefaultsToOne(t *testing.T) {
 // decision-options and decision-assumptions are configuration-only for the
 // same reason decision-profile is (spec §19).
 func TestDecisionOptionsCannotComeFromTaskPayload(t *testing.T) {
+	t.Parallel()
 	payload := `{"agent":"worker","goal":"go","decision_options":[{"id":"x","kind":"execute"}],` +
 		`"decision_assumptions":[{"id":"A1","statement":"s"}]}`
 	var task TaskDef

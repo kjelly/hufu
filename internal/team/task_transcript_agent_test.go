@@ -6,6 +6,7 @@ import "testing"
 // attaches its transcript to the typed result, and a dependent task accepts
 // that artifact only when its recorded agent matches the producer's result.
 func TestTaskTranscriptArtifactCarriesProducerAgent(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		agent       string

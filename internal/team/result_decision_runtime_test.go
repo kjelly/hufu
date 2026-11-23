@@ -132,6 +132,7 @@ func (f *boundDecisionFixture) submission(t *testing.T, mutate func(map[string]a
 }
 
 func TestBoundDecisionCoverageReplayAndAssembly(t *testing.T) {
+	t.Parallel()
 	for _, count := range []int{0, 1, 32} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			f := newBoundDecisionFixture(t, count)
@@ -173,6 +174,7 @@ func TestBoundDecisionCoverageReplayAndAssembly(t *testing.T) {
 }
 
 func TestBoundDecisionContractRevalidationPreservesOriginalRequest(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"valid", "missing_proof", "wrong_original", "changed_mapping", "new_submission"} {
 		t.Run(name, func(t *testing.T) {
 			f := newBoundDecisionFixture(t, 1)
@@ -231,6 +233,7 @@ func TestBoundDecisionContractRevalidationPreservesOriginalRequest(t *testing.T)
 }
 
 func TestBoundDecisionContractRevalidationPreservesAncestorScope(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"retained", "forged_event", "forged_digest", "sibling_event"} {
 		t.Run(name, func(t *testing.T) {
 			f := newBoundDecisionFixture(t, 1)
@@ -302,6 +305,7 @@ func TestBoundDecisionContractRevalidationPreservesAncestorScope(t *testing.T) {
 }
 
 func TestBoundDecisionRejectsInvalidSubmission(t *testing.T) {
+	t.Parallel()
 	f := newBoundDecisionFixture(t, 2)
 	if r := f.call(t, 0, "first"); r.IsError {
 		t.Fatal(r.Content)
@@ -346,6 +350,7 @@ func TestBoundDecisionRejectsInvalidSubmission(t *testing.T) {
 }
 
 func TestBoundDecisionConcurrentAndDrift(t *testing.T) {
+	t.Parallel()
 	f := newBoundDecisionFixture(t, 1)
 	var wg sync.WaitGroup
 	for i := range 8 {
@@ -385,6 +390,7 @@ func TestBoundDecisionConcurrentAndDrift(t *testing.T) {
 }
 
 func TestBoundDecisionInterruptedNeverRetries(t *testing.T) {
+	t.Parallel()
 	f := newBoundDecisionFixture(t, 1)
 	events, err := f.c.readActiveLineageEvents(t.Context())
 	if err != nil {
@@ -428,6 +434,7 @@ func TestBoundDecisionInterruptedNeverRetries(t *testing.T) {
 }
 
 func TestDecisionPrimitiveNoNetKeepsInferenceGrants(t *testing.T) {
+	t.Parallel()
 	f := newBoundDecisionFixture(t, 1)
 	f.c.noNet = true
 	f.c.session.Agents["worker"].NoNet = true
@@ -445,6 +452,7 @@ func TestDecisionPrimitiveNoNetKeepsInferenceGrants(t *testing.T) {
 }
 
 func TestBoundDecisionBlockedEnvelopeDoesNotRequireSettledPayload(t *testing.T) {
+	t.Parallel()
 	for _, gated := range []bool{false, true} {
 		t.Run(fmt.Sprint(gated), func(t *testing.T) {
 			f := newBoundDecisionFixture(t, 1)
@@ -482,6 +490,7 @@ func TestBoundDecisionBlockedEnvelopeDoesNotRequireSettledPayload(t *testing.T) 
 }
 
 func TestBoundDecisionBlockedExceptionDoesNotRelaxSuccessfulPayloads(t *testing.T) {
+	t.Parallel()
 	for _, input := range []string{
 		`{"status":"success","summary":"done"}`,
 		`{"status":"completed_with_gaps","summary":"done"}`,
@@ -503,6 +512,7 @@ func TestBoundDecisionBlockedExceptionDoesNotRelaxSuccessfulPayloads(t *testing.
 }
 
 func TestBoundDecisionSearchContextIncludesOnlyShownExcerpts(t *testing.T) {
+	t.Parallel()
 	f := newBoundDecisionFixture(t, 1)
 	artifacts, err := NewFileArtifactStore(f.c.session.Workspace, f.c.projectDir)
 	if err != nil {
@@ -550,6 +560,7 @@ func (a *boundDecisionBlockedWorker) Generate(ctx context.Context, call fantasy.
 }
 
 func TestBoundDecisionBlockedActualWorkerStopsWithoutProtocolRepair(t *testing.T) {
+	t.Parallel()
 	f := newBoundDecisionFixture(t, 1)
 	def := f.c.session.Agents["worker"]
 	def.Generation.Model = "test"
@@ -576,6 +587,7 @@ func TestBoundDecisionBlockedActualWorkerStopsWithoutProtocolRepair(t *testing.T
 }
 
 func TestBoundDecisionConditionalClaimsAreRepairable(t *testing.T) {
+	t.Parallel()
 	f := newBoundDecisionFixture(t, 1, func(root map[string]any) {
 		item := root["properties"].(map[string]any)["decisions"].(map[string]any)["items"].(map[string]any)
 		item["properties"].(map[string]any)["reason"] = map[string]any{"type": "string"}

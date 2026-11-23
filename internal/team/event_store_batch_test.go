@@ -15,6 +15,7 @@ func eventBatchFixture() []RunEvent {
 }
 
 func TestEventStoreAtomicBatchReplay(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "run-batch", "session-batch")
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +51,7 @@ func TestEventStoreAtomicBatchReplay(t *testing.T) {
 }
 
 func TestEventStoreAtomicBatchRollsBackEveryMember(t *testing.T) {
+	t.Parallel()
 	for _, failure := range []string{"validation", "database", "cancelled"} {
 		t.Run(failure, func(t *testing.T) {
 			store, err := NewEventStore(t.TempDir(), "run-batch", "session-batch")
@@ -86,6 +88,7 @@ func TestEventStoreAtomicBatchRollsBackEveryMember(t *testing.T) {
 }
 
 func TestEventStoreAtomicBatchReconcilesUncertainCommit(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-batch", "session-batch")
 	if err != nil {

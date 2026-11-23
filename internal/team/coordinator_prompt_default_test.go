@@ -9,6 +9,7 @@ import (
 )
 
 func TestDefaultOrchestratorSystemUsesWorkerSkillContract(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	orch := &agent.AgentDef{Name: "coordinator", Role: "coordinator", System: ""}
 	c := &Coordinator{
@@ -52,6 +53,7 @@ func TestDefaultOrchestratorSystemUsesWorkerSkillContract(t *testing.T) {
 }
 
 func TestCustomOrchestratorSystemIncludesGeneratedWorkerSkillContract(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	orch := &agent.AgentDef{Name: "coordinator", Role: "coordinator", System: "Custom coordinator policy: preserve the user contract."}
 	c := &Coordinator{
@@ -91,6 +93,7 @@ func TestCustomOrchestratorSystemIncludesGeneratedWorkerSkillContract(t *testing
 }
 
 func TestAutoSkillCoordinatorPromptUsesGrantOnlyWorkerGuidance(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Workspace: t.TempDir(),

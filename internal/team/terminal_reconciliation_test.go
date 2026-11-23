@@ -5,14 +5,17 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 func TestPendingTerminalCommitReconcilesDelayedAppendExactlyOnce(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-delayed", "session-delayed")
 	if err != nil {
@@ -20,14 +23,15 @@ func TestPendingTerminalCommitReconcilesDelayedAppendExactlyOnce(t *testing.T) {
 	}
 	defer store.Close()
 
-	entered := make(chan struct{})
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
 	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock()
 	store.commitHook = func() error {
-		select {
-		case <-entered:
-		default:
-			close(entered)
-		}
+		// Cancel the caller only after the append has reached the fixture's
+		// delayed acknowledgement. The hook retains the append until release.
+		cancel()
 		<-release
 		return nil
 	}
@@ -45,16 +49,9 @@ func TestPendingTerminalCommitReconcilesDelayedAppendExactlyOnce(t *testing.T) {
 	c.prepareTerminalResult(candidate)
 	c.finishTerminalPreparation()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	_, err = c.commitTerminalLifecycle(ctx, candidate)
-	cancel()
-	if err == nil || !strings.Contains(err.Error(), "durability unknown") {
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "durability unknown") {
 		t.Fatalf("commit error = %v, want bounded durability error", err)
-	}
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("append did not reach the delayed sync")
 	}
 	saved := LoadSession(workspace)
 	if saved == nil || !saved.RecoveryRequired || saved.PendingTerminalCommit == nil {
@@ -64,7 +61,7 @@ func TestPendingTerminalCommitReconcilesDelayedAppendExactlyOnce(t *testing.T) {
 		t.Fatalf("pending identity = %#v", saved.PendingTerminalCommit)
 	}
 
-	close(release)
+	unblock()
 	if _, err := store.ReadEvents(); err != nil {
 		t.Fatal(err)
 	}
@@ -104,6 +101,7 @@ func TestPendingTerminalCommitReconcilesDelayedAppendExactlyOnce(t *testing.T) {
 }
 
 func TestEmergencyWaiterTimeoutDoesNotLeaveRecoveryAfterNormalCommit(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-emergency-waiter", "session-emergency-waiter")
 	if err != nil {
@@ -194,6 +192,7 @@ func TestEmergencyWaiterTimeoutDoesNotLeaveRecoveryAfterNormalCommit(t *testing.
 }
 
 func TestPendingTerminalCommitWrongIdentityRemainsRecoveryRequired(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name        string
 		eventKey    string
@@ -237,6 +236,7 @@ func TestPendingTerminalCommitWrongIdentityRemainsRecoveryRequired(t *testing.T)
 }
 
 func TestRuntimeWorksetPointerRequiresCanonicalEvidenceMembership(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	content := []byte(`{"schema_version":1,"items":[]}`)
 	digest := sha256.Sum256(content)
@@ -280,6 +280,7 @@ func TestRuntimeWorksetPointerRequiresCanonicalEvidenceMembership(t *testing.T) 
 }
 
 func TestCanonicalRunSnapshotUsesActiveBranchLineage(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	tree := NewSessionTree()
 	feature, err := tree.CreateRootBranch("feature")
@@ -315,6 +316,7 @@ func TestCanonicalRunSnapshotUsesActiveBranchLineage(t *testing.T) {
 }
 
 func TestCanonicalRunSnapshotUsesEnvelopeRunIDForHistoricalPayload(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-historical", "session-historical")
 	if err != nil {

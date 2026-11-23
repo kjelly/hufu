@@ -12,6 +12,7 @@ import (
 )
 
 func TestExplicitAppliedMemoryReceivesVerifiedCredit(t *testing.T) {
+	t.Parallel()
 	c, repo := outcomeTestCoordinator(t, "memory-1")
 	item := outcomeTestItem([]MemoryUseRef{{RetrievalID: "retrieval-1", ContextItemID: "memory-1", Disposition: MemoryUseApplied, Confidence: 1}}, &VerificationResult{ExitCode: 0})
 	c.recordMemoryOutcomeForTask(item, "task_completed")
@@ -25,6 +26,7 @@ func TestExplicitAppliedMemoryReceivesVerifiedCredit(t *testing.T) {
 }
 
 func TestUnknownFailureDoesNotPenalizeMemory(t *testing.T) {
+	t.Parallel()
 	c, repo := outcomeTestCoordinator(t, "memory-1")
 	item := outcomeTestItem([]MemoryUseRef{{RetrievalID: "retrieval-1", ContextItemID: "memory-1", Disposition: MemoryUseApplied, Confidence: 1}}, nil)
 	c.recordMemoryOutcomeForTask(item, "task_failed")
@@ -38,6 +40,7 @@ func TestUnknownFailureDoesNotPenalizeMemory(t *testing.T) {
 }
 
 func TestOutcomeCreditIsCappedAndNormalized(t *testing.T) {
+	t.Parallel()
 	c, repo := outcomeTestCoordinator(t, "memory-1", "memory-2")
 	uses := []MemoryUseRef{
 		{RetrievalID: "retrieval-1", ContextItemID: "memory-1", Disposition: MemoryUseApplied, Confidence: 1},
@@ -58,6 +61,7 @@ func TestOutcomeCreditIsCappedAndNormalized(t *testing.T) {
 }
 
 func TestOutcomeCreditIsCappedPerSignal(t *testing.T) {
+	t.Parallel()
 	c, repo := outcomeTestCoordinator(t, "memory-1", "memory-2")
 	uses := []MemoryUseRef{
 		{RetrievalID: "retrieval-1", ContextItemID: "memory-1", Disposition: MemoryUseApplied, Confidence: 1},
@@ -84,6 +88,7 @@ func TestOutcomeCreditIsCappedPerSignal(t *testing.T) {
 }
 
 func TestCausalVerificationFailureDemotesMemory(t *testing.T) {
+	t.Parallel()
 	c, repo := outcomeTestCoordinator(t, "memory-1")
 	item := outcomeTestItem([]MemoryUseRef{{RetrievalID: "retrieval-1", ContextItemID: "memory-1", Disposition: MemoryUseApplied, Confidence: 1}}, &VerificationResult{ExitCode: 1})
 	item.TypedResult.Commands = []CommandResult{{Command: "go test ./...", ExitCode: 1}}
@@ -98,10 +103,12 @@ func TestCausalVerificationFailureDemotesMemory(t *testing.T) {
 }
 
 func TestResumeDoesNotDoubleCountOutcome(t *testing.T) {
+	t.Parallel()
 	testRepeatedOutcomeDoesNotDoubleCount(t)
 }
 
 func TestMemoryOutcomeWeightForSignalFiltersByManifestAcrossRuns(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "run-a", "session-memory-credit")
 	if err != nil {
 		t.Fatal(err)
@@ -145,6 +152,7 @@ func TestMemoryOutcomeWeightForSignalFiltersByManifestAcrossRuns(t *testing.T) {
 }
 
 func TestMemoryOutcomeCreditReadFailureDoesNotAppendBeforeRecovery(t *testing.T) {
+	t.Parallel()
 	c, _ := outcomeTestCoordinator(t, "memory-1")
 	item := outcomeTestItem([]MemoryUseRef{{RetrievalID: "retrieval-2", ContextItemID: "memory-1", Disposition: MemoryUseApplied, Confidence: 1}}, nil)
 	item.TypedResult.Attempt = 2
@@ -196,6 +204,7 @@ func TestMemoryOutcomeCreditReadFailureDoesNotAppendBeforeRecovery(t *testing.T)
 }
 
 func TestRepairMemoryLearningGapsClassifiesLegacyCreditGapForManualReview(t *testing.T) {
+	t.Parallel()
 	c, _ := outcomeTestCoordinator(t)
 	c.sessionData = &SessionData{LearningGaps: []LearningGap{{
 		EventType: "memory_outcome_recorded", TaskID: "task-1", PendingRepair: true,
@@ -211,6 +220,7 @@ func TestRepairMemoryLearningGapsClassifiesLegacyCreditGapForManualReview(t *tes
 }
 
 func TestMemoryOutcomeWithoutAttributionDoesNotRecordReadGap(t *testing.T) {
+	t.Parallel()
 	c, _ := outcomeTestCoordinator(t, "memory-1")
 	item := outcomeTestItem([]MemoryUseRef{{RetrievalID: "retrieval-1", ContextItemID: "memory-1", Disposition: MemoryUseApplied, Confidence: 1}}, nil)
 	item.MemoryManifests = nil
@@ -223,6 +233,7 @@ func TestMemoryOutcomeWithoutAttributionDoesNotRecordReadGap(t *testing.T) {
 }
 
 func TestFastPathUpgradeDoesNotDoubleCountOutcome(t *testing.T) {
+	t.Parallel()
 	testRepeatedOutcomeDoesNotDoubleCount(t)
 }
 

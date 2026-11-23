@@ -11,6 +11,7 @@ import (
 )
 
 func TestRunBuildIdentityPersistsThroughReplayAndReports(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store, err := NewEventStore(dir, "old-run", "session")
 	if err != nil {
@@ -77,6 +78,7 @@ func TestRunBuildIdentityPersistsThroughReplayAndReports(t *testing.T) {
 }
 
 func TestTaskJournalCompactionPreservesProducerBuild(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	journal, err := openTaskJournal(workspace)
 	if err != nil {
@@ -106,6 +108,7 @@ func TestTaskJournalCompactionPreservesProducerBuild(t *testing.T) {
 }
 
 func TestInvocationRecordsCurrentBuild(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	_, finish, err := c.beginPublicInvocationExecutionRun(t.Context())
 	if err != nil {

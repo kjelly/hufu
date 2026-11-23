@@ -6,6 +6,7 @@ import (
 )
 
 func TestAbortedPreflightTerminalRecovery(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"aborted", "missing_abort", "model_activity", "tool_activity", "unknown_event", "started_turn", "wrong_key", "wrong_branch"} {
 		t.Run(mode, func(t *testing.T) {
 			c := newTestCoordinator(t)

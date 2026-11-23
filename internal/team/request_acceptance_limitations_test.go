@@ -7,6 +7,7 @@ import (
 )
 
 func TestRequestAcceptanceContextualLimitationsDoNotInventRequirements(t *testing.T) {
+	t.Parallel()
 	for _, response := range []bool{false, true} {
 		t.Run(map[bool]string{false: "relevant source parts", true: "analysis with limitations"}[response], func(t *testing.T) {
 			c := requestAcceptanceFixture(t)
@@ -55,6 +56,7 @@ func TestRequestAcceptanceContextualLimitationsDoNotInventRequirements(t *testin
 }
 
 func TestRequestAcceptanceLimitationsCannotWaiveMissingRequiredMaterial(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"target", "extent", "source", "blocking gap"} {
 		t.Run(scenario, func(t *testing.T) {
 			requirement := RequestRequirement{ID: "requirement-1", Verification: "observed", Delivery: &RequestDelivery{
@@ -79,6 +81,7 @@ func TestRequestAcceptanceLimitationsCannotWaiveMissingRequiredMaterial(t *testi
 }
 
 func TestRequestAcceptanceLimitationNotesRemainBounded(t *testing.T) {
+	t.Parallel()
 	requirement := RequestRequirement{ID: "requirement-1", Delivery: &RequestDelivery{Target: "analysis", Extent: "not_applicable", Source: "any"}}
 	for _, notes := range [][]string{{""}, {strings.Repeat("x", 1025)}, {"1", "2", "3", "4", "5", "6", "7", "8", "9"}} {
 		assessment := &RequestDeliveryAssessment{Match: "requested", Extent: "full", Source: "not_applicable", Gaps: []string{}, Limitations: notes}
@@ -89,6 +92,7 @@ func TestRequestAcceptanceLimitationNotesRemainBounded(t *testing.T) {
 }
 
 func TestRequestAcceptanceUnconstrainedResponseCanonicalizesPolicyMarker(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	snapshot := freezeRequestFixture(t, c, "Explain the observed differences", "response")
 	const answer = "The differences are explained with appropriate limits."
@@ -109,6 +113,7 @@ func TestRequestAcceptanceUnconstrainedResponseCanonicalizesPolicyMarker(t *test
 }
 
 func TestRequestAcceptancePolicyMarkerDoesNotEstablishMaterialProvenance(t *testing.T) {
+	t.Parallel()
 	for _, verification := range []string{"observed", "response"} {
 		requirement := RequestRequirement{ID: "requirement-1", Verification: verification, Delivery: &RequestDelivery{Target: "source", Extent: "full", Source: "primary"}}
 		assessment := &RequestDeliveryAssessment{Match: "requested", Extent: "full", Source: "any", Gaps: []string{}}

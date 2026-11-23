@@ -203,6 +203,9 @@ func legacySubmissionFixture(t *testing.T, endpoint string, options ...legacySub
 }
 
 func TestContractRecoveryRepairsLegacySubmissionWithoutWorkerReplay(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, scenario := range []struct {
 		name          string
 		valid, source bool

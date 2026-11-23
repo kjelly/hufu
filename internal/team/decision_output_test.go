@@ -7,6 +7,7 @@ import (
 )
 
 func TestDecisionOutputCompletedInvariant(t *testing.T) {
+	t.Parallel()
 	logical := "ldr_0123456789abcdef0123456789abcdef"
 	identifier := "value-1"
 	digest := strings.Repeat("a", 64)
@@ -32,6 +33,7 @@ func TestDecisionOutputCompletedInvariant(t *testing.T) {
 }
 
 func TestDecisionOutputNullableFieldsAreExplicit(t *testing.T) {
+	t.Parallel()
 	value := NewDecisionOutputV1("decision_run_preview")
 	value.Outcome = "preview"
 	value.ExitCode = 0
@@ -50,6 +52,7 @@ func TestDecisionOutputNullableFieldsAreExplicit(t *testing.T) {
 }
 
 func TestDecisionRecordViewRedactsBoundsAndRoundsForecastHalfEven(t *testing.T) {
+	t.Parallel()
 	record := DecisionRecord{
 		SchemaVersion: 3, FinalOption: "ship", Probability: 0.1234565,
 		Options:    []DecisionOption{{ID: "ship", Kind: OptionExecute, Title: "password=super-secret-value"}},
@@ -69,6 +72,7 @@ func TestDecisionRecordViewRedactsBoundsAndRoundsForecastHalfEven(t *testing.T) 
 }
 
 func TestRedactDecisionOutputPreservesNumericTelemetry(t *testing.T) {
+	t.Parallel()
 	value := NewDecisionOutputV1("decision_run_preview")
 	value.Outcome = "preview"
 	value.ExitCode = 0
@@ -84,6 +88,7 @@ func TestRedactDecisionOutputPreservesNumericTelemetry(t *testing.T) {
 }
 
 func TestDecisionOutputRejectsInconsistentCoverage(t *testing.T) {
+	t.Parallel()
 	value := NewDecisionOutputV1("decision_run_result")
 	value.Coverage = &DecisionOutputCoverageV1{
 		InventoryRef:   DecisionArtifactRef{ID: "inventory", SHA256: strings.Repeat("a", 64), MediaType: "application/json", SizeBytes: 1},

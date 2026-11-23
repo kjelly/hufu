@@ -82,6 +82,7 @@ func (f beliefFixture) policyViews(t *testing.T) []BeliefSuggestionView {
 }
 
 func TestBeliefPolicyCatalogAndConfigurationBoundary(t *testing.T) {
+	t.Parallel()
 	f := newBeliefFixture(t)
 	for _, mutate := range []func(*belief.Policy, *ActionCatalogSnapshot){
 		func(p *belief.Policy, _ *ActionCatalogSnapshot) { p.Mode = "active" },
@@ -147,6 +148,7 @@ func TestBeliefPolicyCatalogAndConfigurationBoundary(t *testing.T) {
 }
 
 func TestBeliefPolicyDurableGenerationAndRetraction(t *testing.T) {
+	t.Parallel()
 	f := newBeliefPolicyFixture(t)
 	snapshot := f.policySnapshot(t)
 	first, err := f.journal.SuggestPolicy(t.Context(), f.epoch.ID, snapshot, 0)
@@ -216,6 +218,7 @@ func (j *beliefPolicyFaultJournal) AppendAtHead(ctx context.Context, event RunEv
 }
 
 func TestBeliefPolicyLateAppendAndUncertainCommit(t *testing.T) {
+	t.Parallel()
 	f := newBeliefPolicyFixture(t)
 	oldSnapshot := f.policySnapshot(t)
 	adapter := &beliefPolicyFaultJournal{ConditionalEventJournal: eventStoreJournal{f.store}, before: func() {
@@ -245,6 +248,7 @@ func TestBeliefPolicyLateAppendAndUncertainCommit(t *testing.T) {
 }
 
 func TestBeliefPolicyConcurrentWriters(t *testing.T) {
+	t.Parallel()
 	f := newBeliefPolicyFixture(t)
 	snapshot := f.policySnapshot(t)
 	start := make(chan struct{})
@@ -278,6 +282,7 @@ func TestBeliefPolicyConcurrentWriters(t *testing.T) {
 }
 
 func TestBeliefPolicyReplayRejectsForgedAdvice(t *testing.T) {
+	t.Parallel()
 	f := newBeliefPolicyFixture(t)
 	if _, err := f.journal.SuggestPolicy(t.Context(), f.epoch.ID, f.policySnapshot(t), 0); err != nil {
 		t.Fatal(err)
@@ -312,6 +317,7 @@ func TestBeliefPolicyReplayRejectsForgedAdvice(t *testing.T) {
 }
 
 func TestBeliefPolicyAppendCapacityBoundaries(t *testing.T) {
+	t.Parallel()
 	// One append at the last available slot is replayable. Exhausting either
 	// the run history or epoch generation must refuse it before journal I/O.
 	for _, test := range []struct {

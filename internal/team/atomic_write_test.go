@@ -10,6 +10,7 @@ import (
 )
 
 func TestAtomicWriteFileSuccess(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "test.json")
 	data := []byte(`{"hello":"world"}`)
@@ -28,6 +29,7 @@ func TestAtomicWriteFileSuccess(t *testing.T) {
 }
 
 func TestAtomicCreateFileNeverOverwrites(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "new.txt")
 	if err := AtomicCreateFile(target, []byte("first"), 0o644); err != nil {
 		t.Fatal(err)
@@ -45,6 +47,7 @@ func TestAtomicCreateFileNeverOverwrites(t *testing.T) {
 }
 
 func TestSweepStaleAtomicTempFiles(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	stale := filepath.Join(dir, "logs", "event_store.jsonl.tmp.09138b0b")
 	fresh := filepath.Join(dir, "session_tree.json.tmp.f10eac63")
@@ -76,6 +79,7 @@ func TestSweepStaleAtomicTempFiles(t *testing.T) {
 }
 
 func TestLoadSessionCrashRecovery(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	// A truncated checkpoint is rejected rather than half-decoded.
 	putRuntimeDocument(t, dir, runtimestore.DocumentSession, []byte(`{"created_at":`))

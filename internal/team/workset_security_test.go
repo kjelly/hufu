@@ -22,6 +22,7 @@ type artifactAwareStructuredTestTool struct {
 func (*artifactAwareStructuredTestTool) boundArtifactPolicyTool() {}
 
 func TestWorksetArtifactAuthorizationRequiresExactCommittedReceipt(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		mutate     func(*TodoItem, *WorksetExpansionReceipt)
@@ -57,6 +58,7 @@ func TestWorksetArtifactAuthorizationRequiresExactCommittedReceipt(t *testing.T)
 }
 
 func TestLegitimateWorksetChildCanViewAssignedInputWithCommittedReceipt(t *testing.T) {
+	t.Parallel()
 	c, _, child, ref, receipt := newWorksetAuthorizationFixture(t)
 	child.WorksetReceipt = cloneWorksetReceipt(receipt)
 	runtimeArtifactPath := filepath.Join(c.session.Workspace, "runtime", "artifacts", ref.ID)
@@ -73,6 +75,7 @@ func TestLegitimateWorksetChildCanViewAssignedInputWithCommittedReceipt(t *testi
 }
 
 func TestWorksetWorkerContextProjectsOnlyAssignedArtifactRefs(t *testing.T) {
+	t.Parallel()
 	_, _, child, assigned, _ := newWorksetAuthorizationFixture(t)
 	child.WorksetBinding.SourceArtifactID = "sha256-lineage-only-source"
 	child.WorksetBinding.SourceSHA256 = strings.Repeat("s", 64)
@@ -89,6 +92,7 @@ func TestWorksetWorkerContextProjectsOnlyAssignedArtifactRefs(t *testing.T) {
 }
 
 func TestUnboundWorkerCannotListOrViewArtifactBackingStore(t *testing.T) {
+	t.Parallel()
 	c, producer, child, assigned, receipt := newWorksetAuthorizationFixture(t)
 	child.WorksetReceipt = cloneWorksetReceipt(receipt)
 	child.DependsOn = []string{producer.ID}
@@ -217,6 +221,7 @@ func TestUnboundWorkerCannotListOrViewArtifactBackingStore(t *testing.T) {
 }
 
 func TestUnboundDeclaredToolCannotReadArtifactBackingStore(t *testing.T) {
+	t.Parallel()
 	c, _, child, assigned, _ := newWorksetAuthorizationFixture(t)
 	child.WorksetBinding = nil
 	scope, err := c.buildArtifactAccessScope(t.Context(), child.ID, 1)
@@ -239,6 +244,7 @@ func TestUnboundDeclaredToolCannotReadArtifactBackingStore(t *testing.T) {
 }
 
 func TestUnboundDeclaredMCPToolCannotReadArtifactBackingStore(t *testing.T) {
+	t.Parallel()
 	c, _, child, assigned, _ := newWorksetAuthorizationFixture(t)
 	child.WorksetBinding = nil
 	child.Agent = "reviewer"
@@ -276,6 +282,7 @@ func TestUnboundDeclaredMCPToolCannotReadArtifactBackingStore(t *testing.T) {
 }
 
 func TestBoundWorksetGatedRecursiveToolsHideArtifactDescendants(t *testing.T) {
+	t.Parallel()
 	c, _, child, assigned, receipt := newWorksetAuthorizationFixture(t)
 	child.WorksetReceipt = cloneWorksetReceipt(receipt)
 	scope, err := c.buildArtifactAccessScope(t.Context(), child.ID, 1)
@@ -374,6 +381,7 @@ func TestBoundWorksetGatedRecursiveToolsHideArtifactDescendants(t *testing.T) {
 }
 
 func TestBoundWorksetChildCannotViewUnboundDependencyArtifact(t *testing.T) {
+	t.Parallel()
 	c, producer, child, _, receipt := newWorksetAuthorizationFixture(t)
 	child.WorksetReceipt = cloneWorksetReceipt(receipt)
 	child.DependsOn = []string{producer.ID}
@@ -401,6 +409,7 @@ func TestBoundWorksetChildCannotViewUnboundDependencyArtifact(t *testing.T) {
 }
 
 func TestBoundWorksetStructuredRunnerDeniesShellToolsBeforeExecution(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"bash", "sudo", "wait_for", "view", "grep", "ls"} {
 		t.Run(name, func(t *testing.T) {
 			c, _, child, _, receipt := newWorksetAuthorizationFixture(t)
@@ -427,6 +436,7 @@ func TestBoundWorksetStructuredRunnerDeniesShellToolsBeforeExecution(t *testing.
 }
 
 func TestWorksetArtifactAuthorizationRejectsCommittedPriorRun(t *testing.T) {
+	t.Parallel()
 	c, producer, child, ref, receipt := newWorksetAuthorizationFixture(t)
 	child.WorksetReceipt = cloneWorksetReceipt(receipt)
 	child.DependsOn = []string{producer.ID}
@@ -487,6 +497,7 @@ func receiptKey(receipt *WorksetExpansionReceipt) string {
 }
 
 func TestWorksetAuthorizationUsesStoredBytesAfterExactReceipt(t *testing.T) {
+	t.Parallel()
 	c, _, child, ref, receipt := newWorksetAuthorizationFixture(t)
 	child.WorksetReceipt = cloneWorksetReceipt(receipt)
 	ctx := context.WithValue(context.Background(), todoIDKey{}, child.ID)

@@ -68,6 +68,7 @@ func occurrenceMutationBase() TaskDef {
 }
 
 func TestTaskOccurrenceMutationAfterAdmissionFailsClosed(t *testing.T) {
+	t.Parallel()
 	step := ExecutionStep{ID: "read", Tool: "view", Effect: ExecutionEffectRead}
 	action := &Action{Capability: "structured-actions", Type: "apply", Payload: "{}"}
 	withAction := func() TaskDef {
@@ -126,6 +127,7 @@ func TestTaskOccurrenceMutationAfterAdmissionFailsClosed(t *testing.T) {
 }
 
 func TestTaskOccurrencePlanIDMutationIsLifecycleOnly(t *testing.T) {
+	t.Parallel()
 	c, _, calls := newOccurrenceExecutionCoordinator(t)
 	c.SetStepConfirmFn(func(_ context.Context, tasks []TaskDef) (bool, error) {
 		if len(tasks) != 1 {
@@ -167,6 +169,7 @@ func occurrenceDigestProjection() TaskOccurrenceProjection {
 }
 
 func TestTaskOccurrenceDigestBindsEveryImmutableField(t *testing.T) {
+	t.Parallel()
 	base := occurrenceDigestProjection()
 	baseDigest, err := decisionTaskInputDigest(base)
 	if err != nil {
@@ -269,6 +272,7 @@ func TestTaskOccurrenceDigestBindsEveryImmutableField(t *testing.T) {
 }
 
 func TestTaskOccurrenceRetryReplayPreservesContract(t *testing.T) {
+	t.Parallel()
 	c, store, _ := newOccurrenceExecutionCoordinator(t)
 	task := occurrenceMutationBase()
 	task.Goal = "retry and replay immutable execution"
@@ -314,6 +318,7 @@ func TestTaskOccurrenceRetryReplayPreservesContract(t *testing.T) {
 }
 
 func TestTaskOccurrencePlanApprovalPreservesDigest(t *testing.T) {
+	t.Parallel()
 	c, store, _ := newOccurrenceExecutionCoordinator(t)
 	task := occurrenceMutationBase()
 	task.PlanFirst = true

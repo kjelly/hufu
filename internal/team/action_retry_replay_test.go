@@ -28,6 +28,7 @@ func executePhaseWorkflow(t *testing.T, session *TeamSession) *runtimeWorkflow {
 }
 
 func TestPermitActionRetryRespectsReplaySafety(t *testing.T) {
+	t.Parallel()
 	noReplay := false
 	transient := ActionProviderError{Capability: "structured-actions", Cause: fmt.Errorf("temporary unavailable")}
 	tests := []struct {
@@ -68,6 +69,7 @@ func TestPermitActionRetryRespectsReplaySafety(t *testing.T) {
 // provider failure: a replay-safe action is reset and relaunched, while a
 // non-replayable one stays failed without consuming a retry.
 func TestDAGSchedulerTransientActionRetryRequiresReplaySafety(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		sideEffect  SideEffectClass

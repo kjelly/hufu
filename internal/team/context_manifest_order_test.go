@@ -23,6 +23,7 @@ func manifestFixture(attempt int, requestID string, trigger ContextTrigger, at t
 // them sorted by attempt and request ID. The same set in a different order
 // must not read as an event-store projection mismatch on resume.
 func TestCanonicalTaskShadowIgnoresManifestOrder(t *testing.T) {
+	t.Parallel()
 	base := time.Date(2026, 9, 24, 15, 0, 0, 0, time.UTC)
 	dispatch := manifestFixture(1, "ctx-1-58fa", "task_dispatch", base)
 	failureA := manifestFixture(1, "ctx-1-0aaa", "tool_failure", base.Add(time.Minute))
@@ -59,6 +60,7 @@ func TestCanonicalTaskShadowIgnoresManifestOrder(t *testing.T) {
 }
 
 func TestNormalizeContextManifestsDoesNotReorderTheSource(t *testing.T) {
+	t.Parallel()
 	base := time.Date(2026, 9, 24, 15, 0, 0, 0, time.UTC)
 	source := []ContextInjectionManifest{
 		manifestFixture(1, "ctx-1-ffff", "tool_failure", base),

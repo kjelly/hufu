@@ -60,6 +60,7 @@ func readStoredArtifact(t *testing.T, workspace, id string) []byte {
 }
 
 func TestClassifyRepairFailure_SubReasons(t *testing.T) {
+	t.Parallel()
 	validProgress := &TaskResult{Status: "partial", Source: "submitted", Summary: "still working"}
 
 	tests := []struct {
@@ -106,6 +107,7 @@ func TestClassifyRepairFailure_SubReasons(t *testing.T) {
 }
 
 func TestProtocolRepair_PreparationFailureIsRecorded(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{
@@ -149,6 +151,7 @@ func TestProtocolRepair_PreparationFailureIsRecorded(t *testing.T) {
 }
 
 func TestProtocolRepair_StreamErrorIsRecordedAsPreparationFailure(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	streamErr := errors.New("repair stream failed before producing a result")
 	c := &Coordinator{
@@ -193,6 +196,7 @@ func TestProtocolRepair_StreamErrorIsRecordedAsPreparationFailure(t *testing.T) 
 }
 
 func TestClassifyTaskFailure_ExplicitOverrideBeatsProtocolText(t *testing.T) {
+	t.Parallel()
 	err := withFailureClassOverride(errors.New("execution failure (reclassified from protocol repair)"), FailureExecution)
 	if got := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err}); got != FailureExecution {
 		t.Fatalf("explicit failure class = %q, want %q", got, FailureExecution)
@@ -224,6 +228,7 @@ func (a *rejectedSubmitResultLoopAgent) Stream(_ context.Context, call fantasy.A
 }
 
 func TestSubmitResultLoopUsesResultOnlyRepairWithoutWorkerReplay(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	workerCalls := 0
 	repairCalls := 0
@@ -295,6 +300,7 @@ func TestSubmitResultLoopUsesResultOnlyRepairWithoutWorkerReplay(t *testing.T) {
 }
 
 func TestProtocolAttemptWasReadOnly(t *testing.T) {
+	t.Parallel()
 	readOnly := []fantasy.StepResult{
 		{Response: fantasy.Response{Content: fantasy.ResponseContent{
 			fantasy.ToolCallContent{ToolName: "view", Input: `{"file_path":"internal/team/coordinator.go"}`},
@@ -325,6 +331,7 @@ func TestProtocolAttemptWasReadOnly(t *testing.T) {
 }
 
 func TestReadOnlyCapabilityTaxonomyFailsClosedForUnknownAndMalformedBash(t *testing.T) {
+	t.Parallel()
 	if tools.IsReadOnlyObservationTool("unknown_extension") {
 		t.Fatal("unknown tool must not be admitted to the read-only taxonomy")
 	}
@@ -342,6 +349,7 @@ func TestReadOnlyCapabilityTaxonomyFailsClosedForUnknownAndMalformedBash(t *test
 }
 
 func TestToolDispositionReporterEnrichesDirectAndWorkerReceiptsWithoutParsingText(t *testing.T) {
+	t.Parallel()
 	collector := &attemptToolDispositions{}
 	reporter := newToolDispositionReporter(collector, SideEffectNone, "run-direct", "task-direct", 1)
 	reporter(tools.ToolExecutionDisposition{Kind: string(ToolExecutionPolicyDenied), ReasonCode: "read_only_shell_redirect_denied", ToolName: "bash", ToolCallID: "call-direct", Executed: false})
@@ -356,6 +364,7 @@ func TestToolDispositionReporterEnrichesDirectAndWorkerReceiptsWithoutParsingTex
 }
 
 func TestAttemptToolDispositionsOnlyPermitFreshRetryWhenEveryCallWasDenied(t *testing.T) {
+	t.Parallel()
 	steps := []fantasy.StepResult{{Response: fantasy.Response{Content: fantasy.ResponseContent{
 		fantasy.ToolCallContent{ToolCallID: "denied-bash", ToolName: "bash", Input: `{"command":"go test ./... 2>&1"}`},
 	}}}}
@@ -373,6 +382,7 @@ func TestAttemptToolDispositionsOnlyPermitFreshRetryWhenEveryCallWasDenied(t *te
 }
 
 func TestBuildPolicyDeniedRetryContextIsDeterministicAndDoesNotExposeCallInput(t *testing.T) {
+	t.Parallel()
 	context := buildPolicyDeniedRetryContext([]ToolExecutionDisposition{{
 		Kind: ToolExecutionPolicyDenied, ReasonCode: "read_only_shell_syntax_denied", ToolName: "bash", ToolCallID: "call-1",
 	}})
@@ -385,6 +395,7 @@ func TestBuildPolicyDeniedRetryContextIsDeterministicAndDoesNotExposeCallInput(t
 }
 
 func TestPolicyDeniedAttemptGetsOneCleanWorkerRetryWithoutResultOnlyRepair(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	workerCalls := 0
 	var prompts []string
@@ -427,6 +438,7 @@ func TestPolicyDeniedAttemptGetsOneCleanWorkerRetryWithoutResultOnlyRepair(t *te
 }
 
 func TestSecondPolicyDenialDoesNotCallWorkerOrRepairAgain(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	workerCalls := 0
 	c := &Coordinator{
@@ -454,6 +466,7 @@ func TestSecondPolicyDenialDoesNotCallWorkerOrRepairAgain(t *testing.T) {
 }
 
 func TestProtocolRepairEvidenceSummaryDoesNotReplayToolMessages(t *testing.T) {
+	t.Parallel()
 	summary := protocolRepairEvidenceSummary([]fantasy.StepResult{{Response: fantasy.Response{Content: fantasy.ResponseContent{
 		fantasy.ToolCallContent{ToolName: "view", Input: `{"file_path":"internal/team/agent.go"}`},
 	}}}}, &ArtifactRef{ID: "transcript-1"})
@@ -466,6 +479,7 @@ func TestProtocolRepairEvidenceSummaryDoesNotReplayToolMessages(t *testing.T) {
 }
 
 func TestProtocolRepairMetricsExcludeOnlyProgressTurn(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "mixed repair sequence"}})[0]
 	item.ExecutionReceipts = []ExecutionReceipt{{RepairProvenance: &RepairProvenance{
@@ -484,6 +498,7 @@ func TestProtocolRepairMetricsExcludeOnlyProgressTurn(t *testing.T) {
 }
 
 func TestProtocolRepair_ProgressNotFinalIsExecutionFailure(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	workerCalls := 0
 
@@ -541,6 +556,7 @@ func TestProtocolRepair_ProgressNotFinalIsExecutionFailure(t *testing.T) {
 }
 
 func TestSubmittedPartialReadOnlyRetriesWithEvidenceContext(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	workerCalls := 0
 	var prompts []string
@@ -609,6 +625,7 @@ func TestSubmittedPartialReadOnlyRetriesWithEvidenceContext(t *testing.T) {
 }
 
 func TestEffectiveWorkerMaxAttemptsAddsInitialAttempt(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{MaxRetries: 1}}}
 	if got := c.effectiveWorkerMaxAttempts(nil); got != 2 {
 		t.Fatalf("team max retries 1 gives %d attempts, want 2", got)
@@ -623,6 +640,7 @@ func TestEffectiveWorkerMaxAttemptsAddsInitialAttempt(t *testing.T) {
 }
 
 func TestProtocolRepair_ProgressNotFinalRetriesAndClearsAttemptResult(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	workerCalls := 0
 	resultClearedBeforeRetry := false
@@ -701,6 +719,7 @@ func TestProtocolRepair_ProgressNotFinalRetriesAndClearsAttemptResult(t *testing
 }
 
 func TestProtocolRepair_InvalidSchemaGetsOneSchemaOnlyRetry(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	workerCalls := 0
 	repairCalls := 0
@@ -802,6 +821,7 @@ func TestProtocolRepair_InvalidSchemaGetsOneSchemaOnlyRetry(t *testing.T) {
 }
 
 func TestProtocolRepair_TwoInvalidSchemasRecoverProvisionallyAndBlock(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	workerCalls := 0
 	repairCalls := 0
@@ -864,6 +884,7 @@ func TestProtocolRepair_TwoInvalidSchemasRecoverProvisionallyAndBlock(t *testing
 }
 
 func TestProtocolSchemaFailureRetryReceivesValidationRejection(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	workerCalls, repairCalls := 0, 0
 	var prompts []string
@@ -1245,6 +1266,7 @@ func (m *mockRepairAgent) Stream(ctx context.Context, call fantasy.AgentStreamCa
 }
 
 func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 
 	c := &Coordinator{
@@ -1372,6 +1394,7 @@ func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 }
 
 func TestRecoveredProtocolCheckpointsDoNotEscalateSystemicScope(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{
@@ -1427,6 +1450,7 @@ func TestRecoveredProtocolCheckpointsDoNotEscalateSystemicScope(t *testing.T) {
 // grounded tasks use the generic finalization protocol too, while never
 // accepting an unverifiable prose response as a completed result.
 func TestProtocolRepair_GroundedResultRejectsRepairAndRetriesInstead(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 
 	c := &Coordinator{
@@ -1486,6 +1510,7 @@ func TestProtocolRepair_GroundedResultRejectsRepairAndRetriesInstead(t *testing.
 }
 
 func TestProtocolRepair_UsesCleanContextInsteadOfOriginalToolHistory(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	workerCalls := 0
 	repairCalls := 0
@@ -1530,6 +1555,7 @@ func TestProtocolRepair_UsesCleanContextInsteadOfOriginalToolHistory(t *testing.
 }
 
 func TestProtocolRepair_ReadOnlyResultContractFailureRetriesOnceCleanly(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	workerCalls := 0
 	repairCalls := 0
@@ -1584,6 +1610,7 @@ func TestProtocolRepair_ReadOnlyResultContractFailureRetriesOnceCleanly(t *testi
 }
 
 func TestReadOnlyFreeTextWorkerCapturesTranscriptEvidence(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{
@@ -1621,6 +1648,7 @@ func TestReadOnlyFreeTextWorkerCapturesTranscriptEvidence(t *testing.T) {
 }
 
 func TestReadOnlyFreeTextEmptyHandoffIsRetryableNotDone(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	workerCalls := 0
 	c := &Coordinator{
@@ -1667,6 +1695,7 @@ func TestReadOnlyFreeTextEmptyHandoffIsRetryableNotDone(t *testing.T) {
 }
 
 func TestProtocolRepair_StepBudgetExhaustionUsesResultOnlyFinalization(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	workerCalls := 0
 	repairCalls := 0
@@ -1722,6 +1751,7 @@ func TestProtocolRepair_StepBudgetExhaustionUsesResultOnlyFinalization(t *testin
 }
 
 func TestProtocolRepair_ReplayableTaskBlocksAfterRepairFailure(t *testing.T) {
+	t.Parallel()
 	// §5/§6.1: protocol failures allow result-only repair only; worker tools
 	// must not be replayed. After repair fails on a replayable task, the task
 	// is blocked for reconciliation instead of retrying the worker.
@@ -1812,6 +1842,7 @@ func TestProtocolRepair_ReplayableTaskBlocksAfterRepairFailure(t *testing.T) {
 }
 
 func TestProtocolRepair_NonReplayableTaskBlocksOnRepairFailure(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	workerCalls := 0
 
@@ -1881,6 +1912,7 @@ func TestProtocolRepair_NonReplayableTaskBlocksOnRepairFailure(t *testing.T) {
 }
 
 func TestProtocolRepair_FreeTextOutputCannotBypassRepairFailure(t *testing.T) {
+	t.Parallel()
 	// Finding 1 test: Non-empty worker output + repair fails + successful verifier ("true") MUST NOT turn task to done.
 	workspace := t.TempDir()
 
@@ -1936,6 +1968,7 @@ func TestProtocolRepair_FreeTextOutputCannotBypassRepairFailure(t *testing.T) {
 }
 
 func TestProtocolRepair_AllowsReplayFalseBlocksWorkerReplay(t *testing.T) {
+	t.Parallel()
 	// Finding 2 test: SideEffectNone + explicit AllowsReplay = false MUST block retries and run worker exactly once.
 	workspace := t.TempDir()
 	workerCalls := 0
@@ -1991,6 +2024,7 @@ func TestProtocolRepair_AllowsReplayFalseBlocksWorkerReplay(t *testing.T) {
 }
 
 func TestProtocolRepair_RecoveryPolicyBlocksWorkerReplay(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	workerCalls := 0
 
@@ -2031,6 +2065,7 @@ func TestProtocolRepair_RecoveryPolicyBlocksWorkerReplay(t *testing.T) {
 }
 
 func TestExecutionReceipt_ProvenanceAndEventStoreReplay(t *testing.T) {
+	t.Parallel()
 	// Finding 3 test: Multi-attempt receipts and repair provenance survive event store reduction.
 	receipt1 := ExecutionReceipt{
 		RunID:         "run-1",
@@ -2102,6 +2137,7 @@ func TestExecutionReceipt_ProvenanceAndEventStoreReplay(t *testing.T) {
 }
 
 func TestProtocolRepair_AllFailureReasonsSurviveEventStoreReduction(t *testing.T) {
+	t.Parallel()
 	reasons := []RepairFailureReason{
 		RepairFailureNoToolCall,
 		RepairFailureInvalidSchema,
@@ -2163,6 +2199,7 @@ func TestProtocolRepair_AllFailureReasonsSurviveEventStoreReduction(t *testing.T
 }
 
 func TestProtocolIncomplete_ConvergenceAndFinalization(t *testing.T) {
+	t.Parallel()
 	// Finding 4 test: TaskProtocolIncomplete convergence on unexpected termination and interrupted status check.
 	c := &Coordinator{
 		taskTracker:  NewTaskTracker(),
@@ -2188,6 +2225,7 @@ func TestProtocolIncomplete_ConvergenceAndFinalization(t *testing.T) {
 }
 
 func TestProtocolRetryHonorsPersistedAntiThrashingBlock(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	workerCalls, repairCalls := 0, 0
 	var prompts []string

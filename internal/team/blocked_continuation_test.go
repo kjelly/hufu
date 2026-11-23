@@ -62,6 +62,10 @@ func (w *recordedBlockingWorker) run(ctx context.Context) (*fantasy.AgentResult,
 // left, and that the run stops delegating only when the task may have changed
 // state. The blocked step itself can never be dispatched again.
 func TestWorkerReportedBlockStopsTheRunOnlyAfterAChange(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	riskCheck := fantasy.ToolCallContent{ToolCallID: "risk", ToolName: decisionPrimitiveToolName, Input: `{"name":"step-risk","context":{"step":"install"}}`}
 	tests := []struct {
 		name        string
@@ -118,6 +122,7 @@ func todoStatuses(items []*TodoItem) []string {
 // reported blocked cannot be dispatched again in the same invocation, while a
 // later invocation, which carries the user's answer, may dispatch it.
 func TestBlockedStepDuplicateLastsForTheInvocation(t *testing.T) {
+	t.Parallel()
 	c := newResourceOrderCoordinator(t, 2, 1)
 	readOnly := []fantasy.ToolCallContent{{ToolCallID: "risk", ToolName: decisionPrimitiveToolName, Input: `{"name":"step-risk","context":{"step":"install"}}`}}
 	c.workerAgentOverride = &recordedBlockingWorker{c: c, calls: readOnly, recordSteps: true}

@@ -38,6 +38,7 @@ func wp5AcceptedManifest(run string, tasks ...string) *EvidenceManifest {
 }
 
 func TestPrivateMemorySavePreservesExplicitZeroConfidence(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 	zero := 0.0
@@ -54,6 +55,7 @@ func TestPrivateMemorySavePreservesExplicitZeroConfidence(t *testing.T) {
 }
 
 func TestWP5_CandidateIsInvisibleUntilAcceptedEvidence(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 	item := wp5Candidate(t, svc, "agent-a", "task-a", "run-a", "private needle")
@@ -84,6 +86,7 @@ func TestWP5_CandidateIsInvisibleUntilAcceptedEvidence(t *testing.T) {
 }
 
 func TestWP5_WorkerCannotPromoteAnotherWorkersCandidate(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 	b := wp5Candidate(t, svc, "agent-b", "task-b", "run-shared", "agent b only")
@@ -104,6 +107,7 @@ func TestWP5_WorkerCannotPromoteAnotherWorkersCandidate(t *testing.T) {
 }
 
 func TestWP5_IncompleteEvidenceFailsClosedAndRejectedRunsAreMarked(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 	item := wp5Candidate(t, svc, "agent-a", "task-a", "run-failed", "do not trust yet")
@@ -124,6 +128,7 @@ func TestWP5_IncompleteEvidenceFailsClosedAndRejectedRunsAreMarked(t *testing.T)
 }
 
 func TestWP5_PromotionIsIdempotent(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 	first := wp5Candidate(t, svc, "agent-a", "task-a", "run-idempotent", "stable convention")
@@ -141,6 +146,7 @@ func TestWP5_PromotionIsIdempotent(t *testing.T) {
 }
 
 func TestWP5_AcceptedSessionCandidateIsPromotedInPlace(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 	item, err := svc.SaveCandidate(context.Background(), WorkerMemoryCandidateRequest{
@@ -167,6 +173,7 @@ func TestWP5_AcceptedSessionCandidateIsPromotedInPlace(t *testing.T) {
 }
 
 func TestWP5_RejectedRunRejectsLateCandidateWrite(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 	runID := "run-failed-late"
@@ -215,6 +222,7 @@ func TestWP5_RejectedRunRejectsLateCandidateWrite(t *testing.T) {
 }
 
 func TestWP5_RejectedRunWithoutPriorCandidates_RejectsLateCandidateOnFreshServiceAndReopenedRepo(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	dbPath := filepath.Join(workspace, "context.sqlite")
 	repo1, err := contextstore.OpenSQLite(dbPath)
@@ -283,6 +291,7 @@ func TestWP5_RejectedRunWithoutPriorCandidates_RejectsLateCandidateOnFreshServic
 }
 
 func TestWorkerMemory_RejectionIsScopeBound_DoesNotAffectOtherAgentOrTeam(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	dbPath := filepath.Join(workspace, "context.sqlite")
 	repo1, err := contextstore.OpenSQLite(dbPath)
@@ -354,6 +363,7 @@ func TestWorkerMemory_RejectionIsScopeBound_DoesNotAffectOtherAgentOrTeam(t *tes
 }
 
 func TestWorkerMemory_RejectRun_FailClosedOnAppendError(t *testing.T) {
+	t.Parallel()
 	repo := wp4SetupRepo(t)
 	failing := &failingAppendRepo{Repository: repo, failAppend: true}
 	svc := NewWorkerMemoryService(failing, nil)

@@ -14,6 +14,7 @@ func writeJournalLines(t *testing.T, workspace string, lines ...string) {
 }
 
 func TestTaskJournalRoundtrip(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	j, err := openTaskJournal(ws)
 	if err != nil {
@@ -48,6 +49,7 @@ func TestTaskJournalRoundtrip(t *testing.T) {
 }
 
 func TestTerminalTypedResultIsProjectedToJournal(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	journal, err := openTaskJournal(workspace)
 	if err != nil {
@@ -82,6 +84,7 @@ func TestTerminalTypedResultIsProjectedToJournal(t *testing.T) {
 }
 
 func TestTaskJournalKeepsDistinctVerifyModes(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	now := time.Now()
 	ts := now.Format(time.RFC3339)
@@ -103,6 +106,7 @@ func TestTaskJournalKeepsDistinctVerifyModes(t *testing.T) {
 }
 
 func TestTaskJournalTombstone(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	now := time.Now()
 	ts := now.Format(time.RFC3339)
@@ -121,6 +125,7 @@ func TestTaskJournalTombstone(t *testing.T) {
 }
 
 func TestTaskJournalPutAfterDel(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	now := time.Now()
 	ts := now.Format(time.RFC3339)
@@ -140,6 +145,7 @@ func TestTaskJournalPutAfterDel(t *testing.T) {
 }
 
 func TestTaskJournalSkipsCorruptLines(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	now := time.Now()
 	ts := now.Format(time.RFC3339)
@@ -158,6 +164,7 @@ func TestTaskJournalSkipsCorruptLines(t *testing.T) {
 }
 
 func TestTaskJournalIgnoresErrorOp(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	now := time.Now()
 	ts := now.Format(time.RFC3339)
@@ -176,6 +183,7 @@ func TestTaskJournalIgnoresErrorOp(t *testing.T) {
 }
 
 func TestTaskJournalAgeCap(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	now := time.Now()
 	old := now.Add(-48 * time.Hour).Format(time.RFC3339)
@@ -195,6 +203,7 @@ func TestTaskJournalAgeCap(t *testing.T) {
 }
 
 func TestTaskJournalPerAgentCap(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	now := time.Now()
 	ts := now.Format(time.RFC3339)
@@ -214,6 +223,7 @@ func TestTaskJournalPerAgentCap(t *testing.T) {
 }
 
 func TestTaskJournalMissingFile(t *testing.T) {
+	t.Parallel()
 	got, err := loadTaskJournal(t.TempDir(), time.Now(), taskJournalMaxAge, 50)
 	if err != nil || got != nil {
 		t.Errorf("missing journal should be (nil, nil), got (%v, %v)", got, err)
@@ -221,6 +231,7 @@ func TestTaskJournalMissingFile(t *testing.T) {
 }
 
 func TestCompactTaskJournal(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	now := time.Now()
 	ts := now.Format(time.RFC3339)
@@ -257,6 +268,7 @@ func TestCompactTaskJournal(t *testing.T) {
 }
 
 func TestPinnedEntriesSurviveGenerationPrune(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskCache: newDefaultTaskCache(taskCacheDependencies{})}
 	testTaskCache(c).entries["coder"] = []cachedTaskEntry{
 		{taskDesc: "pinned task", output: "p", generation: 0, pinned: true},

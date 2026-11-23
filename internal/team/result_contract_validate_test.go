@@ -28,6 +28,7 @@ func compiledReviewContract(t *testing.T, requireStructured bool) (*CompiledResu
 }
 
 func TestResultPayloadJSONRoundTrip(t *testing.T) {
+	t.Parallel()
 	compiled, ref := compiledReviewContract(t, true)
 	original, err := validateStructuredResultPayload(compiled, ref, []byte(`{"verdict":"approve","max_tokens":9007199254740993,"findings":[{"summary":"retained <&>\n世界"}]}`))
 	if err != nil {
@@ -136,6 +137,7 @@ func TestResultPayloadJSONRoundTrip(t *testing.T) {
 }
 
 func TestValidateStructuredResultPayload(t *testing.T) {
+	t.Parallel()
 	compiled, ref := compiledReviewContract(t, true)
 	valid, err := validateStructuredResultPayload(compiled, ref, []byte(`{"verdict":"approve","max_tokens":7,"findings":[{"summary":"ok"}]}`))
 	if err != nil {
@@ -177,6 +179,7 @@ func TestValidateStructuredResultPayload(t *testing.T) {
 }
 
 func TestValidationErrorsAreBounded(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	properties := make([]string, 0, 30)
 	for i := range 30 {
@@ -202,6 +205,7 @@ func TestValidationErrorsAreBounded(t *testing.T) {
 }
 
 func TestValidationErrorsExposeNestedReferenceLeafPaths(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeResultContractSchema(t, dir, "nested.json", `{
 	  "type":"object", "properties":{"findings":{"type":"array","items":{"$ref":"#/$defs/finding"}}},
@@ -232,6 +236,7 @@ func TestValidationErrorsExposeNestedReferenceLeafPaths(t *testing.T) {
 }
 
 func TestValidationErrorBudgetCountsLeavesNotReferenceWrappers(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeResultContractSchema(t, dir, "many.json", `{"type":"array","items":{"$ref":"#/$defs/item"},"$defs":{"item":{"type":"object","required":["origin"]}}}`)
 	compiled, err := compileResultContractSchema(dir, "many.json")
@@ -253,6 +258,7 @@ func TestValidationErrorBudgetCountsLeavesNotReferenceWrappers(t *testing.T) {
 // A validated payload survives durable event redaction byte-for-byte, so
 // its hash still matches after a round trip through the event store.
 func TestStructuredPayloadIsStableAcrossEventRedaction(t *testing.T) {
+	t.Parallel()
 	compiled, ref := compiledReviewContract(t, true)
 	payload, err := validateStructuredResultPayload(compiled, ref, []byte(`{"verdict":"approve","max_tokens":3,"findings":[{"summary":"password handling is correct"}]}`))
 	if err != nil {
@@ -299,6 +305,7 @@ func resultContractCoordinator(t *testing.T, requireStructured bool) (*Coordinat
 }
 
 func TestStructuredPayloadForSubmission(t *testing.T) {
+	t.Parallel()
 	c, item := resultContractCoordinator(t, true)
 	if _, msg := c.structuredPayloadForSubmission(item.ID, nil); !strings.Contains(msg, structuredPayloadMissingCode) {
 		t.Fatalf("missing required payload message = %q", msg)
@@ -335,6 +342,7 @@ func TestStructuredPayloadForSubmission(t *testing.T) {
 }
 
 func TestSubmitResultToolValidatesStructuredPayload(t *testing.T) {
+	t.Parallel()
 	c, item := resultContractCoordinator(t, true)
 	tool := &submitResultTool{coordinator: c, todoID: item.ID}
 	info := tool.Info()
@@ -370,6 +378,7 @@ func TestSubmitResultToolValidatesStructuredPayload(t *testing.T) {
 }
 
 func TestProviderVisibleResultPayloadSchema(t *testing.T) {
+	t.Parallel()
 	compiled, ref := compiledReviewContract(t, true)
 	// Local definitions are inlined and unsupported constraints stay at the
 	// runtime boundary; the provider still sees required nested fields.
@@ -390,6 +399,7 @@ func TestProviderVisibleResultPayloadSchema(t *testing.T) {
 }
 
 func TestResultContractPromptSection(t *testing.T) {
+	t.Parallel()
 	compiled, ref := compiledReviewContract(t, true)
 	local := resultContractPromptSection(&ref, compiled, false)
 	external := resultContractPromptSection(&ref, compiled, true)
@@ -405,6 +415,7 @@ func TestResultContractPromptSection(t *testing.T) {
 }
 
 func TestCanonicalExternalStructuredPayload(t *testing.T) {
+	t.Parallel()
 	compiled, ref := compiledReviewContract(t, true)
 	text := func(s string) *string { return &s }
 	contracted := AttemptRequest{Task: TaskDef{ResultContract: &ref}, resultContractSchema: compiled}
@@ -442,6 +453,7 @@ func TestCanonicalExternalStructuredPayload(t *testing.T) {
 }
 
 func TestApplyResultContractReceipt(t *testing.T) {
+	t.Parallel()
 	c, item := resultContractCoordinator(t, true)
 	c.recordResultValidationFailure(item.ID)
 	receipt := ExecutionReceipt{}
@@ -471,6 +483,7 @@ func TestApplyResultContractReceipt(t *testing.T) {
 
 // A require-structured task never completes from promoted free text.
 func TestRequireStructuredTaskIsNeverPromotedFromFreeText(t *testing.T) {
+	t.Parallel()
 	ref := ResultContractRef{ID: "schemas/review.json", SchemaSHA256: "x", RequireStructured: true}
 	task := TaskDef{Agent: "worker", Goal: "review", ResultContract: &ref}
 	if promoted := promoteValidatedReadOnlyHandoff(task, "1", "worker", "## Review\nLooks good."); promoted != nil {
@@ -486,6 +499,7 @@ func TestRequireStructuredTaskIsNeverPromotedFromFreeText(t *testing.T) {
 
 // The resumed TaskDef keeps the admitted contract identity.
 func TestTaskDefFromTodoItemKeepsResultContract(t *testing.T) {
+	t.Parallel()
 	ref := &ResultContractRef{ID: "schemas/review.json", SchemaSHA256: "x", RequireStructured: true}
 	task := taskDefFromTodoItem(&TodoItem{ID: "1", Agent: "worker", Goal: "g", ResultContract: ref})
 	if task.ResultContract == nil || *task.ResultContract != *ref || task.ResultContract == ref {
@@ -494,6 +508,7 @@ func TestTaskDefFromTodoItemKeepsResultContract(t *testing.T) {
 }
 
 func TestResultProtocolInstructionsIncludeResultContract(t *testing.T) {
+	t.Parallel()
 	compiled, ref := compiledReviewContract(t, true)
 	c := &Coordinator{session: &TeamSession{ResultContracts: map[string]*CompiledResultContract{compiled.ID: compiled}}}
 	task := TaskDef{Agent: "worker", Execution: ExecutionContract{RequiresResult: true}, ResultContract: &ref}

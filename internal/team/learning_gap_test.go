@@ -11,6 +11,7 @@ import (
 )
 
 func TestLearningGapClassification(t *testing.T) {
+	t.Parallel()
 	replayable := &RunEvent{Type: "memory_retrieved"}
 	tests := []struct {
 		name       string
@@ -71,6 +72,7 @@ func TestLearningGapClassification(t *testing.T) {
 }
 
 func TestNonMemoryAppendFailureIsNotCountedAsAutomaticRepair(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run", "session")
 	if err != nil {
@@ -93,6 +95,7 @@ func TestNonMemoryAppendFailureIsNotCountedAsAutomaticRepair(t *testing.T) {
 }
 
 func TestLearningGapRepairWritesToTheBranchThatFailed(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {

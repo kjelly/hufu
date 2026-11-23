@@ -9,6 +9,7 @@ import (
 )
 
 func TestBindTaskFailureDetailUsesTaskIdentity(t *testing.T) {
+	t.Parallel()
 	detail := "source=error | current=worker=other todo=wrong | last_tool=write | error=canonicalize failed"
 	got := bindTaskFailureDetail(detail, "reviewer", "Review assigned source", "todo-2", 3)
 	for _, want := range []string{
@@ -24,6 +25,7 @@ func TestBindTaskFailureDetailUsesTaskIdentity(t *testing.T) {
 }
 
 func TestBindTaskFailureDetailRetainsIdentityWhenRawDetailIsLong(t *testing.T) {
+	t.Parallel()
 	detail := "source=error | error=" + strings.Repeat("x", 2000)
 	got := bindTaskFailureDetail(detail, "worker", "long review", "todo-long", 4)
 	if !strings.Contains(got, "todo_id=todo-long") || !strings.Contains(got, "agent=worker") {
@@ -32,6 +34,7 @@ func TestBindTaskFailureDetailRetainsIdentityWhenRawDetailIsLong(t *testing.T) {
 }
 
 func TestBindTaskFailureDetailRemainsTaskLocalUnderConcurrency(t *testing.T) {
+	t.Parallel()
 	type failure struct {
 		agent string
 		task  string
@@ -67,6 +70,7 @@ func TestBindTaskFailureDetailRemainsTaskLocalUnderConcurrency(t *testing.T) {
 }
 
 func TestFailureFingerprintDetailRemainsStableAcrossTaskIdentity(t *testing.T) {
+	t.Parallel()
 	first := bindTaskFailureDetail("source=error | current=shared-a | last_tool=write | error=boom", "worker-a", "audit A", "todo-a", 1)
 	second := bindTaskFailureDetail("source=error | current=shared-b | last_tool=read | error=boom", "worker-b", "audit B", "todo-b", 1)
 	if got, want := failureDetailWithoutCoordinatorFields(first), "source=error | error=boom"; got != want {
@@ -78,6 +82,7 @@ func TestFailureFingerprintDetailRemainsStableAcrossTaskIdentity(t *testing.T) {
 }
 
 func TestPersistFailureBindsDurableDetailButKeepsRawFailureProjection(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "audit source"}})[0]
 	c := &Coordinator{
@@ -102,6 +107,7 @@ func TestPersistFailureBindsDurableDetailButKeepsRawFailureProjection(t *testing
 }
 
 func TestPersistFailureDoesNotTrustSameAgentAndTaskSnapshot(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	items := tracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "worker", Desc: "same review"},

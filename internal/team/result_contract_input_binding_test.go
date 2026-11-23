@@ -9,6 +9,7 @@ import (
 )
 
 func TestRuntimeEvidenceBindingSubmissionAndReplay(t *testing.T) {
+	t.Parallel()
 	for _, route := range []string{"local", "external"} {
 		t.Run(route, func(t *testing.T) {
 			c, source, audit, _ := reviewedInputsFixture(t)
@@ -68,6 +69,7 @@ func TestRuntimeEvidenceBindingSubmissionAndReplay(t *testing.T) {
 }
 
 func TestRuntimeEvidenceBindingAggregateCapacity(t *testing.T) {
+	t.Parallel()
 	for _, route := range []string{"local", "external"} {
 		for _, sourceBytes := range []int{16 << 10, 128 << 10} {
 			t.Run(fmt.Sprintf("%s/source_bytes=%d", route, sourceBytes), func(t *testing.T) {
@@ -127,6 +129,7 @@ func TestRuntimeEvidenceBindingAggregateCapacity(t *testing.T) {
 }
 
 func TestRuntimeEvidenceBindingDeclarationAndWorkerGuidance(t *testing.T) {
+	t.Parallel()
 	root := map[string]any{"type": "object", "properties": map[string]any{
 		"done": map[string]any{"type": "boolean"},
 		"reviews": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{

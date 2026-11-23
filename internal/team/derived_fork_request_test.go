@@ -37,6 +37,7 @@ func derivedForkRequestFixture(t *testing.T) (*Coordinator, *versionFixture) {
 }
 
 func TestDerivedForkFirstRequestStartsFreshVersionedCycle(t *testing.T) {
+	t.Parallel()
 	c, f := derivedForkRequestFixture(t)
 	before := mustReadEvents(t, f.events)
 	end := c.beginExecutionRun()
@@ -85,6 +86,7 @@ func TestDerivedForkFirstRequestStartsFreshVersionedCycle(t *testing.T) {
 }
 
 func TestDerivedForkPendingEntryRejectsBeforeInvocation(t *testing.T) {
+	t.Parallel()
 	c, f := derivedForkRequestFixture(t)
 	before := len(mustReadEvents(t, f.events))
 	for _, run := range []func() error{
@@ -115,6 +117,7 @@ func TestDerivedForkPendingEntryRejectsBeforeInvocation(t *testing.T) {
 }
 
 func TestDerivedForkFirstCycleCommitsExplicitGrant(t *testing.T) {
+	t.Parallel()
 	c, _ := derivedForkRequestFixture(t)
 	manager, err := agent.NewProviderManager("http://127.0.0.1:1", "", nil)
 	if err != nil {

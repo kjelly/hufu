@@ -51,6 +51,7 @@ func dependencyViewCollectionFixture(t *testing.T) (*Coordinator, *TodoItem, con
 }
 
 func TestDependencyResultViewCollectionResumePreservesWork(t *testing.T) {
+	t.Parallel()
 	for _, stale := range []bool{false, true} {
 		t.Run(map[bool]string{false: "original source", true: "stale source"}[stale], func(t *testing.T) {
 			c, item, ctx, receipt, sourceID := dependencyViewCollectionFixture(t)

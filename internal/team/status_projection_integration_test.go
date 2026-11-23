@@ -35,6 +35,7 @@ func readProjectedStatus(t *testing.T, workspace, agent string) string {
 }
 
 func TestStatusProjectionTerminationPathsKeepCanonicalStateAndStatusInSync(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		status   TaskStatus
@@ -64,6 +65,7 @@ func TestStatusProjectionTerminationPathsKeepCanonicalStateAndStatusInSync(t *te
 }
 
 func TestStatusProjectionListingFailureDoesNotReplaceLastKnownStatus(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(workspace, statusDir), 0o755); err != nil {
 		t.Fatal(err)
@@ -82,6 +84,7 @@ func TestStatusProjectionListingFailureDoesNotReplaceLastKnownStatus(t *testing.
 }
 
 func TestCanonicalTodoTransitionAutomaticallyProjectsStatus(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session:     &TeamSession{Workspace: workspace},
@@ -105,6 +108,7 @@ func TestCanonicalTodoTransitionAutomaticallyProjectsStatus(t *testing.T) {
 }
 
 func TestRunReconcilesRestoredKilledRunStatusBeforeCoordinatorDispatch(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(workspace, statusDir), 0o755); err != nil {
 		t.Fatal(err)
@@ -248,6 +252,7 @@ func newDirectTerminationCoordinator(t *testing.T, worker fantasy.Agent) *Coordi
 }
 
 func TestRunDirectAgentFinalizesRunResult(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
 	result, err := c.RunDirectAgent(context.Background(), "worker", "perform direct work")
 	if err != nil {
@@ -273,6 +278,7 @@ func TestRunDirectAgentFinalizesRunResult(t *testing.T) {
 }
 
 func TestRunDirectAgentCommitsSubmittedResultWithEmptyDetails(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{text: "Now let me continue with the remaining work."})
 	result, err := c.RunDirectAgent(context.Background(), "worker", "perform direct work")
 	if err != nil {
@@ -296,6 +302,7 @@ func TestRunDirectAgentCommitsSubmittedResultWithEmptyDetails(t *testing.T) {
 // durable reliability history. One direct run must append exactly one
 // observation and emit exactly one terminal run event.
 func TestRunDirectAgentPersistsExactlyOneReliabilityObservation(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	obsCount := func() int {
 		report, err := loadReliabilityEvalReport(workspace)
@@ -324,6 +331,7 @@ func TestRunDirectAgentPersistsExactlyOneReliabilityObservation(t *testing.T) {
 }
 
 func TestFinalizeDirectRunRejectsCandidatesOnUnverifiedRun(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
 	if err != nil {
@@ -355,6 +363,7 @@ func TestFinalizeDirectRunRejectsCandidatesOnUnverifiedRun(t *testing.T) {
 }
 
 func TestFinalizeDirectRunRejectsCandidatesOnFailure(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
 	if err != nil {
@@ -384,6 +393,7 @@ func TestFinalizeDirectRunRejectsCandidatesOnFailure(t *testing.T) {
 }
 
 func TestRunDirectAgentTerminationReconcilesCanonicalTodoAndStatus(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		worker     fantasy.Agent
@@ -418,6 +428,7 @@ func TestRunDirectAgentTerminationReconcilesCanonicalTodoAndStatus(t *testing.T)
 }
 
 func TestRunDirectAgentPreCancelledPersistsCanonicalFailureBeforeReturning(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
 	c.SetSessionData(c.sessionData)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -470,6 +481,7 @@ func TestRunDirectAgentPreCancelledPersistsCanonicalFailureBeforeReturning(t *te
 }
 
 func TestPersistPreCancelledDirectAgentReturnsTerminalizationFailure(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
 	store, err := NewEventStore(c.session.Workspace, "run-cancelled-fault", "session-cancelled-fault")
 	if err != nil {
@@ -536,6 +548,7 @@ func TestPersistPreCancelledDirectAgentReturnsTerminalizationFailure(t *testing.
 }
 
 func TestRunDirectAgentTerminalFailureReducesCanonicalContextError(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{err: errors.New("worker failed")})
 	repo, err := contextstore.OpenSQLite(filepath.Join(c.session.Workspace, "context.sqlite"))
 	if err != nil {
@@ -560,6 +573,7 @@ func TestRunDirectAgentTerminalFailureReducesCanonicalContextError(t *testing.T)
 }
 
 func TestRunDirectAgentEnforcesNoProgressBudget(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{
 		steps: []fantasy.StepResult{{Response: fantasy.Response{Usage: fantasy.Usage{TotalTokens: 2}}}},
 	})
@@ -590,6 +604,7 @@ func TestRunDirectAgentEnforcesNoProgressBudget(t *testing.T) {
 }
 
 func TestRunDirectAgentSurfacesNoProgressReplan(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
 	c.session.Config.Reliability = agent.ReliabilityConfig{
 		MaxTokensWithoutProgress:    0,
@@ -620,6 +635,7 @@ func TestRunDirectAgentSurfacesNoProgressReplan(t *testing.T) {
 }
 
 func TestRunDirectAgentRejectsUnacceptedRun(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
 	// A failing acceptance gate makes the completion gate mark the run
 	// partial (acceptance failed). The direct run must surface that as an
@@ -643,6 +659,7 @@ func TestRunDirectAgentRejectsUnacceptedRun(t *testing.T) {
 }
 
 func TestRunDirectAgentAgentCreationFailureReconcilesCanonicalTodoAndStatus(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
 	repo, err := contextstore.OpenSQLite(filepath.Join(c.session.Workspace, "context.sqlite"))
 	if err != nil {
@@ -698,6 +715,7 @@ func TestRunDirectAgentAgentCreationFailureReconcilesCanonicalTodoAndStatus(t *t
 }
 
 func TestRunDirectAgentContextCompileFailureReconcilesCanonicalTodoAndStatus(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
 	repo, err := contextstore.OpenSQLite(filepath.Join(c.session.Workspace, "context.sqlite"))
 	if err != nil {
@@ -740,6 +758,7 @@ func TestRunDirectAgentContextCompileFailureReconcilesCanonicalTodoAndStatus(t *
 }
 
 func TestRunDirectAgentManifestPersistenceFailureReconcilesCanonicalTodoAndStatus(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
 	repo, err := contextstore.OpenSQLite(filepath.Join(c.session.Workspace, "context.sqlite"))
 	if err != nil {
@@ -813,6 +832,7 @@ func dumpContextItems(c *Coordinator) string {
 }
 
 func TestCoordinatorAbortTerminationReconcilesCanonicalStateAndStatus(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "coordinator task"}})[0]
 	item.Status = TaskInProgress
@@ -827,6 +847,7 @@ func TestCoordinatorAbortTerminationReconcilesCanonicalStateAndStatus(t *testing
 }
 
 func TestCoordinatorNormalTerminationReconcilesCanonicalStateAndStatus(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
 	c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "coordinator task"}})
 	c.finalizeNormalCompletion()
@@ -845,6 +866,7 @@ func TestCoordinatorNormalTerminationReconcilesCanonicalStateAndStatus(t *testin
 }
 
 func TestCoordinatorUnexpectedTerminationProjectsFinalizedTaskStates(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
 	c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "worker", Desc: "in-flight task"},

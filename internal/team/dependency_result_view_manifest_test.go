@@ -30,6 +30,7 @@ func dependencyViewManifestFixture(t *testing.T) ContextInjectionManifest {
 }
 
 func TestDependencyResultViewManifestVersionAndQueryComposition(t *testing.T) {
+	t.Parallel()
 	manifest := dependencyViewManifestFixture(t)
 	if manifest.SchemaVersion != DependencyResultViewManifestSchemaVersion || !supportedDeliveryContextManifest(manifest) {
 		t.Fatal("selected view did not receive a validated schema4 manifest")
@@ -74,6 +75,7 @@ func TestDependencyResultViewManifestVersionAndQueryComposition(t *testing.T) {
 }
 
 func TestDependencyResultViewManifestRejectsIncompleteProof(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		change func(*ContextInjectionManifest)

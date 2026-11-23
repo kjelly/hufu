@@ -20,6 +20,7 @@ func mcpActionTestServers() map[string]mcp.MCPServerConfig {
 }
 
 func TestRegisterMCPActionProviderValidatesConfiguration(t *testing.T) {
+	t.Parallel()
 	valid := agent.ActionProviderConfig{Runtime: "mcp", Server: "diagnostics", Tool: "collect_debug", Timeout: 30}
 	with := func(mutate func(*agent.ActionProviderConfig)) agent.ActionProviderConfig {
 		config := valid
@@ -71,6 +72,7 @@ func TestRegisterMCPActionProviderValidatesConfiguration(t *testing.T) {
 }
 
 func TestMCPServerConfigHash(t *testing.T) {
+	t.Parallel()
 	base := mcp.MCPServerConfig{
 		Command: []string{"diagnostics-mcp", "--stdio"}, AllowedTools: []string{"b", "a"},
 		Environment: map[string]string{"TOKEN": "secret-value", "REGION": "eu"},
@@ -121,6 +123,7 @@ action-catalog:
 `
 
 func TestLoadTeamValidatesMCPActionProviderOffline(t *testing.T) {
+	t.Parallel()
 	marker := filepath.Join(t.TempDir(), "started")
 	manifest := strings.Replace(mcpActionTestManifest, "MARKER", marker, 1) + actionCatalogTestEntry
 	dir := writeActionCatalogTeam(t, manifest)
@@ -150,6 +153,7 @@ func TestLoadTeamValidatesMCPActionProviderOffline(t *testing.T) {
 }
 
 func TestActionProviderIdentityAddsMCPFieldsOnlyForMCPProviders(t *testing.T) {
+	t.Parallel()
 	commandTeam := loadActionCatalogTeam(t, actionCatalogTestManifest("", actionCatalogTestEntry))
 	identity, ok := configuredActionProviderIdentity(commandTeam, "diagnostics")
 	if !ok {
@@ -198,6 +202,7 @@ func mcpFindingCodes(findings []ContractFinding) []string {
 }
 
 func TestMCPActionTaskFindings(t *testing.T) {
+	t.Parallel()
 	action := func(capability, payload string) *Action {
 		return &Action{Capability: capability, Type: "collect_debug", Payload: payload}
 	}
@@ -236,6 +241,7 @@ func TestMCPActionTaskFindings(t *testing.T) {
 }
 
 func TestMCPActionTeamFindings(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		prepare func(*TeamSession)
@@ -271,6 +277,7 @@ func TestMCPActionTeamFindings(t *testing.T) {
 }
 
 func TestMCPActionCatalogEntryMustBeSideEffectNone(t *testing.T) {
+	t.Parallel()
 	entry := strings.Replace(actionCatalogTestEntry, "side-effect: none\n", "side-effect: workspace_write\n    recovery: manual\n", 1)
 	manifest := strings.Replace(mcpActionTestManifest, "MARKER", filepath.Join(t.TempDir(), "started"), 1) + entry
 	dir := writeActionCatalogTeam(t, manifest)

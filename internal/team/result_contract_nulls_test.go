@@ -10,6 +10,7 @@ import (
 )
 
 func TestResultContractNullNormalization(t *testing.T) {
+	t.Parallel()
 	const document = `{
 	 "$schema":"https://json-schema.org/draft/2020-12/schema",
 	 "type":"object","additionalProperties":false,"required":["rows"],
@@ -63,6 +64,7 @@ func TestResultContractNullNormalization(t *testing.T) {
 }
 
 func TestSubmitResultNormalizesNullWithOriginalContract(t *testing.T) {
+	t.Parallel()
 	for _, gated := range []bool{false, true} {
 		c, item := resultContractCoordinator(t, true)
 		compiled, err := CompileResultContractDocument("nullable.json", []byte(`{
@@ -105,6 +107,7 @@ func TestSubmitResultNormalizesNullWithOriginalContract(t *testing.T) {
 }
 
 func TestResultNullNormalizationDoesNotTurnAbsentPayloadIntoPresent(t *testing.T) {
+	t.Parallel()
 	compiled, err := CompileResultContractDocument("nullable-root.json", []byte(`{"type":["object","null"]}`))
 	if err != nil {
 		t.Fatal(err)

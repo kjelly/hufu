@@ -50,6 +50,7 @@ func rejectCandidate(t *testing.T, c *Coordinator, item *TodoItem, ctx context.C
 }
 
 func TestResultCandidateRepairPreservesContentAndReplays(t *testing.T) {
+	t.Parallel()
 	for _, resume := range []bool{false, true} {
 		t.Run(map[bool]string{false: "same_process", true: "crash_resume"}[resume], func(t *testing.T) {
 			c, item, ctx, journal := resultCandidateFixture(t)
@@ -88,6 +89,7 @@ func TestResultCandidateRepairPreservesContentAndReplays(t *testing.T) {
 }
 
 func TestResultCandidateRejectsUnsafeEdits(t *testing.T) {
+	t.Parallel()
 	for name, patch := range map[string]string{
 		"remove":            `{"edits":[{"operation":"remove","path":"/findings"}]}`,
 		"replace_valid":     `{"edits":[{"operation":"replace","path":"/summary","value":"different"}]}`,
@@ -112,6 +114,7 @@ func TestResultCandidateRejectsUnsafeEdits(t *testing.T) {
 }
 
 func TestCandidateMovePreservesNumbersAndValidFields(t *testing.T) {
+	t.Parallel()
 	raw := `{"misplaced":{"count":9007199254740993,"fraction":1.234567890123456789},"structured_payload":{},"summary":"unchanged"}`
 	value, err := decodeResultContractJSON([]byte(raw))
 	if err != nil {
@@ -135,6 +138,7 @@ func TestCandidateMovePreservesNumbersAndValidFields(t *testing.T) {
 }
 
 func TestResultCandidateRejectsStaleBindings(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"branch", "inputs", "contract", "attempt", "content", "newer_candidate", "stale_lease"} {
 		t.Run(change, func(t *testing.T) {
 			c, item, ctx, _ := resultCandidateFixture(t)
@@ -170,6 +174,7 @@ func TestResultCandidateRejectsStaleBindings(t *testing.T) {
 }
 
 func TestResultCandidateAppendFailureLeavesProjectionUntouched(t *testing.T) {
+	t.Parallel()
 	c, item, ctx, _ := resultCandidateFixture(t)
 	c.SetEventJournal(failingJournal{err: errors.New("disk unavailable")})
 	response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: candidateMisplaced})
@@ -182,6 +187,7 @@ func TestResultCandidateAppendFailureLeavesProjectionUntouched(t *testing.T) {
 }
 
 func TestResultCandidatePartialCorrectionCreatesVersion(t *testing.T) {
+	t.Parallel()
 	c, item, ctx, _ := resultCandidateFixture(t)
 	raw := strings.Replace(candidateMisplaced, `"unverified"`, `"unknown"`, 1)
 	candidate := rejectCandidate(t, c, item, ctx, raw)
@@ -201,6 +207,7 @@ func TestResultCandidatePartialCorrectionCreatesVersion(t *testing.T) {
 }
 
 func TestResultSubmissionFieldsAndDiagnostics(t *testing.T) {
+	t.Parallel()
 	c, item, _, _ := resultCandidateFixture(t)
 	info := (&submitResultTool{coordinator: c, todoID: item.ID}).Info()
 	if len(info.Parameters) != 3 || info.Parameters["findings"] != nil {
@@ -225,6 +232,7 @@ func TestResultSubmissionFieldsAndDiagnostics(t *testing.T) {
 }
 
 func TestCandidateConcurrentSubmissionAcceptsOnce(t *testing.T) {
+	t.Parallel()
 	c, item, ctx, _ := resultCandidateFixture(t)
 	candidate := rejectCandidate(t, c, item, ctx, candidateMisplaced)
 	responses := make(chan fantasy.ToolResponse, 2)
@@ -252,6 +260,7 @@ func TestCandidateConcurrentSubmissionAcceptsOnce(t *testing.T) {
 }
 
 func TestCandidateDiagnosticsRetainLargeCollectionMembership(t *testing.T) {
+	t.Parallel()
 	c, _, item, plans := fixedCollectionFixture(t, 150)
 	tool := &submitResultTool{coordinator: c, todoID: item.ID}
 	key := plans[0].rows[149].Key
@@ -265,6 +274,7 @@ func TestCandidateDiagnosticsRetainLargeCollectionMembership(t *testing.T) {
 }
 
 func TestCandidateToolResolutionPinsValidatedVersion(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []WorkerToolResolutionMode{WorkerToolResolutionResultRepair, WorkerToolResolutionResume} {
 		t.Run(string(mode), func(t *testing.T) {
 			c, item, ctx, _ := resultCandidateFixture(t)
@@ -291,6 +301,7 @@ func TestCandidateToolResolutionPinsValidatedVersion(t *testing.T) {
 }
 
 func TestCandidateMoveBuildsOnlyMissingDeclaredContainers(t *testing.T) {
+	t.Parallel()
 	for _, shape := range []string{"missing", "existing_scalar", "undeclared"} {
 		t.Run(shape, func(t *testing.T) {
 			value, err := decodeResultContractJSON([]byte(`{"row_a":{"state":"uncertain"},"row_b":{"state":"accept"},"structured_payload":{}}`))
@@ -331,6 +342,7 @@ func TestCandidateMoveBuildsOnlyMissingDeclaredContainers(t *testing.T) {
 }
 
 func TestCandidateMoveRejectsAliasedArrayPointers(t *testing.T) {
+	t.Parallel()
 	for _, index := range []string{"+0", "-0", "00"} {
 		t.Run(index, func(t *testing.T) {
 			// An alternate spelling of the same array index must not evade
@@ -358,6 +370,7 @@ func TestCandidateMoveRejectsAliasedArrayPointers(t *testing.T) {
 }
 
 func TestPreparedCandidateAppendFailureCannotCommit(t *testing.T) {
+	t.Parallel()
 	c, item, ctx, _ := resultCandidateFixture(t)
 	candidate := rejectCandidate(t, c, item, ctx, candidateMisplaced)
 	c.SetEventJournal(failingJournal{err: errors.New("storage unavailable")})

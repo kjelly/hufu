@@ -16,6 +16,7 @@ func materialVerdict(form string, adequate bool) []byte {
 }
 
 func TestRequestAcceptanceMaterialVetoDoesNotAcceptRelatedCoverage(t *testing.T) {
+	t.Parallel()
 	for _, form := range []string{"indirect", "unknown", "authorized_substitute"} {
 		t.Run(form, func(t *testing.T) {
 			c := requestAcceptanceFixture(t)
@@ -58,6 +59,7 @@ func TestRequestAcceptanceMaterialVetoDoesNotAcceptRelatedCoverage(t *testing.T)
 }
 
 func TestRequestAcceptanceMaterialSuccessRequiresBoundIndependentReview(t *testing.T) {
+	t.Parallel()
 	for _, form := range []string{"direct", "faithful_copy", "authorized_substitute"} {
 		t.Run(form, func(t *testing.T) {
 			c := requestAcceptanceFixture(t)
@@ -117,6 +119,7 @@ func TestRequestAcceptanceMaterialSuccessRequiresBoundIndependentReview(t *testi
 }
 
 func TestRequestAcceptanceMaterialReviewFailsClosedWithoutRetry(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"provider", "malformed", "missing boolean", "duplicate", "negative"} {
 		t.Run(scenario, func(t *testing.T) {
 			c := requestAcceptanceFixture(t)
@@ -157,6 +160,7 @@ func TestRequestAcceptanceMaterialReviewFailsClosedWithoutRetry(t *testing.T) {
 }
 
 func TestRequestAcceptanceResponseDoesNotAcquireMaterialObligation(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	freezeRequestFixture(t, c, "Explain the competing views", "response")
 	c.SetRequestAcceptanceModel(requestAcceptanceModelFunc(func(_ context.Context, operation, _ string) ([]byte, error) {
@@ -172,6 +176,7 @@ func TestRequestAcceptanceResponseDoesNotAcquireMaterialObligation(t *testing.T)
 }
 
 func TestRequestAcceptanceMaterialReviewCannotUpgradeOptionalNegative(t *testing.T) {
+	t.Parallel()
 	r := &RequestAcceptanceResult{Contract: RequestAcceptanceContract{Version: 3, Requirements: []RequestRequirement{{ID: "requirement-1", Verification: "observed", Delivery: &RequestDelivery{Extent: "relevant_parts"}}}}, Checks: []RequestAcceptanceCheck{{ID: "requirement-1", Status: "missing", Delivery: &RequestDeliveryAssessment{Match: "requested"}}}}
 	if err := bindRequestMaterialReview(materialVerdict("direct", true), r); err == nil {
 		t.Fatal("optional negative upgraded")
@@ -182,6 +187,7 @@ func TestRequestAcceptanceMaterialReviewCannotUpgradeOptionalNegative(t *testing
 }
 
 func TestRequestAcceptanceMaterialGatePreservesLegacyVersionTwo(t *testing.T) {
+	t.Parallel()
 	legacy := []byte(`{"version":2,"request":"read document","requirements":[{"id":"requirement-1","statement":"read document","source_quote":"read document","required":true,"verification":"observed","delivery":{"target":"document","extent":"relevant_parts","source":"any","allowed_substitutes":[]}}]}`)
 	snapshot, err := ResolveRunInputSnapshot([]RunInputDefinition{requestAcceptanceDefinitionVersion(2)}, []RunInputAssignment{{
 		Name: requestAcceptanceInput, RawValue: legacy, Source: RunInputSourceResolver, ResolverID: "hufu-request-acceptance", ResolverVersion: "2",
@@ -207,6 +213,7 @@ func TestRequestAcceptanceMaterialGatePreservesLegacyVersionTwo(t *testing.T) {
 }
 
 func TestRequestAcceptanceMaterialGateSkipsActionsAndPrimaryFailures(t *testing.T) {
+	t.Parallel()
 	for _, action := range []bool{false, true} {
 		t.Run(map[bool]string{false: "primary negative", true: "action only"}[action], func(t *testing.T) {
 			c := requestAcceptanceFixture(t)

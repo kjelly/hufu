@@ -10,6 +10,10 @@ import (
 )
 
 func TestResultCollectionWorkflowRecoveryCommitsPreparedResultWithFailedConsumer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, test := range []struct {
 		name       string
 		dependency bool
@@ -209,6 +213,10 @@ func blockWorkflowCollectionRecovery(t *testing.T, c *Coordinator, id string, re
 }
 
 func TestResultCollectionWorkflowRecoveryRepairsSuccessivePhases(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, scenario := range []string{"completed", "same_phase", "earlier_result_changed", "failed_phase_changed"} {
 		t.Run(scenario, func(t *testing.T) {
 			firstPhase := PhasePrepare
@@ -338,6 +346,10 @@ func TestResultCollectionWorkflowRecoveryRepairsSuccessivePhases(t *testing.T) {
 }
 
 func TestResultCollectionWorkflowRecoveryRepairsParallelTasksSequentially(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, scenario := range []string{"forward", "reverse", "prepare_phase", "changed_peer_result", "missing_peer_grant", "deferred_dispatch", "restart_after_release"} {
 		t.Run(scenario, func(t *testing.T) {
 			phase, next := PhaseVerify, PhaseDone
@@ -526,6 +538,7 @@ func TestResultCollectionWorkflowRecoveryRepairsParallelTasksSequentially(t *tes
 }
 
 func TestResultCollectionWorkflowRecoveryRequiresFailureAttribution(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"matching", "optional", "wrong_optional_category", "ordinary", "completed", "structural", "different_task", "different_phase", "different_failure", "repair_progress", "other_unresolved", "parallel_collections", "parallel_wrong_phase", "parallel_unsafe", "extra_failure", "uncertain_effect", "legacy_deferred", "dispatched_peer"} {
 		t.Run(kind, func(t *testing.T) {
 			c, id, _ := blockedRecoveryFixture(t, `{"status":"success","summary":"saved work"}`, false, RepairFailureInvalidSchema)
@@ -621,6 +634,10 @@ func reopenCollectedWorkflowCoordinator(t *testing.T, previous *Coordinator) *Co
 }
 
 func TestResultCollectionWorkflowRecoverySurvivesCompletionCheckpoint(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, boundary := range []string{"completed", "optional_completed", "workflow_changed", "result_changed"} {
 		t.Run(boundary, func(t *testing.T) {
 			c, item, ctx, receipt := resultCollectionTaskFixture(t, "http://127.0.0.1:1/v1", false, func(spec *TodoSpec) {

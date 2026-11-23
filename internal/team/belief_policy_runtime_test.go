@@ -23,6 +23,7 @@ func configureBeliefTestPolicy(t *testing.T, session *TeamSession) {
 }
 
 func TestBeliefPolicyRuntimeAdvisoryAndRestart(t *testing.T) {
+	t.Parallel()
 	c, marker := runBeliefAction(t, false, func(session *TeamSession) { configureBeliefTestPolicy(t, session) })
 	assertBeliefActionState(t, c, marker)
 	views := c.BeliefStates()
@@ -82,6 +83,7 @@ func TestBeliefPolicyRuntimeAdvisoryAndRestart(t *testing.T) {
 }
 
 func TestBeliefPolicyRuntimeHonorsConditionalAdapterFailure(t *testing.T) {
+	t.Parallel()
 	c, marker := runBeliefAction(t, false, func(session *TeamSession) { configureBeliefTestPolicy(t, session) })
 	view := c.BeliefStates()[0]
 	epoch := view.Epochs[0]
@@ -106,6 +108,7 @@ func TestBeliefPolicyRuntimeHonorsConditionalAdapterFailure(t *testing.T) {
 }
 
 func TestBeliefPolicyManifestUsesExistingCatalog(t *testing.T) {
+	t.Parallel()
 	manifest := actionCatalogTestManifest("belief:\n  model-file: model.json\n  experiment: comparison\n  policy-file: policy.json\n", actionCatalogTestEntry)
 	dir := writeActionCatalogTeam(t, manifest)
 	writeBeliefModel(t, dir)

@@ -54,6 +54,7 @@ func evidenceTestRecords() []taskTranscriptRecord {
 }
 
 func TestResultContractToolEvidence(t *testing.T) {
+	t.Parallel()
 	compiled := evidenceTestContract(t)
 	for _, name := range []string{"success", "absent", "failed", "wrong_target", "wrong_quote", "spliced_quote", "search", "unpaired", "empty", "malformed"} {
 		t.Run(name, func(t *testing.T) {
@@ -105,6 +106,7 @@ func TestResultContractToolEvidence(t *testing.T) {
 }
 
 func TestExternalToolEvidenceFailsClosed(t *testing.T) {
+	t.Parallel()
 	compiled := evidenceTestContract(t)
 	ref := compiled.ref(true)
 	payload, err := canonicalExternalStructuredPayload(AttemptRequest{Task: TaskDef{ResultContract: &ref}, resultContractSchema: compiled}, &WorkerResultProposal{StructuredPayloadJSON: new(evidenceTestPayload)}, nil)
@@ -114,6 +116,7 @@ func TestExternalToolEvidenceFailsClosed(t *testing.T) {
 }
 
 func TestSubmitResultUsesOnlyOwnTranscript(t *testing.T) {
+	t.Parallel()
 	for _, format := range []string{"json", "text"} {
 		for _, scope := range []string{"own", "other_task", "other_run", "other_attempt", "other_agent"} {
 			t.Run(format+"_"+scope, func(t *testing.T) {
@@ -193,6 +196,7 @@ func TestSubmitResultUsesOnlyOwnTranscript(t *testing.T) {
 }
 
 func TestToolEvidenceIgnoresWritableTranscript(t *testing.T) {
+	t.Parallel()
 	transcript, err := newTaskTranscriptForAttempt(t.TempDir(), "task", "run", 1, "worker")
 	if err != nil {
 		t.Fatal(err)
@@ -216,6 +220,7 @@ func TestToolEvidenceIgnoresWritableTranscript(t *testing.T) {
 }
 
 func TestFinishSealsContractReport(t *testing.T) {
+	t.Parallel()
 	compiled := evidenceTestContract(t)
 	ref := compiled.ref(true)
 	payload, err := validateStructuredResultPayload(compiled, ref, []byte(evidenceTestPayload))
@@ -242,6 +247,7 @@ func TestFinishSealsContractReport(t *testing.T) {
 }
 
 func TestContractFinalReportPreservesEvidence(t *testing.T) {
+	t.Parallel()
 	compiled := evidenceTestContract(t)
 	ref := compiled.ref(true)
 	payload, err := validateStructuredResultPayload(compiled, ref, []byte(evidenceTestPayload))
@@ -266,6 +272,7 @@ func TestContractFinalReportPreservesEvidence(t *testing.T) {
 }
 
 func TestContractFinalReportIndexesPersistedNumbers(t *testing.T) {
+	t.Parallel()
 	const schema = `{
 	 "type":"object","required":["indices","findings","large","fraction"],
 	 "properties":{"indices":{"type":"array"},"findings":{"type":"array"},"large":{"type":"number"},"fraction":{"type":"number"}},
@@ -337,6 +344,7 @@ func TestContractFinalReportIndexesPersistedNumbers(t *testing.T) {
 }
 
 func TestRenderAcceptedResultReportChecksFrozenIdentity(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"valid", "schema drift", "tampered payload", "failed result", "no template", "invalid index"} {
 		t.Run(scenario, func(t *testing.T) {
 			dir := t.TempDir()
@@ -391,6 +399,7 @@ func TestRenderAcceptedResultReportChecksFrozenIdentity(t *testing.T) {
 }
 
 func TestToolEvidenceEmptyAndMixedSources(t *testing.T) {
+	t.Parallel()
 	compiled := evidenceTestContract(t)
 	for _, sources := range []string{`[]`, `[{"key":"document-a","state":"checked","quote":"exact words"},{"key":"document-b","state":"checked","quote":"missing"}]`} {
 		value, err := decodeResultContractJSON([]byte(evidenceTestPayload))
@@ -419,6 +428,7 @@ func TestToolEvidenceEmptyAndMixedSources(t *testing.T) {
 }
 
 func TestResultContractExtensionsRejectInvalidPolicy(t *testing.T) {
+	t.Parallel()
 	for _, spec := range []string{`null`, `{"unknown":true}`, `{"groups_pointer":"invalid"}`} {
 		if _, _, err := compileResultContractExtensions(map[string]any{"x-hufu-tool-evidence": json.RawMessage(spec)}); err == nil {
 			t.Fatalf("accepted %s", spec)
@@ -430,6 +440,7 @@ func TestResultContractExtensionsRejectInvalidPolicy(t *testing.T) {
 }
 
 func TestAggregateResearchDoesNotClaimFixedAndVerified(t *testing.T) {
+	t.Parallel()
 	completed := &RunResult{GoalSatisfied: true, Outcome: RunOutcomeCompleted, GoalMode: GoalModeOutcome, Acceptance: &AcceptanceResult{State: AcceptancePassed}}
 	aggregated := AggregateRunResults([]*RunResult{completed}, nil, RunStats{})
 	if aggregated.FixedAndVerified || FormatCanonicalStatus(&aggregated) != "Execution completed successfully" {

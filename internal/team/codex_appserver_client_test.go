@@ -14,6 +14,7 @@ import (
 // TestCodexRPCInitialize proves a basic request/response round trip: the
 // client's Call sends a request and correctly decodes the matching response.
 func TestCodexRPCInitialize(t *testing.T) {
+	t.Parallel()
 	server := startFakeCodexServer(t, []fakeCodexStep{
 		{Result: rawJSON(t, map[string]any{"userAgent": "fake/1.0", "codexHome": "/fake/home"})},
 	})
@@ -31,6 +32,7 @@ func TestCodexRPCInitialize(t *testing.T) {
 // TestCodexRPCUnknownNotificationIgnored proves an unrecognized notification
 // method never crashes the client and never blocks a subsequent call.
 func TestCodexRPCUnknownNotificationIgnored(t *testing.T) {
+	t.Parallel()
 	server := startFakeCodexServer(t, []fakeCodexStep{
 		{
 			Notifications: []fakeCodexNotification{{Method: "totally/unrecognized", Params: rawJSON(t, map[string]any{"anything": true})}},
@@ -55,6 +57,7 @@ func TestCodexRPCUnknownNotificationIgnored(t *testing.T) {
 // response IDs are part of the transport correlation invariant: malformed
 // and unmatched IDs must terminate the client rather than being ignored.
 func TestCodexRPCInvalidResponseIDsFailClosed(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		id   string
@@ -84,6 +87,7 @@ func TestCodexRPCInvalidResponseIDsFailClosed(t *testing.T) {
 // the configured frame bound terminates the client as a protocol violation
 // (§17.2) rather than hanging or silently truncating.
 func TestCodexRPCOversizedFrameFails(t *testing.T) {
+	t.Parallel()
 	oversized := strings.Repeat("x", 4096)
 	server := startFakeCodexServerWithFrameBound(t, []fakeCodexStep{
 		{RawLine: `{"jsonrpc":"2.0","id":1,"result":{"padding":"` + oversized + `"}}`},
@@ -100,6 +104,7 @@ func TestCodexRPCOversizedFrameFails(t *testing.T) {
 // crosses Scanner's historical 1 MiB default. The explicit small-bound test
 // above preserves fail-closed rejection for genuinely oversized frames.
 func TestCodexRPCDefaultFrameAcceptsLargeCodexEvent(t *testing.T) {
+	t.Parallel()
 	largeEvent := strings.Repeat("x", (1<<20)+4096)
 	server := startFakeCodexServer(t, []fakeCodexStep{
 		{RawLine: `{"jsonrpc":"2.0","id":1,"result":{"padding":"` + largeEvent + `"}}`},
@@ -115,6 +120,7 @@ func TestCodexRPCDefaultFrameAcceptsLargeCodexEvent(t *testing.T) {
 // app-server process exits without responding, every in-flight Call fails
 // promptly instead of hanging forever.
 func TestCodexRPCProcessCrashFailsInflightRequests(t *testing.T) {
+	t.Parallel()
 	server := startFakeCodexServer(t, []fakeCodexStep{
 		{CloseAfter: true},
 	})
@@ -141,6 +147,7 @@ func TestCodexRPCProcessCrashFailsInflightRequests(t *testing.T) {
 // TestCodexRPCCancellation proves ctx cancellation on Call returns promptly
 // with a context error instead of waiting for a response that never comes.
 func TestCodexRPCCancellation(t *testing.T) {
+	t.Parallel()
 	server := startFakeCodexServer(t, []fakeCodexStep{
 		{NoResponse: true},
 	})

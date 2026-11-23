@@ -35,6 +35,7 @@ func (v *lineageRequestVector) SearchVector(_ context.Context, req contextstore.
 }
 
 func TestWorkerMemoryPassesAncestorConstraintToEverySource(t *testing.T) {
+	t.Parallel()
 	for _, empty := range []bool{false, true} {
 		t.Run(map[bool]string{false: "authorized ancestor", true: "restricted empty"}[empty], func(t *testing.T) {
 			repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
@@ -81,8 +82,9 @@ func TestWorkerMemoryPassesAncestorConstraintToEverySource(t *testing.T) {
 
 func TestWorkerMemoryRecallsAncestorBeyondPostForkCandidateCeiling(t *testing.T) {
 	if testing.Short() {
-		t.Skip("large SQLite ancestor retrieval fixture runs in the integration gate")
+		t.Skip("integration: mise run test-integration")
 	}
+	t.Parallel()
 	repo, scope, allowed := workerAncestorRetrievalFixture(t, 100_010, true)
 	scope.BranchID = "child"
 	var work contextstore.QueryWork

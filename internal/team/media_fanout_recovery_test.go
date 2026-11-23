@@ -23,6 +23,9 @@ import (
 )
 
 func TestNativeMediaFanoutRetriesAndRepairsKeepIndependentEvidence(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, recovery := range []string{"worker_retry", "result_repair"} {
 		for _, outputMode := range []string{TaskOutputModeSummary, TaskOutputModeVerbatim} {
 			t.Run(recovery+"/"+outputMode, func(t *testing.T) {

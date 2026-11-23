@@ -95,6 +95,7 @@ func nextObservationTask(t *testing.T, c *Coordinator) (*TodoItem, context.Conte
 }
 
 func TestObservationRecallUsesImmutablePriorOutputWithoutSourceReplay(t *testing.T) {
+	t.Parallel()
 	c, ctx, _ := observationFixture(t)
 	text := "complete source content 最後一段"
 	event := captureObservation(t, c, ctx, "view", `{"file_path":"document.txt"}`, text)
@@ -132,6 +133,7 @@ func TestObservationRecallUsesImmutablePriorOutputWithoutSourceReplay(t *testing
 }
 
 func TestObservationRecallEnforcesScopeAndCurrentPermissions(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"other_worker", "other_team", "team_denied", "source_removed", "source_denied", "source_not_exposed", "frozen_source_removed", "no_history", "bound", "current_task", "sibling", "missing_artifact", "changed_bytes", "read_event_failure"} {
 		t.Run(mode, func(t *testing.T) {
 			c, ctx, _ := observationFixture(t)
@@ -203,6 +205,7 @@ func (j *observationReadFailJournal) Append(ctx context.Context, event RunEvent)
 }
 
 func TestObservationRecallReadsUTF8RangesAndBoundsInputs(t *testing.T) {
+	t.Parallel()
 	c, ctx, _ := observationFixture(t)
 	event := captureObservation(t, c, ctx, "view", `{}`, "甲乙丙丁")
 	_, ctx = nextObservationTask(t, c)
@@ -232,6 +235,7 @@ func TestObservationRecallReadsUTF8RangesAndBoundsInputs(t *testing.T) {
 }
 
 func TestObservationCaptureIsExplicitBoundedAndObservationOnly(t *testing.T) {
+	t.Parallel()
 	c, ctx, _ := observationFixture(t)
 	for _, name := range []string{"write", "submit_result", recallObservationToolName, "sink__write_note", "unknown"} {
 		c.captureToolObservation(ctx, fantasy.ToolCall{ID: name}, name, `{}`, "not reusable")
@@ -258,6 +262,7 @@ func TestObservationCaptureIsExplicitBoundedAndObservationOnly(t *testing.T) {
 }
 
 func TestObservationCaptureRedactsBeforeStorageAndPreservesDigest(t *testing.T) {
+	t.Parallel()
 	c, ctx, _ := observationFixture(t)
 	const secret = "-----BEGIN RSA PRIVATE KEY-----\nMIIEobservationsecret\n-----END RSA PRIVATE KEY-----"
 	event := captureObservation(t, c, ctx, "view", `{}`, "public source\n"+secret)
@@ -277,6 +282,7 @@ func TestObservationCaptureRedactsBeforeStorageAndPreservesDigest(t *testing.T) 
 }
 
 func TestObservationModelLeavesShareLimitsAndCanonicalBranch(t *testing.T) {
+	t.Parallel()
 	c, ctx, _ := observationFixture(t)
 	tree := NewSessionTree()
 	tree.Branches["research"] = &SessionBranch{ID: "research"}
@@ -326,6 +332,7 @@ func TestObservationModelLeavesShareLimitsAndCanonicalBranch(t *testing.T) {
 }
 
 func TestObservationReadRejectsConflictingIdempotency(t *testing.T) {
+	t.Parallel()
 	c, ctx, _ := observationFixture(t)
 	event := captureObservation(t, c, ctx, "view", `{}`, "first second")
 	_, ctx = nextObservationTask(t, c)

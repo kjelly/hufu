@@ -52,6 +52,7 @@ func readRuntimeActionReceipt(t *testing.T, workspace string) runtimeActionRecei
 }
 
 func TestCatalogOutputSchemaMismatchFailsWithoutRetry(t *testing.T) {
+	t.Parallel()
 	c, _, provider := outputSchemaCatalogCoordinator(t, map[string]any{"unexpected": 1})
 	task := catalogActionTask(testCatalogBinding())
 	_, item := addCatalogActionTodo(c, task)
@@ -76,6 +77,7 @@ func TestCatalogOutputSchemaMismatchFailsWithoutRetry(t *testing.T) {
 }
 
 func TestCatalogActionRecordsCatalogIdentity(t *testing.T) {
+	t.Parallel()
 	c, events, _ := outputSchemaCatalogCoordinator(t, map[string]any{"summary": "ok"})
 	binding := testCatalogBinding()
 	task := catalogActionTask(binding)
@@ -108,6 +110,7 @@ func TestCatalogActionRecordsCatalogIdentity(t *testing.T) {
 }
 
 func TestNonCatalogReceiptsKeepTheirShape(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(0, 0).UTC()
 	for name, value := range map[string]any{
 		"runtime receipt":   runtimeActionReceipt{Version: 2, TaskID: "1", ActionID: "a", Capability: "c", Type: "t", Status: "success", StartedAt: now, FinishedAt: now},

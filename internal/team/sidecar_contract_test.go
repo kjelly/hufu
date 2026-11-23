@@ -29,6 +29,7 @@ func sidecarContractCoordinator(t *testing.T, tools string) *Coordinator {
 // replied "I cannot execute system commands" — and that prose was recorded as a
 // completed task, letting the DAG advance past a deployment that never ran.
 func TestSidecarTaskWithSideEffectAndNoVerifierIsRejected(t *testing.T) {
+	t.Parallel()
 	c := sidecarContractCoordinator(t, "bash,terminal")
 	task := TaskDef{
 		Agent:   "Helper",
@@ -52,6 +53,7 @@ func TestSidecarTaskWithSideEffectAndNoVerifierIsRejected(t *testing.T) {
 }
 
 func TestSidecarTaskContractAllowsAnalysisAndVerifiedWork(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		tools string
@@ -97,6 +99,7 @@ func TestSidecarTaskContractAllowsAnalysisAndVerifiedWork(t *testing.T) {
 // recovery policy: a task judged infra-mutating for recovery purposes must not
 // be judged harmless here.
 func TestSidecarTaskContractRejectsHighRiskTools(t *testing.T) {
+	t.Parallel()
 	for _, tools := range []string{"all", "bash,sudo", "ssh"} {
 		c := sidecarContractCoordinator(t, tools)
 		task := TaskDef{Agent: "Helper", Goal: "Restart the cluster", Sidecar: true}
@@ -109,6 +112,7 @@ func TestSidecarTaskContractRejectsHighRiskTools(t *testing.T) {
 // TestExecuteSidecarTaskRefusesUnverifiedMutation covers the runtime path, which
 // is reachable from the DAG scheduler independently of ExecuteTasks.
 func TestExecuteSidecarTaskRefusesUnverifiedMutation(t *testing.T) {
+	t.Parallel()
 	c := sidecarContractCoordinator(t, "bash,terminal")
 	// A configured sidecar is required to reach the sidecar path at all: with
 	// none configured the task correctly falls back to a tool-equipped worker.

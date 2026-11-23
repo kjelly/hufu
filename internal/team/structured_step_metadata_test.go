@@ -8,6 +8,7 @@ import (
 )
 
 func TestStructuredStepMetadataMatchesCompleteReceipt(t *testing.T) {
+	t.Parallel()
 	c, events, _ := stepGenerationEvidence(t, true)
 	rows, err := LoadStructuredStepReceipts(t.Context(), c.session.Workspace, events)
 	if err != nil {
@@ -51,6 +52,7 @@ func TestStructuredStepMetadataMatchesCompleteReceipt(t *testing.T) {
 }
 
 func TestStructuredStepProjectionRetainsOnlySelectedTaskOccurrence(t *testing.T) {
+	t.Parallel()
 	create := func(run string, retry bool) RunEvent {
 		raw, err := json.Marshal(map[string]any{"id": "task", "reset_for_retry": retry})
 		if err != nil {
@@ -76,6 +78,7 @@ func TestStructuredStepProjectionRetainsOnlySelectedTaskOccurrence(t *testing.T)
 }
 
 func TestLegacyStructuredStepProjectionDoesNotInventExecution(t *testing.T) {
+	t.Parallel()
 	item := &TodoItem{ID: "old", Execution: ExecutionContract{Steps: []ExecutionStep{{ID: "declared", Tool: "inspector", Effect: ExecutionEffectRead}}},
 		TypedResult: &TaskResult{Attempt: 1, ReceiptIDs: []string{"old-receipt"}}}
 	before, err := json.Marshal(item)
@@ -96,6 +99,7 @@ func TestLegacyStructuredStepProjectionDoesNotInventExecution(t *testing.T) {
 }
 
 func TestRunReportLoadsLegacySnapshotWithoutRewritingIt(t *testing.T) {
+	t.Parallel()
 	workspace, store := newReportStore(t)
 	finish := appendReportEvent(t, store, RunEvent{Type: "run_finished"}, map[string]any{"outcome": "completed", "response": "legacy answer"})
 	report, err := LoadRunReport(t.Context(), workspace, finish.ID)

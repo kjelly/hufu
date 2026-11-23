@@ -28,6 +28,7 @@ func admittedMediaProviderEvents(t *testing.T) (*Coordinator, context.Context, [
 }
 
 func TestMediaProviderAdmissionIsDurableWithoutCostManagerAndAuditable(t *testing.T) {
+	t.Parallel()
 	c, ctx, events := admittedMediaProviderEvents(t)
 	profiles := make(map[string]bool)
 	count := 0
@@ -60,6 +61,7 @@ func TestMediaProviderAdmissionIsDurableWithoutCostManagerAndAuditable(t *testin
 }
 
 func TestMediaProviderAdmissionAuditRejectsChangedOrMissingEvidence(t *testing.T) {
+	t.Parallel()
 	for _, variant := range []string{"profile missing", "profile denied", "target changed", "lease revision changed", "dispatch changed", "binding changed", "count changed", "capacity changed"} {
 		t.Run(variant, func(t *testing.T) {
 			c, ctx, original := admittedMediaProviderEvents(t)
@@ -123,6 +125,7 @@ func TestMediaProviderAdmissionAuditRejectsChangedOrMissingEvidence(t *testing.T
 }
 
 func TestMediaProviderAdmissionFailsBeforeTransportOnPersistenceFailure(t *testing.T) {
+	t.Parallel()
 	for _, afterCommit := range []bool{false, true} {
 		name := "before_commit"
 		if afterCommit {
@@ -142,6 +145,7 @@ func TestMediaProviderAdmissionFailsBeforeTransportOnPersistenceFailure(t *testi
 }
 
 func TestMediaProviderAdmissionRequiresProfileAndCurrentLease(t *testing.T) {
+	t.Parallel()
 	c, ctx, item, request := nativeMediaProviderFixture(t)
 	request.InvocationID = "provider-media-no-profile"
 	if err := c.commitMediaProviderAdmission(ctx, request); err == nil {

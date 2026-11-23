@@ -59,6 +59,7 @@ func TestWorkerReportedBlockedIsNotReplayed(t *testing.T) {
 }
 
 func TestWorkerReportedBlockedDetectsOnlyBlocked(t *testing.T) {
+	t.Parallel()
 	for status, want := range map[string]bool{
 		TaskResultStatusBlocked: true, TaskResultStatusFailed: false, TaskResultStatusPartial: false,
 	} {
@@ -73,6 +74,7 @@ func TestWorkerReportedBlockedDetectsOnlyBlocked(t *testing.T) {
 }
 
 func TestDenialDetectionAndHintsNeverInviteWorkarounds(t *testing.T) {
+	t.Parallel()
 	denials := []string{
 		"Guard rule violation: Rule 3 violated: the command uses sudo",
 		"path '/home/u/.cache' is outside allowed paths and consent failed: no human available",
@@ -126,6 +128,10 @@ func (a statusSubmittingAgent) run(ctx context.Context) (*fantasy.AgentResult, e
 // the coordinator free to redispatch the work; only a worker that reported
 // itself blocked puts the run into wrap-up.
 func TestOnlyABlockedWorkerStopsDelegation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	tests := []struct {
 		name       string
 		input      string

@@ -76,6 +76,7 @@ func newDirectTypedCoordinator(t *testing.T, agentTools string, allowed, denied 
 }
 
 func TestDirectAgentDefaultDisabledExcludesMutationAliases(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "", nil, nil)
 	names := resolveWithExtras(t, c, "todo-default").Names
 	for _, forbidden := range []string{"stm_write", "ltm_update", "memory_save"} {
@@ -99,6 +100,7 @@ func TestDirectAgentDefaultDisabledExcludesMutationAliases(t *testing.T) {
 }
 
 func TestForcePlanFirstRejectsClosedSequenceBeforeProviderConstruction(t *testing.T) {
+	t.Parallel()
 	t.Run("resolver rejects initial-plan literal", func(t *testing.T) {
 		c := newDirectTypedCoordinator(t, "view", nil, nil)
 		todoID := resolverTodoID(t, c, "initial-plan-closed")
@@ -141,6 +143,7 @@ func TestForcePlanFirstRejectsClosedSequenceBeforeProviderConstruction(t *testin
 }
 
 func TestDirectAgentExplicitStmWriteOptInExposesAndMentions(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "stm_write", []string{"stm_write"}, nil)
 	names := resolveWithExtras(t, c, "todo-explicit").Names
 	if !sliceHasString(names, "stm_write") {
@@ -160,6 +163,7 @@ func TestDirectAgentExplicitStmWriteOptInExposesAndMentions(t *testing.T) {
 }
 
 func TestDirectAgentToolsDeniedBlocksOptIn(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "stm_write", []string{"stm_write"}, []string{"stm_write"})
 	names := resolveWithExtras(t, c, "todo-denied").Names
 	if sliceHasString(names, "stm_write") {
@@ -173,6 +177,7 @@ func TestDirectAgentToolsDeniedBlocksOptIn(t *testing.T) {
 }
 
 func TestDirectAgentRuntimeAllowlistAuthorizesSubmitResult(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "", nil, nil)
 	names := resolveWithExtras(t, c, "todo-allow").Names
 	if !sliceHasString(names, "submit_result") {
@@ -187,6 +192,7 @@ func TestDirectAgentRuntimeAllowlistAuthorizesSubmitResult(t *testing.T) {
 }
 
 func TestWorkerToolResolverOwnsLifecycleProtocolSurface(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "view", nil, nil)
 	def := c.session.Agents["worker"]
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "lifecycle surface"}})[0]
@@ -239,6 +245,7 @@ func TestWorkerToolResolverOwnsLifecycleProtocolSurface(t *testing.T) {
 }
 
 func TestWorkerToolResolverDoesNotBypassProtocolDenial(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "view", nil, []string{submitResultToolName})
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "denied protocol"}})[0]
 	_, err := c.ToolResolver().ResolveTaskTools(t.Context(), c.session.Agents["worker"], WorkerToolResolutionRequest{
@@ -273,6 +280,7 @@ func (a *directToolNotesCaptureAgent) Generate(ctx context.Context, call fantasy
 }
 
 func TestRunDirectAgentPromptNotesUseResolverSurface(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name      string
 		denied    []string
@@ -365,6 +373,7 @@ func TestRunDirectAgentPromptNotesUseResolverSurface(t *testing.T) {
 }
 
 func TestRunDirectAgentRejectsProseWithoutSubmittedResult(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "", nil, nil)
 	c.workerAgentOverride = &directToolNotesCaptureAgent{}
 
@@ -403,6 +412,7 @@ func TestRunDirectAgentRejectsProseWithoutSubmittedResult(t *testing.T) {
 // the direct tool slice, the reducer falls back to generic output and the
 // downstream retrieval manifest has nothing to bind.
 func TestDirectAgentTypedSubmitReducesContextItems(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "", nil, nil)
 	repo, err := contextstore.OpenSQLiteInMemory(c.session.Workspace)
 	if err != nil {
@@ -546,6 +556,7 @@ func workerAgentDef() *agent.AgentDef {
 }
 
 func TestSubmitResultAcceptsStatusInAnyLetterCase(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		status  string
 		want    string

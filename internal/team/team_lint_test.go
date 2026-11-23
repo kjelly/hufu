@@ -8,6 +8,7 @@ import (
 )
 
 func TestTeamLintUnsupportedSchemaIsFinding(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeLintTestFile(t, filepath.Join(dir, "team.yaml"), "apiVersion: hufu.io/v9\nkind: AgentTeam\nmetadata:\n  name: future\nspec: {}\n")
 	result, err := LintTeam(dir, nil, nil, DefaultProviderRegistry)
@@ -22,6 +23,7 @@ func TestTeamLintUnsupportedSchemaIsFinding(t *testing.T) {
 }
 
 func TestTeamLintMalformedYAMLIsExit2(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeLintTestFile(t, filepath.Join(dir, "team.yaml"), "name: [unterminated\n")
 	if _, err := LintTeam(dir, nil, nil, DefaultProviderRegistry); err == nil {
@@ -30,6 +32,7 @@ func TestTeamLintMalformedYAMLIsExit2(t *testing.T) {
 }
 
 func TestTeamLintDuplicateAgentIsStructuredFinding(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeLintTestFile(t, filepath.Join(dir, "coordinator.md"), lintAgent("coordinator", "coordinator"))
 	writeLintTestFile(t, filepath.Join(dir, "one.md"), lintAgent("duplicate", "worker"))
@@ -38,6 +41,7 @@ func TestTeamLintDuplicateAgentIsStructuredFinding(t *testing.T) {
 }
 
 func TestTeamLintMissingCoordinator(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"worker", "orchestrator-helper"} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -76,6 +80,7 @@ func TestTeamLintMissingCoordinator(t *testing.T) {
 }
 
 func TestTeamLintMultipleCoordinators(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeLintTestFile(t, filepath.Join(dir, "one.md"), lintAgent("one", "coordinator"))
 	writeLintTestFile(t, filepath.Join(dir, "two.md"), lintAgent("two", "coordinator"))
@@ -83,16 +88,19 @@ func TestTeamLintMultipleCoordinators(t *testing.T) {
 }
 
 func TestTeamLintUnknownTaskAgent(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithCoordinator(t, "tasks:\n  - id: missing\n    agent: ghost\n    goal: test\n")
 	assertLintCode(t, dir, FindingUnknownTaskAgent)
 }
 
 func TestTeamLintDependencyCycle(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithCoordinator(t, "tasks:\n  - id: first\n    agent: worker\n    depends-on: [1]\n  - id: second\n    agent: worker\n    depends-on: [0]\n")
 	assertLintCode(t, dir, FindingDependencyCycle)
 }
 
 func TestTeamLintFindingsSorted(t *testing.T) {
+	t.Parallel()
 	findings := []TeamLintFinding{
 		{File: "b.md", Line: 1, Code: "b"},
 		{File: "a.md", Line: 2, Code: "a"},
@@ -105,6 +113,7 @@ func TestTeamLintFindingsSorted(t *testing.T) {
 }
 
 func TestTeamLintFailThreshold(t *testing.T) {
+	t.Parallel()
 	findings := []TeamLintFinding{{Severity: FindingSeverityWarning}}
 	if TeamLintReachesThreshold(findings, FindingSeverityError) {
 		t.Fatal("warning reached error threshold")
@@ -122,6 +131,7 @@ func TestTeamLintFailThreshold(t *testing.T) {
 }
 
 func TestTeamLintIgnoreSelectorValidation(t *testing.T) {
+	t.Parallel()
 	selector, err := ParseTeamLintIgnoreSelector("prompt_unknown_tool@agents/reviewer.md:42")
 	if err != nil {
 		t.Fatal(err)
@@ -137,42 +147,50 @@ func TestTeamLintIgnoreSelectorValidation(t *testing.T) {
 }
 
 func TestTeamLintUnknownTool(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: view", "Use `definitely_missing` tool.")
 	assertLintCode(t, dir, FindingPromptUnknownTool)
 }
 
 func TestTeamLintDeniedTool(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: [view, bash]", "Use `bash` tool.")
 	writeLintTestFile(t, filepath.Join(dir, "team.yaml"), "name: lint-test\ntools:\n  denied: [bash]\n")
 	assertLintCode(t, dir, FindingPromptDeniedTool)
 }
 
 func TestTeamLintToolNotGranted(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: view", "Call `bash` tool.")
 	assertLintCode(t, dir, FindingPromptToolNotGranted)
 }
 
 func TestTeamLintKnownToolNoFinding(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: view", "Use the `view` tool.")
 	assertLintNoCode(t, dir, FindingPromptUnknownTool, FindingPromptToolNotGranted, FindingPromptDeniedTool)
 }
 
 func TestTeamLintDeclaredToolMissing(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: imaginary_tool", "Work.")
 	assertLintCode(t, dir, FindingDeclaredToolMissing)
 }
 
 func TestTeamLintToolAliasUsesRuntimeNormalization(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: read", "Use `read` tool.")
 	assertLintNoCode(t, dir, FindingPromptUnknownTool, FindingPromptToolNotGranted, FindingDeclaredToolMissing)
 }
 
 func TestTeamLintMCPMissingServer(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: view", "Invoke `ghost__search` tool.")
 	assertLintCode(t, dir, FindingMCPToolMissing)
 }
 
 func TestTeamLintMCPMetadataUnknown(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: view", "Invoke `catalog__search` tool.")
 	writeLintTestFile(t, filepath.Join(dir, "team.yaml"), "name: lint-test\nmcp-servers:\n  catalog:\n    type: remote\n    url: https://invalid.example.test/mcp\n")
 	result, err := LintTeam(dir, nil, nil, DefaultProviderRegistry)
@@ -187,6 +205,7 @@ func TestTeamLintMCPMetadataUnknown(t *testing.T) {
 }
 
 func TestTeamLintDoesNotStartMCPOrNetwork(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: view", "Invoke `probe__ping` tool.")
 	sentinel := filepath.Join(dir, "mcp-started")
 	writeLintTestFile(t, filepath.Join(dir, "team.yaml"), "name: lint-test\nmcp-servers:\n  probe:\n    type: local\n    command: [sh, -c, 'touch "+sentinel+"']\n")
@@ -199,11 +218,13 @@ func TestTeamLintDoesNotStartMCPOrNetwork(t *testing.T) {
 }
 
 func TestTeamLintUnknownSkill(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: view", "Load `missing-skill-xyz` skill.")
 	assertLintCode(t, dir, FindingPromptUnknownSkill)
 }
 
 func TestTeamLintDraftSkillIsNotProductionRequirement(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: view\nskills: draft-skill", "Work.")
 	writeSkillFixture(t, filepath.Join(dir, "skills", "drafts", "draft-skill"), "draft-skill", "Draft.")
 	result, err := LintTeam(dir, nil, nil, DefaultProviderRegistry)
@@ -218,6 +239,7 @@ func TestTeamLintDraftSkillIsNotProductionRequirement(t *testing.T) {
 }
 
 func TestTeamLintSkillOutOfScope(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: view\nskills: hidden-skill", "Work.")
 	writeSkillFixture(t, filepath.Join(dir, "skills", "hidden-skill"), "hidden-skill", "Hidden.")
 	writeLintTestFile(t, filepath.Join(dir, "team.yaml"), "name: lint-test\nskills: another-skill\n")
@@ -225,6 +247,7 @@ func TestTeamLintSkillOutOfScope(t *testing.T) {
 }
 
 func TestTeamLintSkillDependencyUsesRuntimeExpansion(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: view\nskills: root-skill", "Use `dep-skill` skill.")
 	writeSkillFixture(t, filepath.Join(dir, "skills", "dep-skill"), "dep-skill", "Dependency.")
 	writeSkillFixture(t, filepath.Join(dir, "skills", "root-skill"), "root-skill", "Read skills/dep-skill/SKILL.md.")
@@ -233,16 +256,19 @@ func TestTeamLintSkillDependencyUsesRuntimeExpansion(t *testing.T) {
 }
 
 func TestPromptExampleDoesNotTriggerFalseUnknownTool(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: view", "`kubectl` is an example command.")
 	assertLintNoCode(t, dir, FindingPromptUnknownTool)
 }
 
 func TestPromptFencedCodeDoesNotTrigger(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: view", "```text\nuse `ghost-tool` tool\n```")
 	assertLintNoCode(t, dir, FindingPromptUnknownTool)
 }
 
 func TestPromptDirectiveSourceLine(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: view", "First line.\nUse `ghost-tool` tool.")
 	result, err := LintTeam(dir, nil, nil, DefaultProviderRegistry)
 	if err != nil {
@@ -255,6 +281,7 @@ func TestPromptDirectiveSourceLine(t *testing.T) {
 }
 
 func TestTemplatedFieldLocationFallback(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithCoordinator(t, "tasks:\n  - id: templated\n    agent: worker\n    goal: '{@ .goal @}'\n")
 	result, err := LintTeam(dir, map[string]string{"goal": "Use `ghost-template-tool` tool."}, nil, DefaultProviderRegistry)
 	if err != nil {
@@ -267,6 +294,7 @@ func TestTemplatedFieldLocationFallback(t *testing.T) {
 }
 
 func TestTeamLintProfileMatchesRuntimePolicyProjection(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: fetch", "Use `fetch` tool.")
 	noNet := true
 	result, err := LintTeamWithOptions(dir, TeamLintOptions{Registry: DefaultProviderRegistry, NoNet: &noNet})
@@ -279,41 +307,49 @@ func TestTeamLintProfileMatchesRuntimePolicyProjection(t *testing.T) {
 }
 
 func TestTeamLintSideEffectRetryNeedsRecovery(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithAgentBody(t, "tools: ssh\nside_effect: external_write\nrecovery: retry", "Work.")
 	assertLintCode(t, dir, FindingSideEffectRetryWithoutReconcile)
 }
 
 func TestTeamLintStrictTaskWithoutTypedResult(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithCoordinator(t, "execution-profile: strict-verification\nacceptance:\n  mode: blocking\n  require-no-unresolved-tasks: true\ntasks:\n  - agent: worker\n    goal: verify carefully\n")
 	assertLintCode(t, dir, FindingStrictTaskWithoutTypedResult)
 }
 
 func TestTeamLintAcceptanceMissingForUnattended(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithCoordinator(t, "unattended: true\n")
 	assertLintCode(t, dir, FindingAcceptanceMissingUnattended)
 }
 
 func TestTeamLintVerifierMissingReusesExistingCode(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithCoordinator(t, "tasks:\n  - agent: worker\n    goal: verify\n    execution:\n      requires-verification: true\n")
 	assertLintCode(t, dir, FindingVerifierMissing)
 }
 
 func TestTeamLintStructuredVerifierMissingReusesExistingCode(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithCoordinator(t, "tasks:\n  - agent: worker\n    goal: execute\n    execution:\n      kind: process\n      requires-verification: true\n      steps:\n        - id: inspect\n          tool: view\n          effect: read\n")
 	assertLintCode(t, dir, FindingExecutionStepsVerifierMissing)
 }
 
 func TestTeamLintResourceClaimConflict(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithCoordinator(t, "tasks:\n  - agent: worker\n    goal: first\n    resources: [{resource: repo, mode: write}]\n  - agent: worker\n    goal: second\n    resources: [{resource: repo, mode: read}]\n")
 	assertLintCode(t, dir, FindingResourceClaimConflict)
 }
 
 func TestTeamLintTimeoutImpossible(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithCoordinator(t, "timeout: 60\nverify-timeout: 60\ntasks:\n  - agent: worker\n    goal: verify\n    verify: test -f result.txt\n")
 	assertLintCode(t, dir, FindingTimeoutImpossible)
 }
 
 func TestTeamLintLegacyFanoutReusesExistingCode(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithCoordinator(t, "tasks:\n  - id: fanout\n    agent: worker\n    goal: fan out\n    fan_out:\n      source: items.tsv\n      goal-template: process {key}\n")
 	assertLintCode(t, dir, FindingLegacyFanOutDeprecated)
 }
@@ -324,6 +360,7 @@ func TestTeamLintLegacyFanoutReusesExistingCode(t *testing.T) {
 // runtime, so the lint finding must flag every such extension, not just
 // ".tsv".
 func TestTeamLintLegacyFanoutDetectsNonTSVExtension(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithCoordinator(t, "tasks:\n  - id: fanout\n    agent: worker\n    goal: fan out\n    fan_out:\n      source: items\n      goal-template: process {key}\n")
 	assertLintCode(t, dir, FindingLegacyFanOutDeprecated)
 }
@@ -334,6 +371,7 @@ func TestTeamLintLegacyFanoutDetectsNonTSVExtension(t *testing.T) {
 // warning to error without changing default (unset) behavior, so existing
 // read-compatible workspaces are unaffected unless they opt in.
 func TestTeamLintRejectLegacyFanOutEscalatesSeverity(t *testing.T) {
+	t.Parallel()
 	dir := lintTeamWithCoordinator(t, "tasks:\n  - id: fanout\n    agent: worker\n    goal: fan out\n    fan_out:\n      source: items.tsv\n      goal-template: process {key}\n")
 
 	def, err := LintTeamWithOptions(dir, TeamLintOptions{Registry: DefaultProviderRegistry})
@@ -356,6 +394,7 @@ func TestTeamLintRejectLegacyFanOutEscalatesSeverity(t *testing.T) {
 }
 
 func TestBundledTeamsHaveNoLintErrors(t *testing.T) {
+	t.Parallel()
 	root, err := filepath.Abs(filepath.Join("..", "..", ".agent-teams"))
 	if err != nil {
 		t.Fatal(err)
@@ -394,6 +433,7 @@ func TestBundledTeamsHaveNoLintErrors(t *testing.T) {
 // (.agent-teams/hufu-code-review/team.yaml) already uses source-artifact, so
 // this is expected to stay green with zero migration work.
 func TestBundledTeamsHaveNoLegacyFanOutFinding(t *testing.T) {
+	t.Parallel()
 	root, err := filepath.Abs(filepath.Join("..", "..", ".agent-teams"))
 	if err != nil {
 		t.Fatal(err)

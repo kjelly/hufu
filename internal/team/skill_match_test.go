@@ -10,6 +10,7 @@ import (
 )
 
 func TestComputeRelevantSkillsUsesOnlyStructuredSelections(t *testing.T) {
+	t.Parallel()
 	selected := []*skill.SkillDef{{Name: "code-reviewer"}, {Name: "git-commit"}}
 	c := &Coordinator{autoLoadedSkills: selected}
 	agentDef := &agent.AgentDef{Name: "worker", Role: "worker"}
@@ -29,6 +30,7 @@ func skillNames(skills []*skill.SkillDef) []string {
 }
 
 func TestBuildSuggestedSkillsTextNoOverlap(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		reportStatus: func(event StatusEvent) {},
 		session:      &TeamSession{Config: agent.TeamConfig{Name: "test-team"}},
@@ -78,6 +80,7 @@ func TestBuildSuggestedSkillsTextNoOverlap(t *testing.T) {
 }
 
 func TestBuildSuggestedSkillsTextWithOverlap(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		reportStatus: func(event StatusEvent) {},
 		session:      &TeamSession{Config: agent.TeamConfig{Name: "test-team"}},
@@ -106,6 +109,7 @@ func TestBuildSuggestedSkillsTextWithOverlap(t *testing.T) {
 }
 
 func TestBuildSuggestedSkillsTextEmpty(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		reportStatus:     func(event StatusEvent) {},
 		session:          &TeamSession{Config: agent.TeamConfig{Name: "test-team"}},
@@ -127,6 +131,7 @@ func TestBuildSuggestedSkillsTextEmpty(t *testing.T) {
 }
 
 func TestBuildSuggestedSkillsTextDoesNotInferRelevanceFromProse(t *testing.T) {
+	t.Parallel()
 	codeReviewer := &skill.SkillDef{
 		Name:        "code-reviewer",
 		Description: "Review code quality",

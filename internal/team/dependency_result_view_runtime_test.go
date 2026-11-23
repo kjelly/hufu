@@ -51,6 +51,7 @@ func dependencyViewAcceptedSource(t *testing.T, c *Coordinator) *TodoItem {
 }
 
 func TestDependencyResultViewRuntimePreparesAndVerifiesDelivery(t *testing.T) {
+	t.Parallel()
 	c, source, consumer, input := dependencyViewRuntimeFixture(t)
 	compiled, err := c.compileWorkerContext(t.Context(), input)
 	if err != nil {
@@ -98,6 +99,7 @@ func TestDependencyResultViewRuntimePreparesAndVerifiesDelivery(t *testing.T) {
 }
 
 func TestDependencyResultViewRuntimeRejectsSourceAndPolicyDrift(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		change func(*TodoItem, *TodoItem, *WorkerContextInput)

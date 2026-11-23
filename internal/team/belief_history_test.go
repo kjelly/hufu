@@ -91,6 +91,7 @@ func (s *countingBeliefArtifacts) Resolve(ctx context.Context, ref ArtifactRef) 
 }
 
 func TestBeliefHistoryReplayWorkGrowsLinearly(t *testing.T) {
+	t.Parallel()
 	for _, count := range []int{8, 32, 128} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			f, events := beliefHistory(t, count)
@@ -114,6 +115,7 @@ func TestBeliefHistoryReplayWorkGrowsLinearly(t *testing.T) {
 }
 
 func TestBeliefStreamingHistoryPreservesEarlierSnapshots(t *testing.T) {
+	t.Parallel()
 	f := newBeliefPolicyFixture(t)
 	first, err := f.journal.SuggestPolicy(t.Context(), f.epoch.ID, f.policySnapshot(t), 0)
 	if err != nil {
@@ -186,6 +188,7 @@ func BenchmarkBeliefHistoryReplay(b *testing.B) {
 }
 
 func TestBeliefSettledAdmissionRequiresLocalClosure(t *testing.T) {
+	t.Parallel()
 	f := newBeliefFixture(t)
 	f.bind(t)
 	f.admit(t)
@@ -220,6 +223,7 @@ func TestBeliefSettledAdmissionRequiresLocalClosure(t *testing.T) {
 }
 
 func TestBeliefSourcesHaveDeterministicReceiptTies(t *testing.T) {
+	t.Parallel()
 	f := newBeliefFixture(t)
 	experiment := f.model.Experiments[0]
 	experiment.ID = "second"

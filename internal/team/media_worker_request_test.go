@@ -13,6 +13,7 @@ import (
 )
 
 func TestNativeWorkerInputPreservesOneOrderedCurrentTurn(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"empty history", "existing text", "existing refs", "retry", "source refs"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, ctx, item, request := nativeMediaProviderFixture(t)
@@ -66,6 +67,7 @@ func TestNativeWorkerInputPreservesOneOrderedCurrentTurn(t *testing.T) {
 }
 
 func TestNativeWorkerRetryPromptIsProtectedWithoutMovingImageTurn(t *testing.T) {
+	t.Parallel()
 	c, ctx, item, request := nativeMediaProviderFixture(t)
 	initial := request.Call.Prompt
 	if nativeWorkerAdmissionPrompt(item.Goal, initial) != "" {
@@ -90,6 +92,7 @@ func TestNativeWorkerRetryPromptIsProtectedWithoutMovingImageTurn(t *testing.T) 
 }
 
 func TestNativeWorkerInputRejectsInvalidHistoryOrLease(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"stale lease", "cancelled", "wrong owner", "missing image", "raw media"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, ctx, item, request := nativeMediaProviderFixture(t)
@@ -125,6 +128,7 @@ func TestNativeWorkerInputRejectsInvalidHistoryOrLease(t *testing.T) {
 }
 
 func TestNativeWorkerStreamUsesCompleteMessagesAndImageBudget(t *testing.T) {
+	t.Parallel()
 	c, ctx, item, request := nativeMediaProviderFixture(t)
 	messages, err := c.nativeWorkerMessages(ctx, item.ID, item.Goal, nil)
 	if err != nil {
@@ -162,6 +166,7 @@ func TestNativeWorkerStreamUsesCompleteMessagesAndImageBudget(t *testing.T) {
 }
 
 func TestNativeWorkerResultRepairUsesTextViewWithoutChangingHistory(t *testing.T) {
+	t.Parallel()
 	c, ctx, item, request := nativeMediaProviderFixture(t)
 	history := request.Call.Prompt
 	before := cloneMessages(history)

@@ -8,6 +8,7 @@ import (
 )
 
 func TestLoadLTMNonexistent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if got := LoadLTM(dir, "test-team"); got != "" {
 		t.Errorf("LoadLTM() = %q, want empty", got)
@@ -15,6 +16,7 @@ func TestLoadLTMNonexistent(t *testing.T) {
 }
 
 func TestSaveAndLoadLTM(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := "## project conventions\n- use conventional commits"
 	if err := SaveLTM(dir, "test-team", content); err != nil {
@@ -27,6 +29,7 @@ func TestSaveAndLoadLTM(t *testing.T) {
 }
 
 func TestTruncateLTMUnderLimit(t *testing.T) {
+	t.Parallel()
 	s := "hello"
 	if got := TruncateLTM(s); got != s {
 		t.Errorf("TruncateLTM() = %q, want %q", got, s)
@@ -34,6 +37,7 @@ func TestTruncateLTMUnderLimit(t *testing.T) {
 }
 
 func TestTruncateLTMOverLimit(t *testing.T) {
+	t.Parallel()
 	runes := make([]rune, maxLTMChars+100)
 	for i := range runes {
 		runes[i] = 'y'
@@ -46,6 +50,7 @@ func TestTruncateLTMOverLimit(t *testing.T) {
 }
 
 func TestInitLTMCreatesFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := InitLTM(dir, "test-team"); err != nil {
 		t.Fatalf("InitLTM() error: %v", err)
@@ -56,6 +61,7 @@ func TestInitLTMCreatesFile(t *testing.T) {
 }
 
 func TestInitLTMIdempotent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	SaveLTM(dir, "test-team", "existing knowledge")
 	if err := InitLTM(dir, "test-team"); err != nil {
@@ -68,6 +74,7 @@ func TestInitLTMIdempotent(t *testing.T) {
 }
 
 func TestLTMPath(t *testing.T) {
+	t.Parallel()
 	got := LTMPath("/tmp/team", "test-team")
 	want := filepath.Join("/tmp/team", "ltm-test-team.md")
 	if got != want {
@@ -76,6 +83,7 @@ func TestLTMPath(t *testing.T) {
 }
 
 func TestLTMPathSanitization(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		teamName string
 		want     string
@@ -99,6 +107,7 @@ func TestLTMPathSanitization(t *testing.T) {
 }
 
 func TestFormatLTMEntry(t *testing.T) {
+	t.Parallel()
 	got := formatLTMEntry("Use bcrypt for password hashing")
 	if got == "" {
 		t.Fatal("formatLTMEntry returned empty")
@@ -112,6 +121,7 @@ func TestFormatLTMEntry(t *testing.T) {
 }
 
 func TestFormatLTMEntry_StripsExistingDatePrefixes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		input string
@@ -138,6 +148,7 @@ func TestFormatLTMEntry_StripsExistingDatePrefixes(t *testing.T) {
 }
 
 func TestNormalizeLTREntry_CollapsesStackedDatePrefixes(t *testing.T) {
+	t.Parallel()
 	a := normalizeLTREntry("- [2026-07-10] [2026-07-11] bash tool blocked")
 	b := normalizeLTREntry("- [2026-07-12] bash tool blocked")
 	if a != b {
@@ -146,6 +157,7 @@ func TestNormalizeLTREntry_CollapsesStackedDatePrefixes(t *testing.T) {
 }
 
 func TestTruncateLTMDropsPartialFirstLine(t *testing.T) {
+	t.Parallel()
 	head := "- " + strings.Repeat("x", 500) + "\n"
 	var lines []string
 	for range maxLTMChars / 20 {
@@ -168,6 +180,7 @@ func TestTruncateLTMDropsPartialFirstLine(t *testing.T) {
 // largest, so an early section with real content survives over a late
 // section that's mostly padding.
 func TestTruncateLTMDropsFromLargestSectionNotEarliestSection(t *testing.T) {
+	t.Parallel()
 	var padding []string
 	for range maxLTMChars / 10 {
 		padding = append(padding, "- padding entry to force truncation")
@@ -185,6 +198,7 @@ func TestTruncateLTMDropsFromLargestSectionNotEarliestSection(t *testing.T) {
 }
 
 func TestPruneLTM(t *testing.T) {
+	t.Parallel()
 	content := "# 專案慣例\n- entry1\n- entry2\n- entry3\n- entry4\n- entry5\n- entry6\n- entry7\n- entry8\n- entry9\n- entry10\n- entry11"
 	got := PruneLTM(content)
 	sections := ParseSTMSections(got)
@@ -197,12 +211,14 @@ func TestPruneLTM(t *testing.T) {
 }
 
 func TestPruneLTMEmpty(t *testing.T) {
+	t.Parallel()
 	if got := PruneLTM(""); got != "" {
 		t.Errorf("PruneLTM(\"\") = %q, want empty", got)
 	}
 }
 
 func TestDeduplicateLTREntries(t *testing.T) {
+	t.Parallel()
 	entries := []string{"- [2026-05-10] use bcrypt", "- [2026-05-11] use bcrypt", "- [2026-05-12] migrate to postgres"}
 	got := deduplicateLTREntries(entries)
 	if len(got) != 2 {
@@ -211,6 +227,7 @@ func TestDeduplicateLTREntries(t *testing.T) {
 }
 
 func TestNormalizeLTREntry(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input string
 		want  string
@@ -227,6 +244,7 @@ func TestNormalizeLTREntry(t *testing.T) {
 }
 
 func TestClassifyLTMEntry(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		entry  string
 		source string
@@ -252,6 +270,7 @@ func TestClassifyLTMEntry(t *testing.T) {
 }
 
 func TestLTMSectionForCategoryUsesTypedCategoryOnly(t *testing.T) {
+	t.Parallel()
 	tests := map[string]string{
 		"architecture": ltmSectionArchitecture,
 		"convention":   ltmSectionConventions,
@@ -271,6 +290,7 @@ func TestLTMSectionForCategoryUsesTypedCategoryOnly(t *testing.T) {
 }
 
 func TestStripSTMListItem(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input string
 		want  string
@@ -289,6 +309,7 @@ func TestStripSTMListItem(t *testing.T) {
 }
 
 func TestHasLTREntry(t *testing.T) {
+	t.Parallel()
 	sections := []STMSection{
 		{Title: "# 專案慣例", Entries: []string{"- [2026-05-10] use bcrypt"}},
 	}
@@ -304,6 +325,7 @@ func TestHasLTREntry(t *testing.T) {
 }
 
 func TestExtractLTMFromHistory(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 
 	histDir := workspace + "/history"
@@ -344,6 +366,7 @@ func TestExtractLTMFromHistory(t *testing.T) {
 }
 
 func TestExtractLTMFromHistoryEmpty(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 
 	// No history directory at all — should not panic

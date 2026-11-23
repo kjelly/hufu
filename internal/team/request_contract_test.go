@@ -11,6 +11,7 @@ import (
 )
 
 func TestProjectDecisionReplaysRequestContractBinding(t *testing.T) {
+	t.Parallel()
 	j := &memoryJournal{}
 	if err := appendDecisionEvent(context.Background(), j, agent.EventRequestContractCommitted, decisionEvent{
 		DecisionID: "dec-1", TaskID: "todo-1", ContractRef: "sha256:contract", ContractRevision: 3,
@@ -27,6 +28,7 @@ func TestProjectDecisionReplaysRequestContractBinding(t *testing.T) {
 }
 
 func TestReduceToSessionDataReplaysRequestContractProjection(t *testing.T) {
+	t.Parallel()
 	payload, err := json.Marshal(decisionEvent{DecisionID: "d1", TaskID: "t1", ContractRef: "sha256:contract", ContractRevision: 2, ContractArtifact: ArtifactRef{SHA256: "sha256:artifact"}})
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +40,7 @@ func TestReduceToSessionDataReplaysRequestContractProjection(t *testing.T) {
 }
 
 func TestBuildRequestContractHashesMetadataFreeRedactedMaterial(t *testing.T) {
+	t.Parallel()
 	cfg := agent.RequestContractConfig{
 		Objective:       "ship safely",
 		SuccessCriteria: []agent.RequestSuccessCriterion{{ID: "S1", Statement: "tests pass"}},
@@ -62,6 +65,7 @@ func TestBuildRequestContractHashesMetadataFreeRedactedMaterial(t *testing.T) {
 }
 
 func TestRequestContractConfigRejectsMalformedCriteria(t *testing.T) {
+	t.Parallel()
 	for name, cfg := range map[string]agent.RequestContractConfig{
 		"missing objective":   {Enabled: true, SuccessCriteria: []agent.RequestSuccessCriterion{{ID: "S1", Statement: "ok"}}},
 		"blank criterion":     {Enabled: true, Objective: "objective", SuccessCriteria: []agent.RequestSuccessCriterion{{ID: "", Statement: "ok"}}},
@@ -74,6 +78,7 @@ func TestRequestContractConfigRejectsMalformedCriteria(t *testing.T) {
 }
 
 func TestDecisionEnginePersistsSealedPacketBeforeEvent(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
@@ -136,6 +141,7 @@ func TestDecisionEnginePersistsSealedPacketBeforeEvent(t *testing.T) {
 }
 
 func TestDecisionEngineRejectsUnresolvableBaseRateBeforeJudge(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
@@ -184,6 +190,7 @@ func (r *referenceEvidenceTestRunner) RunReferenceEvidence(context.Context, Refe
 }
 
 func TestReferenceEvidenceIsBoundedAndRunsBeforeJudge(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
@@ -218,6 +225,7 @@ func TestReferenceEvidenceIsBoundedAndRunsBeforeJudge(t *testing.T) {
 }
 
 func TestDecisionEvidencePersistenceIsContentAddressedAndMaterialSensitive(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {

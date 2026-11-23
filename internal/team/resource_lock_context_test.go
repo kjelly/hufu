@@ -8,6 +8,7 @@ import (
 )
 
 func TestLockedResourceContextItemsFiltersByInjectInto(t *testing.T) {
+	t.Parallel()
 	loaded := []*LoadedResource{
 		{LockedResource: LockedResource{Name: "team-rules", Kind: agent.ResourceProjectRules, InjectInto: []string{"coordinator", "coder"}}, Content: "rules"},
 		{LockedResource: LockedResource{Name: "reviewer-only", Kind: agent.ResourceProjectRules, InjectInto: []string{"reviewer"}}, Content: "reviewer stuff"},
@@ -29,6 +30,7 @@ func TestLockedResourceContextItemsFiltersByInjectInto(t *testing.T) {
 }
 
 func TestLockedResourceContextItemsSkipsResourcesWithNoInjectTargets(t *testing.T) {
+	t.Parallel()
 	loaded := []*LoadedResource{
 		{LockedResource: LockedResource{Name: "locked-but-not-injected", Kind: agent.ResourceProjectRules}, Content: "content"},
 	}
@@ -38,6 +40,7 @@ func TestLockedResourceContextItemsSkipsResourcesWithNoInjectTargets(t *testing.
 }
 
 func TestLockedResourceContextItemsAreRequiredAndNormative(t *testing.T) {
+	t.Parallel()
 	loaded := []*LoadedResource{
 		{LockedResource: LockedResource{Name: "team-rules", Kind: agent.ResourceProjectRules, InjectInto: []string{"coordinator"}}, Content: "rules content"},
 	}
@@ -67,6 +70,7 @@ func TestLockedResourceContextItemsAreRequiredAndNormative(t *testing.T) {
 // 11 — re-reading at inject time would reopen the TOCTOU window resource
 // locking exists to close).
 func TestLockedResourceContentNeverReReadAtInjectTime(t *testing.T) {
+	t.Parallel()
 	loaded := []*LoadedResource{
 		{
 			LockedResource: LockedResource{
@@ -91,6 +95,7 @@ func TestLockedResourceContentNeverReReadAtInjectTime(t *testing.T) {
 // 8). LockedResourceContextItems deliberately never sets Compressible, so
 // there is no truncation path available for it either.
 func TestRequiredResourceCannotBeDroppedByTokenBudget(t *testing.T) {
+	t.Parallel()
 	loaded := []*LoadedResource{
 		{
 			LockedResource: LockedResource{Name: "team-rules", Kind: agent.ResourceProjectRules, InjectInto: []string{"coordinator"}},
@@ -109,6 +114,7 @@ func TestRequiredResourceCannotBeDroppedByTokenBudget(t *testing.T) {
 }
 
 func TestRequiredSkillUsesLockedSnapshot(t *testing.T) {
+	t.Parallel()
 	loaded := []*LoadedResource{
 		{LockedResource: LockedResource{Name: "verification-policy", Kind: agent.ResourceSkill}, Content: "skill body"},
 		{LockedResource: LockedResource{Name: "team-rules", Kind: agent.ResourceProjectRules}, Content: "not a skill"},
@@ -128,6 +134,7 @@ func TestRequiredSkillUsesLockedSnapshot(t *testing.T) {
 }
 
 func TestInjectLockedRequiredResourcesAppendsToExistingItems(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, dir+"/AGENTS.md", "rules content")
 	specs := []agent.RequiredResourceSpec{{Name: "team-rules", Kind: agent.ResourceProjectRules, Path: "AGENTS.md", Required: true, InjectInto: []string{"coordinator"}}}

@@ -3,6 +3,7 @@ package team
 import "testing"
 
 func TestInferSideEffectClass(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		tools string
 		want  SideEffectClass

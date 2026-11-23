@@ -25,6 +25,7 @@ import (
 // still holds, and the invariant this test protects — a capability may rank
 // an already-authorized candidate, never grant authorization — is unchanged.
 func TestPhase4AuthorizationStillPrecedesCapability(t *testing.T) {
+	t.Parallel()
 	// The legacy Preflight capability surface is unrelated to routing: a
 	// declared environment requirement, never something that scores or ranks
 	// candidate workers.
@@ -57,6 +58,7 @@ func TestPhase4AuthorizationStillPrecedesCapability(t *testing.T) {
 // Phase 5 (outcome learning and calibration) has not started: decision
 // outcomes are recorded and reported, and nothing reweights a judge.
 func TestPhase5CalibrationHasNotStarted(t *testing.T) {
+	t.Parallel()
 	// The entry thresholds are the ones §49.2 fixed.
 	if Phase5ResolvedRequired != 30 || Phase5VerifiedRequired != 20 {
 		t.Fatalf("entry thresholds = %d resolved / %d verified, want 30 / 20",
@@ -104,6 +106,7 @@ func TestPhase5CalibrationHasNotStarted(t *testing.T) {
 // separates "we know what happened" from "the runtime now trusts a judge
 // more", which is Phase 5 and is gated.
 func TestOutcomeRecordingDoesNotFeedBackIntoJudgment(t *testing.T) {
+	t.Parallel()
 	// An outcome classification describes what happened; it carries no
 	// judgment quality signal the aggregator could consume.
 	for _, outcome := range []string{
@@ -160,6 +163,7 @@ func TestOutcomeRecordingDoesNotFeedBackIntoJudgment(t *testing.T) {
 // It is scoped to this feature's own files. Older files in this package
 // exceed the limit and are not this change's to rewrite.
 func TestDecisionRuntimeFilesRespectTheSizeLimit(t *testing.T) {
+	t.Parallel()
 	const limit = 800
 	entries, err := filepath.Glob("decision*.go")
 	if err != nil {

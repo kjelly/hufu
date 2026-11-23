@@ -25,7 +25,7 @@ func TestCommandActionCancellationStopsDescendantsIncludingPTY(t *testing.T) {
 			ready, marker := filepath.Join(root, "ready"), filepath.Join(root, "late-write")
 			t.Setenv("HUFU_REAP_READY", ready)
 			t.Setenv("HUFU_REAP_MARKER", marker)
-			body := `printf ready > "$HUFU_REAP_READY"; (sleep 0.6; printf orphan > "$HUFU_REAP_MARKER") & wait`
+			body := `printf ready > "$HUFU_REAP_READY"; (sleep 0.1; printf orphan > "$HUFU_REAP_MARKER") & wait`
 			command := []string{"/bin/sh", "-c", body}
 			if pty {
 				if runtime.GOOS != "linux" {
@@ -73,7 +73,7 @@ func TestCommandActionCancellationStopsDescendantsIncludingPTY(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("provider did not reap its command")
 			}
-			time.Sleep(700 * time.Millisecond)
+			time.Sleep(150 * time.Millisecond)
 			if _, err := os.Stat(marker); !os.IsNotExist(err) {
 				t.Fatalf("descendant continued writing after cancellation: %v", err)
 			}

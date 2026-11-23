@@ -31,6 +31,7 @@ func protocolPolicyCoordinator(t *testing.T, protocol string, selected bool) *Co
 }
 
 func TestInvocationProtocolPersistedBeforeGeneration(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{"", "chat-completions"} {
 		t.Run(raw, func(t *testing.T) {
 			c := protocolPolicyCoordinator(t, raw, false)
@@ -92,6 +93,7 @@ func TestInvocationProtocolPersistedBeforeGeneration(t *testing.T) {
 }
 
 func TestExecutionPolicyProtocolVersionsAndResume(t *testing.T) {
+	t.Parallel()
 	for _, selected := range []bool{false, true} {
 		t.Run(map[bool]string{false: "full", true: "selected"}[selected], func(t *testing.T) {
 			legacy := protocolPolicyCoordinator(t, "", selected)
@@ -159,6 +161,7 @@ func TestExecutionPolicyProtocolVersionsAndResume(t *testing.T) {
 }
 
 func TestExecutionPolicyRejectsProtocolBindingTampering(t *testing.T) {
+	t.Parallel()
 	c := protocolPolicyCoordinator(t, "chat-completions", false)
 	state, err := newExecutionPolicyState(c)
 	if err != nil {

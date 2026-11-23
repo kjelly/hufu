@@ -40,6 +40,7 @@ func fusionRankingCoordinator(t *testing.T, mode agent.MemoryLearningMode, fusio
 }
 
 func TestRuntimeFusionPolicyControlsRelevanceScale(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		fusion       string
 		wantFusion   contextstore.FusionMode
@@ -75,6 +76,7 @@ func TestRuntimeFusionPolicyControlsRelevanceScale(t *testing.T) {
 }
 
 func TestLoadMemoryPolicyRejectsUnknownFusion(t *testing.T) {
+	t.Parallel()
 	_, repo := rankingTestCoordinator(t, agent.MemoryLearningActive)
 	learning := agent.DefaultMemoryLearningPolicy()
 	learning.PolicyVersion = "memory-policy-bad-fusion"

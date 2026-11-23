@@ -18,6 +18,7 @@ func (i imageProfileIntrospector) InspectModel(context.Context, providerintrospe
 }
 
 func TestImageAdmissionSnapshotBindsCapabilityAndTransport(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name  string
 		state providerintrospection.CapabilityState
@@ -56,6 +57,7 @@ func TestImageAdmissionSnapshotBindsCapabilityAndTransport(t *testing.T) {
 }
 
 func TestImageAdmissionSnapshotDetectsTransportConfigurationChanges(t *testing.T) {
+	t.Parallel()
 	var hashes []string
 	for _, endpoint := range []string{"http://127.0.0.1:11434/v1", "http://127.0.0.1:11435/v1"} {
 		manager, err := agent.NewProviderManager(endpoint, "", nil)

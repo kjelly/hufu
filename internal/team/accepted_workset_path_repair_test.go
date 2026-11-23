@@ -90,6 +90,10 @@ func collectionFrozenPathProducer(t *testing.T, c *Coordinator, snapshot *RunInp
 }
 
 func TestAcceptedWorksetPathRepairRetainsWorkAcrossRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, scenario := range []string{"restart", "cancelled", "assigned_path_out_of_bounds"} {
 		t.Run(scenario, func(t *testing.T) {
 			location := "dir/soruce.go:7"
@@ -217,6 +221,10 @@ func TestAcceptedWorksetPathRepairRetainsWorkAcrossRecovery(t *testing.T) {
 }
 
 func TestAcceptedWorksetPathRepairRejectsInvalidAuthority(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, scenario := range []string{"foreign_path", "changed_line", "foreign_pointer", "missing_namespace_proof", "legacy_revision", "mutable_proof"} {
 		t.Run(scenario, func(t *testing.T) {
 			response := strings.Replace(researchCollectionResponse(t, 2), `"structured_payload":{`, `"structured_payload":{"locations":["dir/soruce.go:7"],`, 1)
@@ -329,6 +337,10 @@ func retainedPathCollectionFixture(t *testing.T) (*Coordinator, *ResumeSource, s
 }
 
 func TestAcceptedWorksetPathRepairOfRetainedAncestor(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	c, retained, id, original, before := retainedPathCollectionFixture(t)
 	ctx := contractCollectionContext(t, id)
 	plan, err := c.AssessContractRecovery(ctx, retained)
@@ -379,6 +391,10 @@ func TestAcceptedWorksetPathRepairOfRetainedAncestor(t *testing.T) {
 }
 
 func TestAcceptedWorksetPathRepairRejectsForgedAncestor(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, scenario := range []string{"event", "event_hash", "task_digest", "contract_hash", "checkpoint", "claims"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, source, id, _, _ := retainedPathCollectionFixture(t)
@@ -432,6 +448,10 @@ func TestAcceptedWorksetPathRepairRejectsForgedAncestor(t *testing.T) {
 }
 
 func TestAcceptedWorksetPathRepairRequiresAncestorGrantProof(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	c, source, id, _, _ := retainedPathCollectionFixture(t)
 	ctx := contractCollectionContext(t, id)
 	plan, err := c.AssessContractRecovery(ctx, source)
@@ -482,6 +502,10 @@ func TestAcceptedWorksetPathRepairRequiresAncestorGrantProof(t *testing.T) {
 }
 
 func TestAcceptedWorksetPathRepairRejectsChangedAncestorProducer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, scenario := range []string{"retried_producer", "planned_producer_retry"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, source, id, _, _ := retainedPathCollectionFixture(t)

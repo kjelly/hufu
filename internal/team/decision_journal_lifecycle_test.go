@@ -3,6 +3,7 @@ package team
 import "testing"
 
 func TestDecisionJournalRebindsToNextInvocation(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	if err := SaveSessionTree(c.session.Workspace, NewSessionTree()); err != nil {
 		t.Fatal(err)

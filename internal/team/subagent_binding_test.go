@@ -29,6 +29,7 @@ import (
 // (spec.md §6.1, §6.2). It intentionally does not construct or register any
 // real provider — PR-01 is structural parsing only.
 func TestSubagentProviderConfigParsing(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	teamYAML := `name: subagent-config-test
 subagent-provider-default: codex
@@ -81,6 +82,7 @@ subagent-providers:
 }
 
 func TestMergeCodexBackendConfigPreservesRuntimeBounds(t *testing.T) {
+	t.Parallel()
 	base := agent.SubagentProviderConfig{
 		Type: codexAppServerProviderType, MaxEventBytes: 16 << 20,
 		MaxTranscriptBytes: 16 << 20, MaxConcurrent: codexDefaultMaxConcurrent,
@@ -104,6 +106,7 @@ func TestMergeCodexBackendConfigPreservesRuntimeBounds(t *testing.T) {
 // "hufu-local" name (any case) cannot be shadowed by a team-configured
 // external provider (spec.md §6.1).
 func TestReservedLocalProviderCannotBeOverridden(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"hufu-local", "Hufu-Local", " HUFU-LOCAL "} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -130,6 +133,7 @@ func yamlQuote(name string) string {
 // (configuration-owned) but never appear in, or be settable through, the
 // coordinator's JSON task surface (spec.md §6.3).
 func TestTaskProviderIsNotCoordinatorJSON(t *testing.T) {
+	t.Parallel()
 	data, err := json.Marshal(TaskDef{Agent: "worker", Goal: "do it", SubagentProvider: "codex"})
 	if err != nil {
 		t.Fatal(err)
@@ -170,6 +174,7 @@ func newPrecedenceRegistry(extra ...string) *SubagentRegistry {
 // provider fields are consumed once, at canonical task admission. Scheduler
 // dispatch never calls the legacy resolution chain.
 func TestLegacyProviderCompatibilityPrecedenceAtCanonicalAdmission(t *testing.T) {
+	t.Parallel()
 	admit := func(t *testing.T, c *Coordinator, task TaskDef, def *agent.AgentDef) execution.ExecutionTarget {
 		t.Helper()
 		registry := NewExecutionRegistry()
@@ -260,6 +265,7 @@ func TestLegacyProviderCompatibilityPrecedenceAtCanonicalAdmission(t *testing.T)
 // (task_occurrence_durability_test.go's
 // TestTaskOccurrenceModelTopologySurvivesEventReplayAndShadow).
 func TestProviderBindingRoundTripReplay(t *testing.T) {
+	t.Parallel()
 	item := todoItemFromSpec(TodoSpec{
 		Agent: "worker", Desc: "provider binding replay", Goal: "provider binding replay",
 		SubagentProvider: "codex",
@@ -300,6 +306,7 @@ func TestProviderBindingRoundTripReplay(t *testing.T) {
 // task_created event's provider fields idempotently: replaying it twice must
 // not duplicate, corrupt, or change the resulting binding (spec.md §7.4).
 func TestProviderSessionBindingIsIdempotent(t *testing.T) {
+	t.Parallel()
 	item := todoItemFromSpec(TodoSpec{
 		Agent: "worker", Desc: "idempotent binding", Goal: "idempotent binding",
 		SubagentProvider: "codex",
@@ -427,6 +434,7 @@ func (p *directParityProvider) RunAttempt(_ context.Context, req AttemptRequest)
 // TestDirectCodexWorkerPreservesNormalTaskSemantics below is the fuller,
 // real-Codex-fixture version of the same proof.
 func TestDirectFastPathEscalatesNonLocalProviderToCoordinatedDispatch(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	worker := &agent.AgentDef{
 		Name: "worker", Role: "worker", SubagentProvider: "shadow",

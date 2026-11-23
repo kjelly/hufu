@@ -18,6 +18,7 @@ func writePresetAgentFile(t *testing.T, dir, filename, content string) {
 }
 
 func TestAgentPreset_CodingExpandsToolsAndSideEffect(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writePresetAgentFile(t, dir, "developer.md", "---\npreset: coding\n---\nImplement the change.\n")
 
@@ -36,6 +37,7 @@ func TestAgentPreset_CodingExpandsToolsAndSideEffect(t *testing.T) {
 }
 
 func TestAgentPreset_ExplicitDenyOverridesPresetGrant(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writePresetAgentFile(t, dir, "developer.md", "---\npreset: coding\ntools:\n  denied: [bash]\n---\nImplement the change.\n")
 
@@ -54,6 +56,7 @@ func TestAgentPreset_ExplicitDenyOverridesPresetGrant(t *testing.T) {
 }
 
 func TestAgentPreset_ExplicitAllowMergesWithPreset(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writePresetAgentFile(t, dir, "researcher.md", "---\npreset: research\ntools:\n  allowed: [random]\n---\nResearch the question.\n")
 
@@ -69,6 +72,7 @@ func TestAgentPreset_ExplicitAllowMergesWithPreset(t *testing.T) {
 }
 
 func TestAgentPreset_ExplicitSideEffectOverridesPreset(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writePresetAgentFile(t, dir, "reviewer.md", "---\npreset: review\nside_effect: workspace_write\n---\nReview the change.\n")
 
@@ -82,6 +86,7 @@ func TestAgentPreset_ExplicitSideEffectOverridesPreset(t *testing.T) {
 }
 
 func TestAgentPreset_UnknownPresetFails(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writePresetAgentFile(t, dir, "developer.md", "---\npreset: nonexistent-preset\n---\nImplement the change.\n")
 
@@ -95,6 +100,7 @@ func TestAgentPreset_UnknownPresetFails(t *testing.T) {
 }
 
 func TestAgentPreset_OpsPresetNeverGrantsSudo(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writePresetAgentFile(t, dir, "operator.md", "---\npreset: ops\n---\nPerform scoped operational tasks.\n")
 

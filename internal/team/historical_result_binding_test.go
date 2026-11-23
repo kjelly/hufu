@@ -21,6 +21,7 @@ func historicalBoundSpecs(t *testing.T, c *Coordinator, specs []TodoSpec, ids []
 }
 
 func TestHistoricalResultTaskBindingRecipientScope(t *testing.T) {
+	t.Parallel()
 	c, _, _, grant := historicalGrantReplayFixture(t)
 	ids := []string{"1", "2", "3", "4", "5"}
 	specs := historicalBoundSpecs(t, c, []TodoSpec{
@@ -51,6 +52,7 @@ func TestHistoricalResultTaskBindingRecipientScope(t *testing.T) {
 }
 
 func TestHistoricalResultTaskBindingRejectsOverrides(t *testing.T) {
+	t.Parallel()
 	for _, field := range []string{"missing", "task", "recipient", "branch", "cycle", "event", "hash", "result", "duplicate", "version", "subagent"} {
 		t.Run(field, func(t *testing.T) {
 			c, _, _, _ := historicalGrantReplayFixture(t)
@@ -95,6 +97,7 @@ func TestHistoricalResultTaskBindingRejectsOverrides(t *testing.T) {
 }
 
 func TestHistoricalResultTaskBindingCreationAndReplay(t *testing.T) {
+	t.Parallel()
 	c, store, _, grant := historicalGrantReplayFixture(t)
 	spec := historicalBoundSpecs(t, c, []TodoSpec{{Agent: "Review Worker", Desc: "new objective", Source: TaskSourceCoordinator,
 		ExecutionTarget: execution.ExecutionTarget{Backend: "ollama", Model: "test"}}}, []string{"1"})[0]
@@ -151,6 +154,7 @@ func TestHistoricalResultTaskBindingCreationAndReplay(t *testing.T) {
 }
 
 func TestHistoricalResultTaskBindingRequiresCanonicalAuthority(t *testing.T) {
+	t.Parallel()
 	for _, failure := range []string{"index", "checkpoint", "profile", "policy", "cancelled"} {
 		t.Run(failure, func(t *testing.T) {
 			c, store, _, _ := historicalGrantReplayFixture(t)
@@ -183,6 +187,7 @@ func TestHistoricalResultTaskBindingRequiresCanonicalAuthority(t *testing.T) {
 }
 
 func TestHistoricalResultTaskBindingCycleAndForkScope(t *testing.T) {
+	t.Parallel()
 	c, store, tree, grant := historicalGrantReplayFixture(t)
 	before, err := tree.CreateBranch("before-grant", mustReadEvents(t, store)[0].ID, store)
 	if err != nil {
@@ -220,6 +225,7 @@ func TestHistoricalResultTaskBindingCycleAndForkScope(t *testing.T) {
 }
 
 func TestHistoricalResultTaskBindingCannotUseCheckpointOnly(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	c.SetSessionData(&SessionData{HistoricalResultGrants: &runtimestore.HistoricalGrantCycleRef{EventID: "fake"}})
 	if err := c.freezeHistoricalResultTaskBindings(t.Context(), []TodoSpec{{Agent: "worker"}}, []string{"1"}); !errors.Is(err, ErrHistoricalResultTaskBinding) {
@@ -228,6 +234,7 @@ func TestHistoricalResultTaskBindingCannotUseCheckpointOnly(t *testing.T) {
 }
 
 func TestHistoricalResultTaskBindingIncludesEveryGrantedResult(t *testing.T) {
+	t.Parallel()
 	c, rows, _ := historicalGrantPreparationFixture(t)
 	*rows = append(*rows, historicalGrantSourceFixture(t, c.session.Workspace, "2"))
 	prepared, err := c.PrepareHistoricalResultGrants(t.Context(), []string{
@@ -249,6 +256,7 @@ func TestHistoricalResultTaskBindingIncludesEveryGrantedResult(t *testing.T) {
 }
 
 func TestHistoricalResultTaskBindingWorkerCreatedTodos(t *testing.T) {
+	t.Parallel()
 	c, store, _, _ := historicalGrantReplayFixture(t)
 	response, err := (&todoTool{coordinator: c}).handleCreate(t.Context(), "Review Worker", []string{"inspect inputs", "verify evidence"})
 	if err != nil || response.IsError {
@@ -269,6 +277,7 @@ func TestHistoricalResultTaskBindingWorkerCreatedTodos(t *testing.T) {
 }
 
 func TestHistoricalResultTaskBindingEnvelopeFreezesBeforeDigest(t *testing.T) {
+	t.Parallel()
 	c, _, _, _ := historicalGrantReplayFixture(t)
 	def := c.session.Agents["review worker"]
 	task, err := c.canonicalizeTaskOccurrence(TaskDef{Agent: "Review Worker", Goal: "new objective"}, def, "test")
@@ -292,6 +301,7 @@ func TestHistoricalResultTaskBindingEnvelopeFreezesBeforeDigest(t *testing.T) {
 }
 
 func TestHistoricalResultTaskBindingFanoutAndPrimaryScope(t *testing.T) {
+	t.Parallel()
 	c, _, _, _ := historicalGrantReplayFixture(t)
 	spec := historicalBoundSpecs(t, c, []TodoSpec{{Agent: "Review Worker"}}, []string{"1"})[0]
 	item := todoItemFromSpec(spec, "1")
@@ -310,6 +320,7 @@ func TestHistoricalResultTaskBindingFanoutAndPrimaryScope(t *testing.T) {
 }
 
 func TestHistoricalResultTaskBindingNeedsCreationProof(t *testing.T) {
+	t.Parallel()
 	c, store, _, _ := historicalGrantReplayFixture(t)
 	spec := historicalBoundSpecs(t, c, []TodoSpec{{Agent: "Review Worker"}}, []string{"1"})[0]
 	item := todoItemFromSpec(spec, "1")
@@ -343,6 +354,7 @@ func TestHistoricalResultTaskBindingNeedsCreationProof(t *testing.T) {
 }
 
 func TestHistoricalResultTaskBindingIsNotModelInput(t *testing.T) {
+	t.Parallel()
 	for _, key := range []string{"historical_result_binding", "historical-result-binding", "HistoricalResultBinding", "HISTORICAL_RESULT_BINDING"} {
 		input := `{"tasks":[{"agent":"worker","goal":"work","` + key + `":{"schema_version":1}}]}`
 		if _, err := decodeModelTaskDefs([]byte(input)); err == nil {

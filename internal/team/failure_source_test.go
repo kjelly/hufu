@@ -11,6 +11,7 @@ import (
 )
 
 func TestPermissionDispositionSurvivesFailurePersistence(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	for _, tt := range []struct {
 		name        string
@@ -41,6 +42,7 @@ func TestPermissionDispositionSurvivesFailurePersistence(t *testing.T) {
 }
 
 func TestNativeSafetyDenialStopsRetry(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		code  string
 		calls int
@@ -70,6 +72,7 @@ func TestNativeSafetyDenialStopsRetry(t *testing.T) {
 }
 
 func TestDenialMetadataPreservesFailureClassification(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		input FailureClassificationInput
@@ -90,6 +93,7 @@ func TestDenialMetadataPreservesFailureClassification(t *testing.T) {
 }
 
 func TestReadOnlyPolicyRepairRequiresOnlyUnexecutedGrammarDenials(t *testing.T) {
+	t.Parallel()
 	grammar := ToolExecutionDisposition{Kind: ToolExecutionPolicyDenied, ReasonCode: "read_only_shell_syntax_denied"}
 	for _, tc := range []struct {
 		name    string

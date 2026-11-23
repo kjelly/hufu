@@ -26,6 +26,7 @@ func writeBeliefModel(t *testing.T, dir string) {
 }
 
 func TestBeliefTeamLoadingAndResourceBoundary(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name, model, experiment, extra string
 		wantError                      bool
@@ -66,6 +67,7 @@ func TestBeliefTeamLoadingAndResourceBoundary(t *testing.T) {
 }
 
 func TestBeliefPolicySnapshotAndResumeDrift(t *testing.T) {
+	t.Parallel()
 	dir, workspace := t.TempDir(), t.TempDir()
 	writeBeliefModel(t, dir)
 	start := func() *Coordinator {
@@ -203,6 +205,7 @@ func assertBeliefActionState(t *testing.T, c *Coordinator, marker string) string
 }
 
 func TestBeliefRuntimeActionAndExpendableCache(t *testing.T) {
+	t.Parallel()
 	c, marker := runBeliefAction(t, false)
 	digest := assertBeliefActionState(t, c, marker)
 	before, err := c.eventStore.ReadEvents()
@@ -226,6 +229,7 @@ func TestBeliefRuntimeActionAndExpendableCache(t *testing.T) {
 }
 
 func TestBeliefRuntimeRepairsAdmissionWithoutRepeatingAction(t *testing.T) {
+	t.Parallel()
 	c, marker := runBeliefAction(t, true)
 	views := c.BeliefStates()
 	if len(views) != 1 || len(views[0].Diagnostics) == 0 {
@@ -236,6 +240,7 @@ func TestBeliefRuntimeRepairsAdmissionWithoutRepeatingAction(t *testing.T) {
 }
 
 func TestBeliefRuntimeMissingArtifactNeverReloadsTeamModel(t *testing.T) {
+	t.Parallel()
 	c, marker := runBeliefAction(t, false)
 	assertBeliefActionState(t, c, marker)
 	events, err := c.eventStore.ReadEvents()
@@ -267,6 +272,7 @@ func TestBeliefRuntimeMissingArtifactNeverReloadsTeamModel(t *testing.T) {
 }
 
 func TestBeliefRuntimeWorkerVerificationUsesFrozenEventBinding(t *testing.T) {
+	t.Parallel()
 	worker := scriptWorker(textTurn("attempt 1 output"))
 	c := newTestCoordinator(t, withWorker(worker))
 	c.session.Dir = t.TempDir()
@@ -303,6 +309,7 @@ func TestBeliefRuntimeWorkerVerificationUsesFrozenEventBinding(t *testing.T) {
 }
 
 func TestBeliefRuntimeRepairsForkGapOnlyOnSelectedBranch(t *testing.T) {
+	t.Parallel()
 	f := newBeliefFixture(t)
 	if err := f.journal.BindVerificationModel(t.Context(), f.model, "comparison"); err != nil {
 		t.Fatal(err)
@@ -346,6 +353,7 @@ func TestBeliefRuntimeRepairsForkGapOnlyOnSelectedBranch(t *testing.T) {
 }
 
 func TestBeliefEventVerificationDoesNotBindOtherReceipts(t *testing.T) {
+	t.Parallel()
 	base := ExecutionReceipt{RunID: "run-1", TaskID: "task-1", Attempt: 1, OccurrenceAttempt: 1, ModelExecutionID: "current"}
 	previous := base
 	previous.ModelExecutionID = "previous"
@@ -369,6 +377,7 @@ func TestBeliefEventVerificationDoesNotBindOtherReceipts(t *testing.T) {
 }
 
 func TestBeliefVerifierWithoutReceiptCannotBecomeObservation(t *testing.T) {
+	t.Parallel()
 	f := newBeliefFixture(t)
 	payload := []byte(`{"id":"task-1","status":"error","verify_result":{"exit_code":1,"fingerprint":"verification-1"}}`)
 	event := RunEvent{Type: "task_failed", RunID: f.scope.RunID, TaskID: f.scope.TaskID, Payload: payload}
@@ -378,6 +387,7 @@ func TestBeliefVerifierWithoutReceiptCannotBecomeObservation(t *testing.T) {
 }
 
 func TestBeliefRuntimeRestartPreservesCompletedExecution(t *testing.T) {
+	t.Parallel()
 	first, marker := runBeliefAction(t, false)
 	digest := assertBeliefActionState(t, first, marker)
 	first.saveCheckpoint()

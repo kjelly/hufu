@@ -11,6 +11,7 @@ import (
 )
 
 func TestCanonicalToolArgumentObjects(t *testing.T) {
+	t.Parallel()
 	info := fantasy.ToolInfo{Parameters: map[string]any{"payload": map[string]any{"type": "object", "properties": map[string]any{"counter": map[string]any{"type": "integer"}}}}}
 	for _, tc := range []struct {
 		input   string
@@ -44,6 +45,7 @@ func TestCanonicalToolArgumentObjects(t *testing.T) {
 }
 
 func TestSubmitResultUnwrapsObjectWithoutWeakeningValidation(t *testing.T) {
+	t.Parallel()
 	for _, gated := range []bool{false, true} {
 		t.Run(fmt.Sprint(gated), func(t *testing.T) {
 			c, item := resultContractCoordinator(t, true)

@@ -39,6 +39,7 @@ func (m *mockPolicyEngine) ResolveRecoveryPolicy(def *agent.AgentDef, t TaskDef)
 }
 
 func TestCoordinatorSubServices_Defaults(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{
 		Workspace: t.TempDir(),
 		Dir:       t.TempDir(),
@@ -81,6 +82,7 @@ func TestCoordinatorSubServices_Defaults(t *testing.T) {
 }
 
 func TestCoordinatorSubServices_Override(t *testing.T) {
+	t.Parallel()
 	// Overrides exercise interface dispatch without constructing runtime services.
 	c := &Coordinator{}
 
@@ -232,6 +234,7 @@ func (*mockEvidenceService) FinalizeRunManifest(_ context.Context, req EvidenceF
 // for all 6 sub-service interfaces (fix 3: extends override coverage beyond
 // the original Planner/PolicyEngine-only test).
 func TestCoordinatorSubServices_RoundTrip(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 
 	// Planner
@@ -286,6 +289,7 @@ func TestCoordinatorSubServices_RoundTrip(t *testing.T) {
 // default wrapper when the backing field is nil (fix 3: covers the nil-fallback
 // path not exercised by NewCoordinator-based tests where fields are populated).
 func TestCoordinatorSubServices_NilFallback(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{} // all sub-service fields nil (zero-value)
 
 	if c.Planner() == nil {
@@ -320,6 +324,7 @@ func TestCoordinatorSubServices_NilFallback(t *testing.T) {
 // cache policy via c.PolicyEngine().GetCachePolicy(), so overriding PolicyEngine
 // changes Coordinator's internal caching decision (the seam is no longer "pure").
 func TestCoordinatorSubServices_PolicyEngineOverrideAffectsLookup(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	c := &Coordinator{
 		projectDir: ws,
@@ -357,6 +362,7 @@ func TestCoordinatorSubServices_PolicyEngineOverrideAffectsLookup(t *testing.T) 
 // resolves the agent via c.AgentPool().ResolveAgentName(), so overriding AgentPool
 // changes which AgentDef is used.
 func TestCoordinatorSubServices_AgentPoolOverrideAffectsResolve(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 
 	want := &agent.AgentDef{Name: "fake-agent", Role: "worker"}

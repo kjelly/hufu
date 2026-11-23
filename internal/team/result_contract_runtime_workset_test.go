@@ -81,6 +81,7 @@ func runtimeWorksetProducerFixture(t *testing.T, c *Coordinator, content []byte,
 }
 
 func TestRuntimeResultInputsBindManifestValuesForSubmissionRoutes(t *testing.T) {
+	t.Parallel()
 	for _, route := range []string{"local", "external"} {
 		t.Run(route, func(t *testing.T) {
 			c, _, child, compiled := runtimeWorksetInputFixture(t)
@@ -172,6 +173,7 @@ func TestRuntimeResultInputsBindManifestValuesForSubmissionRoutes(t *testing.T) 
 }
 
 func TestRuntimeResultInputsPreserveOtherReferenceUses(t *testing.T) {
+	t.Parallel()
 	var root map[string]any
 	if err := json.Unmarshal([]byte(runtimeWorksetInputSchema), &root); err != nil {
 		t.Fatal(err)
@@ -196,6 +198,7 @@ func TestRuntimeResultInputsPreserveOtherReferenceUses(t *testing.T) {
 }
 
 func TestRuntimeResultInputsWorksetDeclarationValidation(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		edit func(map[string]any, map[string]any)
@@ -225,6 +228,7 @@ func TestRuntimeResultInputsWorksetDeclarationValidation(t *testing.T) {
 }
 
 func TestRuntimeResultInputsRejectUnverifiedWorksetValues(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		edit func(*testing.T, *Coordinator, *TodoItem, *TodoItem)

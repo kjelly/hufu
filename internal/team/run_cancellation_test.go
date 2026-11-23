@@ -7,6 +7,7 @@ import (
 )
 
 func TestRecordRunCancellationPersistsTypedCauseOnce(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-cancel", "session-cancel")
 	if err != nil {
@@ -40,6 +41,7 @@ func TestRecordRunCancellationPersistsTypedCauseOnce(t *testing.T) {
 }
 
 func TestRecordRunCancellationDistinguishesOperatorForceQuit(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-force", "session-force")
 	if err != nil {

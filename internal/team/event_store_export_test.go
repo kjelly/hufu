@@ -30,6 +30,7 @@ func appendExportFixture(t *testing.T, workspace string) {
 // imported export is the same journal, so exporting it again yields the same
 // bytes and the chain still validates.
 func TestExportImportEventLogRoundTripsTheChain(t *testing.T) {
+	t.Parallel()
 	source := t.TempDir()
 	appendExportFixture(t, source)
 	var exported bytes.Buffer
@@ -73,6 +74,7 @@ func TestExportImportEventLogRoundTripsTheChain(t *testing.T) {
 }
 
 func TestImportEventLogRejectsWhatItCannotKeepIntact(t *testing.T) {
+	t.Parallel()
 	source := t.TempDir()
 	appendExportFixture(t, source)
 	var exported bytes.Buffer
@@ -113,6 +115,7 @@ func TestImportEventLogRejectsWhatItCannotKeepIntact(t *testing.T) {
 }
 
 func TestReadUnvalidatedRunEventsFindsRunsInADamagedJournal(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	appendExportFixture(t, workspace)
 	insertJournalEvents(t, workspace, RunEvent{ID: "unscoped", Type: "legacy", Hash: "h"})

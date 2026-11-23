@@ -41,6 +41,7 @@ func boundReadBudgetFixture(t *testing.T, limit int, content string) (*boundDeci
 }
 
 func TestBoundDecisionReadBudgetWithholdsWholeEncodedResponse(t *testing.T) {
+	t.Parallel()
 	// The plain text fits; JSON escaping and canonical observation metadata do
 	// not. The admission check must use the exact inference representation.
 	content := "UNSEEN_SENTINEL" + strings.Repeat("\"\\\n", 1500)
@@ -77,6 +78,7 @@ func TestBoundDecisionReadBudgetWithholdsWholeEncodedResponse(t *testing.T) {
 }
 
 func TestBoundDecisionReadBudgetSerializesConcurrentPublication(t *testing.T) {
+	t.Parallel()
 	f, view, input := boundReadBudgetFixture(t, 8000, strings.Repeat("x", 4000))
 	var wg sync.WaitGroup
 	results := make(chan fantasy.ToolResponse, 2)
@@ -115,6 +117,7 @@ func TestBoundDecisionReadBudgetSerializesConcurrentPublication(t *testing.T) {
 }
 
 func TestBoundDecisionReadBudgetDoesNotChargeIdempotentReadTwice(t *testing.T) {
+	t.Parallel()
 	f, view, input := boundReadBudgetFixture(t, 8000, strings.Repeat("x", 4000))
 	for range 2 {
 		response, err := view.Run(f.ctx, fantasy.ToolCall{ID: "replayed-read", Name: "view", Input: input})
@@ -133,6 +136,7 @@ func TestBoundDecisionReadBudgetDoesNotChargeIdempotentReadTwice(t *testing.T) {
 }
 
 func TestBoundDecisionReadBudgetChecksEveryFinding(t *testing.T) {
+	t.Parallel()
 	f, view, input := boundReadBudgetFixture(t, 8000, strings.Repeat("x", 4000))
 	source := f.sources[0]
 	compiled := f.c.session.ResultContracts[source.ResultContract.ID]

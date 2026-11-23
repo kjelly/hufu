@@ -301,6 +301,9 @@ func TestCodexNativeImageResultRepairSendsOnlyText(t *testing.T) {
 }
 
 func TestCodexNativeImagesTimeoutDrainsBeforeCleanup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	data := mediaStorePNG(t)
 	digest := sha256.Sum256(data)
 	hash := hex.EncodeToString(digest[:])
@@ -308,7 +311,7 @@ func TestCodexNativeImagesTimeoutDrainsBeforeCleanup(t *testing.T) {
 		steps := codexImageSteps(t, root, validProposalJSON(""), []string{hash})
 		steps[len(steps)-1] = fakeCodexStep{NoResponse: true, ImageHashes: []string{hash}}
 		return steps
-	}, func(session *TeamSession) { session.Agents["worker"].Timeout = 10 })
+	}, func(session *TeamSession) { session.Agents["worker"].Timeout = 4 })
 	path := filepath.Join(c.projectDir, "input.png")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)

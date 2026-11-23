@@ -55,6 +55,7 @@ func setRuntimeInputObservation(t *testing.T, c *Coordinator, source *TodoItem, 
 }
 
 func TestRuntimeResultInputsSubmissionAndReplay(t *testing.T) {
+	t.Parallel()
 	for _, route := range []string{"local", "external"} {
 		t.Run(route, func(t *testing.T) {
 			c, source, consumer, compiled := runtimeInputResultFixture(t)
@@ -125,6 +126,7 @@ func TestRuntimeResultInputsSubmissionAndReplay(t *testing.T) {
 }
 
 func TestRuntimeResultInputsRejectUntrustedOrMistypedSources(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"pending", "model", "digest", "receipt", "snapshot", "old_run", "missing_output", "wrong_type"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, source, consumer, _ := runtimeInputResultFixture(t)
@@ -154,6 +156,7 @@ func TestRuntimeResultInputsRejectUntrustedOrMistypedSources(t *testing.T) {
 }
 
 func TestRuntimeResultInputsCompileAndProviderProjection(t *testing.T) {
+	t.Parallel()
 	c, _, consumer, compiled := runtimeInputResultFixture(t)
 	projected := providerVisibleResultPayloadSchema(*consumer.ResultContract, compiled)
 	properties, _ := projected["properties"].(map[string]any)
@@ -184,6 +187,7 @@ func TestRuntimeResultInputsCompileAndProviderProjection(t *testing.T) {
 }
 
 func TestRuntimeResultInputDeclarationsFailClosed(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{
 		`[{"target":"/observation","source_task":"prepare-outputs","output":"observation","ignore_receipt":true}]`,
 		`[{"target":"","source_task":"prepare-outputs","output":"observation"}]`,
@@ -210,6 +214,7 @@ func TestRuntimeResultInputDeclarationsFailClosed(t *testing.T) {
 }
 
 func TestRuntimeResultInputsExternalRechecksReceipt(t *testing.T) {
+	t.Parallel()
 	c, source, consumer, compiled := runtimeInputResultFixture(t)
 	if _, err := c.resultRuntimeInputValues(compiled, ""); err != nil {
 		t.Fatal(err)
@@ -227,6 +232,7 @@ func TestRuntimeResultInputsExternalRechecksReceipt(t *testing.T) {
 }
 
 func TestRuntimeResultInputsExternalCompletion(t *testing.T) {
+	t.Parallel()
 	c, source, consumer, _ := runtimeInputResultFixture(t)
 	compiled := compileFixtureJSONSchema(t, "completed.json", `{
 		"type":"object","additionalProperties":false,"required":["decision","kind","completion"],
@@ -278,6 +284,7 @@ func TestRuntimeResultInputsExternalCompletion(t *testing.T) {
 }
 
 func TestRuntimeResultInputsExternalCompletionPreservesCanonicalSummary(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"long summary", "downgraded tool evidence"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, source, consumer, _ := runtimeInputResultFixture(t)
@@ -320,6 +327,7 @@ func TestRuntimeResultInputsExternalCompletionPreservesCanonicalSummary(t *testi
 }
 
 func TestRuntimeResultInputsKeepAggregateBound(t *testing.T) {
+	t.Parallel()
 	c, source, consumer, _ := runtimeInputResultFixture(t)
 	setRuntimeInputObservation(t, c, source, map[string]any{"count": 1, "literal": strings.Repeat("a", 128<<10)})
 	var root map[string]any

@@ -33,6 +33,7 @@ func taskResultIsolationFixture(t *testing.T) (*Coordinator, *TodoItem, *TaskRes
 }
 
 func TestGetTaskResultDeepIsolationPreservesCanonicalAndProjections(t *testing.T) {
+	t.Parallel()
 	c, item, _ := taskResultIsolationFixture(t)
 	before := c.GetTaskResult(item.ID)
 	if before == nil {
@@ -74,6 +75,7 @@ func newTranscriptForOccurrenceTest(t *testing.T, c *Coordinator, item *TodoItem
 }
 
 func TestRejectedTranscriptFinalizationDoesNotMutateExistingResult(t *testing.T) {
+	t.Parallel()
 	c, item, _ := taskResultIsolationFixture(t)
 	identity, ok := c.activeTaskResultOccurrence(item.ID)
 	if !ok {
@@ -100,6 +102,7 @@ func TestRejectedTranscriptFinalizationDoesNotMutateExistingResult(t *testing.T)
 }
 
 func TestStaleTranscriptFinalizationCannotAlterCurrentOccurrence(t *testing.T) {
+	t.Parallel()
 	c, item, _ := taskResultIsolationFixture(t)
 	oldIdentity, ok := c.activeTaskResultOccurrence(item.ID)
 	if !ok {
@@ -120,6 +123,7 @@ func TestStaleTranscriptFinalizationCannotAlterCurrentOccurrence(t *testing.T) {
 }
 
 func TestSuccessfulTranscriptFinalizationPreservesOutputsAndAddsBoundEvidence(t *testing.T) {
+	t.Parallel()
 	c, item, _ := taskResultIsolationFixture(t)
 	identity, ok := c.activeTaskResultOccurrence(item.ID)
 	if !ok {

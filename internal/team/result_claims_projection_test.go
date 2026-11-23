@@ -10,6 +10,7 @@ import (
 const projectionTestSchema = `{"type":"object","required":["findings","assessments"],"properties":{"findings":{"type":"array","maxItems":32,"items":{"type":"object","properties":{"summary":{"type":"string"},"severity":{"type":"string","enum":["error","warning","info"]}},"required":["summary","severity"],"additionalProperties":false}},"assessments":{"type":"array","maxItems":64,"items":{"type":"object","properties":{"invariant_id":{"type":"string"},"status":{"type":"string","enum":["preserved","violated","unknown"]},"summary":{"type":"string"},"finding_index":{"type":"integer"}},"required":["invariant_id","status","summary"],"additionalProperties":false}}},"additionalProperties":false,"x-hufu-result-projections":{"findings":"/findings","invariant_assessments":"/assessments","bind_invariant_severity":true}}`
 
 func TestResultClaimsProjectionRecoveryUsesFrozenInvariantScope(t *testing.T) {
+	t.Parallel()
 	c, item, manifest := invariantAttestationFixture(t, InvariantVerificationReport,
 		InvariantDefinition{ID: "safe", Statement: "preserve boundary", Severity: InvariantSeverityError},
 		InvariantDefinition{ID: "excluded", Statement: "different scope", Severity: InvariantSeverityWarning})
@@ -68,6 +69,7 @@ func TestResultClaimsProjectionRecoveryUsesFrozenInvariantScope(t *testing.T) {
 }
 
 func TestResultClaimsProjectionBindsInvariantSeverity(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name, body string
 		valid      bool
@@ -124,6 +126,7 @@ func TestResultClaimsProjectionBindsInvariantSeverity(t *testing.T) {
 }
 
 func TestResultClaimsProjectionRejectsEnvelopeCopies(t *testing.T) {
+	t.Parallel()
 	spec := &resultClaimsProjection{Findings: "/findings"}
 	for _, findings := range [][]Finding{{}, {{Summary: "copied"}}} {
 		if _, err := projectClaimsInput(SubmitResultInput{Findings: findings, StructuredPayload: []byte(`{"findings":[]}`)}, &CompiledResultContract{claimsProjection: spec}); err == nil {
@@ -133,6 +136,7 @@ func TestResultClaimsProjectionRejectsEnvelopeCopies(t *testing.T) {
 }
 
 func TestResultClaimsProjectionExternalFailureDoesNotReplayWork(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct{ name, payload string }{
 		{"missing projection", `{"findings":[]}`},
 		{"invalid projection type", `{"findings":[],"assessments":{}}`},
@@ -190,6 +194,7 @@ func TestResultClaimsProjectionExternalFailureDoesNotReplayWork(t *testing.T) {
 }
 
 func TestResultClaimsProjectionExternalAndLocalUseOnePayload(t *testing.T) {
+	t.Parallel()
 	schema := strings.ReplaceAll(projectionTestSchema, `,"bind_invariant_severity":true`, ``)
 	compiled, err := CompileResultContractDocument("claims.json", []byte(schema))
 	if err != nil {
@@ -251,6 +256,7 @@ func mustProjectionJSON(t *testing.T, value any) []byte {
 }
 
 func TestResultClaimsProjectionSchemaRejectsUnboundedOrMissingSources(t *testing.T) {
+	t.Parallel()
 	for _, schema := range []string{
 		strings.Replace(projectionTestSchema, `"maxItems":32,`, "", 1),
 		strings.Replace(projectionTestSchema, `"items":{"type":"object"`, `"items":{"type":"integer"`, 1),
@@ -265,6 +271,7 @@ func TestResultClaimsProjectionSchemaRejectsUnboundedOrMissingSources(t *testing
 }
 
 func TestResultClaimsProjectionRevalidationRejectsDivergentEnvelope(t *testing.T) {
+	t.Parallel()
 	compiled, err := CompileResultContractDocument("projection.json", []byte(projectionTestSchema))
 	if err != nil {
 		t.Fatal(err)
@@ -288,6 +295,7 @@ func TestResultClaimsProjectionRevalidationRejectsDivergentEnvelope(t *testing.T
 }
 
 func TestResultClaimsProjectionRequiresInvariantModeOnStaticTasks(t *testing.T) {
+	t.Parallel()
 	compiled, err := CompileResultContractDocument("projection.json", []byte(projectionTestSchema))
 	if err != nil {
 		t.Fatal(err)
@@ -310,6 +318,7 @@ func TestResultClaimsProjectionRequiresInvariantModeOnStaticTasks(t *testing.T) 
 }
 
 func TestResultClaimsProjectionRejectsNativeRewritingOverlap(t *testing.T) {
+	t.Parallel()
 	root, err := decodeResultContractJSON([]byte(evidenceTestSchema))
 	if err != nil {
 		t.Fatal(err)
@@ -324,6 +333,7 @@ func TestResultClaimsProjectionRejectsNativeRewritingOverlap(t *testing.T) {
 }
 
 func TestResultClaimsProjectionNormalizesScalarsAcrossTransports(t *testing.T) {
+	t.Parallel()
 	schema := strings.ReplaceAll(projectionTestSchema, `,"bind_invariant_severity":true`, ``)
 	schema = strings.Replace(schema, `"finding_index":{"type":"integer"}`, `"finding_index":{"type":"integer","minimum":0,"maximum":31}`, 1)
 	compiled, err := CompileResultContractDocument("claims.json", []byte(schema))

@@ -11,6 +11,7 @@ import (
 )
 
 func TestRequestAcceptanceEvidenceRules(t *testing.T) {
+	t.Parallel()
 	sources := []requestAcceptanceSource{
 		{ID: requestAcceptanceFinalResponseSource, Kind: "response"},
 		{ID: "observation", Kind: "observed"},
@@ -35,6 +36,7 @@ func TestRequestAcceptanceEvidenceRules(t *testing.T) {
 }
 
 func TestRequestAcceptanceMixedEvidenceRepair(t *testing.T) {
+	t.Parallel()
 	for _, repaired := range []bool{false, true} {
 		t.Run(map[bool]string{false: "invalid_repair", true: "observed_only_repair"}[repaired], func(t *testing.T) {
 			c := requestAcceptanceFixture(t)
@@ -86,6 +88,7 @@ func TestRequestAcceptanceMixedEvidenceRepair(t *testing.T) {
 }
 
 func TestRequestAcceptanceFinalResponseEvidenceAndOfflineReplay(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	snapshot := freezeRequestFixture(t, c, "Explain the findings", "response")
 	item := completedRequestEvidence(t, c, "Supporting observation only", false)
@@ -116,6 +119,7 @@ func TestRequestAcceptanceFinalResponseEvidenceAndOfflineReplay(t *testing.T) {
 }
 
 func TestRequestAcceptanceResponseCannotSubstituteForObservationOrFinalDelivery(t *testing.T) {
+	t.Parallel()
 	for _, verification := range []string{"observed", "response"} {
 		t.Run(verification, func(t *testing.T) {
 			c := requestAcceptanceFixture(t)
@@ -142,6 +146,7 @@ func TestRequestAcceptanceResponseCannotSubstituteForObservationOrFinalDelivery(
 }
 
 func TestRequestAcceptanceProofRepairIsBoundedAndCannotUpgradeVerdicts(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"correct quote", "still invalid", "upgrade missing", "negative coverage"} {
 		t.Run(kind, func(t *testing.T) {
 			c := requestAcceptanceFixture(t)
@@ -188,6 +193,7 @@ func TestRequestAcceptanceProofRepairIsBoundedAndCannotUpgradeVerdicts(t *testin
 }
 
 func TestRequestAcceptanceUnknownMemberRepairPreservesVerdictsAndEvidence(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name         string
 		mutate       func(string) string
@@ -339,6 +345,7 @@ func TestRequestAcceptanceUnknownMemberRepairPreservesVerdictsAndEvidence(t *tes
 }
 
 func TestRequestAcceptanceProofRepairSelectsCorrectSourceKind(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	snapshot := freezeRequestFixture(t, c, "Retrieve the source document", "observed")
 	completedRequestEvidence(t, c, "The source document was returned.", false)
@@ -369,6 +376,7 @@ func TestRequestAcceptanceProofRepairSelectsCorrectSourceKind(t *testing.T) {
 }
 
 func TestRequestAcceptanceProofRepairCannotUpgradeOptionalNegative(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	request := "Optionally explain findings"
 	c.SetRequestAcceptanceModel(withRequestMaterialReview(requestAcceptanceModelFunc(func(_ context.Context, operation, _ string) ([]byte, error) {
@@ -400,6 +408,7 @@ func TestRequestAcceptanceProofRepairCannotUpgradeOptionalNegative(t *testing.T)
 }
 
 func TestRequestAcceptanceIndexedProofBindsExactUnicodeSourceAndAudits(t *testing.T) {
+	t.Parallel()
 	for _, verification := range []string{"observed", "response"} {
 		t.Run(verification, func(t *testing.T) {
 			c := requestAcceptanceFixture(t)
@@ -447,6 +456,7 @@ func TestRequestAcceptanceIndexedProofBindsExactUnicodeSourceAndAudits(t *testin
 }
 
 func TestRequestAcceptanceIndexedProofRejectsInvalidSelection(t *testing.T) {
+	t.Parallel()
 	for _, evidence := range []string{
 		`{"source_id":"candidate-response","quote_index":-1}`,
 		`{"source_id":"candidate-response","quote_index":999}`,
@@ -466,6 +476,7 @@ func TestRequestAcceptanceIndexedProofRejectsInvalidSelection(t *testing.T) {
 }
 
 func TestRequestAcceptanceCoordinatorFinishBoundsRepairAndPersistsPartial(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	freezeRequestFixture(t, c, "Retrieve the complete source", "observed")
 	completedRequestEvidence(t, c, "source unavailable", false)
@@ -489,6 +500,7 @@ func TestRequestAcceptanceCoordinatorFinishBoundsRepairAndPersistsPartial(t *tes
 }
 
 func TestRequestAcceptanceRuntimeVerifierEvidenceIsBoundToReceipt(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	snapshot := freezeRequestFixture(t, c, "Run the verification suite", "observed")
 	item := completedRequestEvidence(t, c, "work completed", false)
@@ -525,6 +537,7 @@ func TestRequestAcceptanceRuntimeVerifierEvidenceIsBoundToReceipt(t *testing.T) 
 // A typed result's verification entry carries a time.Duration. Its response
 // text must still render for the reviewer and for offline quote replay.
 func TestRequestAcceptanceResponseSourceRendersVerification(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name         string
 		verification VerificationResult

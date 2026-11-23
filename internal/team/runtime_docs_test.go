@@ -12,6 +12,7 @@ import (
 // the database the path names after a replacement, never in the stale one,
 // and that the held event store refuses rather than writing to it.
 func TestSessionCheckpointAfterDatabaseReplacementReachesTheCurrentFile(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	events, err := NewEventStore(workspace, "run-replaced", "session-replaced")
 	if err != nil {

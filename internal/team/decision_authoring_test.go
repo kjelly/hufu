@@ -13,6 +13,7 @@ import (
 )
 
 func TestNormalizeDecisionAuthoringCanonicalAliasMatchesLegacyPreset(t *testing.T) {
+	t.Parallel()
 	canonicalDir := writeDecisionAuthoringManifest(t, `decision:
   profile: standard
 `)
@@ -76,6 +77,7 @@ func TestNormalizeDecisionAuthoringCanonicalAliasMatchesLegacyPreset(t *testing.
 }
 
 func TestNormalizeDecisionAuthoringLocalProfileWinsAlias(t *testing.T) {
+	t.Parallel()
 	dir := writeDecisionAuthoringManifest(t, `decision:
   profile: standard
   profiles:
@@ -93,6 +95,7 @@ func TestNormalizeDecisionAuthoringLocalProfileWinsAlias(t *testing.T) {
 }
 
 func TestNormalizeDecisionAuthoringSeparatesPrimaryAndAuxiliaryProfiles(t *testing.T) {
+	t.Parallel()
 	dir := writeDecisionAuthoringManifest(t, `decision:
   profile: standard
   primary-profile: primary-standard
@@ -129,6 +132,7 @@ func TestNormalizeDecisionAuthoringSeparatesPrimaryAndAuxiliaryProfiles(t *testi
 }
 
 func TestNormalizeDecisionAuthoringRejectsInvalidPrimaryConfiguration(t *testing.T) {
+	t.Parallel()
 	for name, content := range map[string]string{
 		"blank":              "decision:\n  primary-profile: '   '\n",
 		"v1 local":           "decision:\n  primary-profile: old\n  profiles:\n    old:\n      preset: builtin/standard@v1\n",
@@ -145,6 +149,7 @@ func TestNormalizeDecisionAuthoringRejectsInvalidPrimaryConfiguration(t *testing
 }
 
 func TestNormalizeDecisionAuthoringAcceptsExactBuiltinReference(t *testing.T) {
+	t.Parallel()
 	dir := writeDecisionAuthoringManifest(t, `decision:
   profile: builtin/standard@v1
 `)
@@ -158,6 +163,7 @@ func TestNormalizeDecisionAuthoringAcceptsExactBuiltinReference(t *testing.T) {
 }
 
 func TestNormalizeDecisionAuthoringRejectsBlankUnknownAndConflicts(t *testing.T) {
+	t.Parallel()
 	tests := map[string]string{
 		"blank": `decision:
   profile: "   "
@@ -195,6 +201,7 @@ func TestNormalizeDecisionAuthoringRejectsBlankUnknownAndConflicts(t *testing.T)
 }
 
 func TestNormalizeDecisionAuthoringTopLevelRequestMaterializesContract(t *testing.T) {
+	t.Parallel()
 	dir := writeDecisionAuthoringManifest(t, `request:
   objective: ship the migration
   success-criteria:
@@ -227,6 +234,7 @@ func TestNormalizeDecisionAuthoringTopLevelRequestMaterializesContract(t *testin
 }
 
 func TestNormalizeDecisionAuthoringRequestPresenceAndCompatibility(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		content string
@@ -258,6 +266,7 @@ func TestNormalizeDecisionAuthoringRequestPresenceAndCompatibility(t *testing.T)
 }
 
 func TestNormalizeDecisionAuthoringLegacyRequestMatchesCanonicalIdentity(t *testing.T) {
+	t.Parallel()
 	canonicalDir := writeDecisionAuthoringManifest(t, `request:
   objective: ship safely
   success-criteria:
@@ -300,6 +309,7 @@ func TestNormalizeDecisionAuthoringLegacyRequestMatchesCanonicalIdentity(t *test
 }
 
 func TestCoordinatorRequestContractConfigUsesTeamConfigOwnership(t *testing.T) {
+	t.Parallel()
 	want := dispatchRequestContract()
 	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{RequestContract: want}}}
 	if got := c.requestContractConfig(); !reflect.DeepEqual(got, want) {

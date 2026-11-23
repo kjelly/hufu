@@ -7,6 +7,7 @@ import (
 )
 
 func TestOpenFileArtifactStoreReadOnlyDoesNotCreateMissingDirectories(t *testing.T) {
+	t.Parallel()
 	workspace := filepath.Join(t.TempDir(), "missing-workspace")
 	if _, err := OpenFileArtifactStoreReadOnly(workspace, workspace); err == nil {
 		t.Fatal("open read-only artifact store succeeded without an existing store")
@@ -17,6 +18,7 @@ func TestOpenFileArtifactStoreReadOnlyDoesNotCreateMissingDirectories(t *testing
 }
 
 func TestOpenFileArtifactStoreReadOnlyRejectsPut(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	writable, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {

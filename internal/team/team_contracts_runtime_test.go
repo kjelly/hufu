@@ -13,6 +13,7 @@ import (
 // Exercise real authored contracts, including action payloads and fan-out,
 // beyond the fields retained by the existing compatibility golden fixtures.
 func TestBundledContractAliasIdentityAndWorkflowParity(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"hufu-coding", "hufu-code-review", "web-research", "article-debate"} {
 		t.Run(name, func(t *testing.T) {
 			dir := filepath.Join(bundledTeamsDir(t), name)
@@ -92,6 +93,7 @@ func TestBundledContractAliasIdentityAndWorkflowParity(t *testing.T) {
 }
 
 func TestContractAliasRestoresWorkflowCheckpoint(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	session.ContractTasks = append(session.ContractTasks, TaskDef{ID: "extra", Agent: "preparer", Phase: PhasePrepare, Optional: true})
 	tasks, err := yaml.Marshal(session.ContractTasks)
@@ -132,6 +134,7 @@ func TestContractAliasRestoresWorkflowCheckpoint(t *testing.T) {
 }
 
 func TestContractMigrationDetectsFieldsMissingFromCompatSnapshot(t *testing.T) {
+	t.Parallel()
 	original := TaskDef{ID: "inspect", Agent: "worker", Action: &Action{Capability: "structured-actions", Type: "inspect", Payload: `{"target":"safe"}`}, Verify: "test -f result.txt"}
 	for _, mutate := range []func(*TaskDef){
 		func(task *TaskDef) { task.Verify = "true" },
@@ -149,6 +152,7 @@ func TestContractMigrationDetectsFieldsMissingFromCompatSnapshot(t *testing.T) {
 }
 
 func TestContractAliasKeepsSemanticSelectorForbidden(t *testing.T) {
+	t.Parallel()
 	for _, key := range []string{"tasks", "contracts"} {
 		manifest := key + ":\n  - id: inspect\n    agent: preparer\n    when-goal-contains: inspect\n"
 		parsed, _, err := decodeTeamManifestYAML("team.yaml", []byte(manifest))

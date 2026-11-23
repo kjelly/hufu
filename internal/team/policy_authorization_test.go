@@ -43,6 +43,7 @@ func (agentSpecificStreamTestAgent) Stream(_ context.Context, call fantasy.Agent
 }
 
 func TestAuthorizationPolicyFailsClosedForUnknownTools(t *testing.T) {
+	t.Parallel()
 	policy := defaultAuthorizationPolicy{}
 	decision, err := policy.AuthorizeToolCall(context.Background(), ToolAuthorizationRequest{Tool: "bash", AllowedTools: map[string]bool{"view": true}, FailureMode: PolicyFailClosed})
 	if err != nil || decision.Code != DecisionDeny {
@@ -55,6 +56,7 @@ func TestAuthorizationPolicyFailsClosedForUnknownTools(t *testing.T) {
 }
 
 func TestAuthorizationPolicyAllowsExplicitToolAndTransition(t *testing.T) {
+	t.Parallel()
 	policy := defaultAuthorizationPolicy{}
 	decision, err := policy.AuthorizeToolCall(context.Background(), ToolAuthorizationRequest{Agent: "worker", Tool: "view", AllowedTools: map[string]bool{"view": true}})
 	if err != nil || decision.Code != DecisionAllow {
@@ -67,6 +69,7 @@ func TestAuthorizationPolicyAllowsExplicitToolAndTransition(t *testing.T) {
 }
 
 func TestAuthorizeStreamToolRoutesNamespacedMCP(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	decision, err := c.authorizeStreamTool(context.Background(), "worker", "filesystem__read", map[string]bool{"filesystem__read": true})
 	if err != nil || decision.Code != DecisionAllow {
@@ -79,6 +82,7 @@ func TestAuthorizeStreamToolRoutesNamespacedMCP(t *testing.T) {
 }
 
 func TestRegisterProviderSecretsAddsResolvedSources(t *testing.T) {
+	t.Parallel()
 	registry := tools.NewSecretRegistry()
 	session := &TeamSession{}
 	session.Config.Providers = map[string]config.ProviderConfig{
@@ -102,6 +106,7 @@ func TestRegisterProviderSecretsAddsResolvedSources(t *testing.T) {
 // model round, so a denial there destroyed the whole attempt instead of being
 // something the model could adapt to. See internal/team/tool_policy_gate.go.
 func TestAgentSpecificMCPCallUsesMCPPolicyForCasePreservingAgent(t *testing.T) {
+	t.Parallel()
 	policy := &distinctMCPPolicy{}
 	session := &TeamSession{
 		Workspace: t.TempDir(),

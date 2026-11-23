@@ -42,6 +42,7 @@ var sessionFieldClass = map[string]string{
 // TestSessionDataFieldsAreClassifiedForBranchSwitch fails when a SessionData
 // field is added without deciding how a branch switch derives it.
 func TestSessionDataFieldsAreClassifiedForBranchSwitch(t *testing.T) {
+	t.Parallel()
 	fields := reflect.TypeFor[SessionData]()
 	for i := range fields.NumField() {
 		name := fields.Field(i).Name
@@ -97,6 +98,7 @@ func marshalPayload(t *testing.T, payload any) []byte {
 // finished workflow. The session checkpoint must become A's replayed state, and the
 // next start must match it, restore A's workflow, and accept A's work.
 func TestCheckoutRestoresTheTargetBranchSession(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	workspace := session.Workspace
 	store, err := NewEventStore(workspace, "run-1", "session-ab")
@@ -212,6 +214,7 @@ func TestCheckoutRestoresTheTargetBranchSession(t *testing.T) {
 }
 
 func TestBranchSwitchRefusesAnUnconfirmedTerminalCommit(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	tree := NewSessionTree()
 	branch, err := tree.CreateBranch("other", "", nil)
@@ -248,6 +251,7 @@ func TestBranchSwitchRefusesAnUnconfirmedTerminalCommit(t *testing.T) {
 // repair replaces the run inputs it compares: a repaired start must leave a
 // projection the next start matches, not one it repairs again forever.
 func TestProjectionRepairReplacesStaleRunInputs(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-inputs")
 	if err != nil {

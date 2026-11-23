@@ -48,6 +48,7 @@ func changeHistoricalGrantPayload(t *testing.T, event RunEvent, change func(*His
 }
 
 func TestHistoricalResultGrantEnvelopeValidation(t *testing.T) {
+	t.Parallel()
 	fixture := historicalGrantEventFixture(t)
 	tests := []struct {
 		name   string
@@ -158,6 +159,7 @@ func openHistoricalGrantStore(t *testing.T) *EventStore {
 }
 
 func TestHistoricalResultGrantAppendRejectsAmbiguousJSON(t *testing.T) {
+	t.Parallel()
 	for _, field := range []string{"schema_version", "recipient"} {
 		t.Run(field, func(t *testing.T) {
 			store := openHistoricalGrantStore(t)
@@ -187,6 +189,7 @@ func assertHistoricalGrantIndex(t *testing.T, store *EventStore, event RunEvent)
 }
 
 func TestHistoricalResultGrantAdmissionIsImmutable(t *testing.T) {
+	t.Parallel()
 	store := openHistoricalGrantStore(t)
 	request := historicalGrantEventFixture(t)
 	durable, err := store.AppendPersisted(request)
@@ -236,6 +239,7 @@ func TestHistoricalResultGrantAdmissionIsImmutable(t *testing.T) {
 }
 
 func TestHistoricalResultGrantEventAndIndexCommitTogether(t *testing.T) {
+	t.Parallel()
 	store := openHistoricalGrantStore(t)
 	request := historicalGrantEventFixture(t)
 	if _, err := store.store.DB().ExecContext(t.Context(), `CREATE TRIGGER refuse_grant BEFORE INSERT ON historical_grant_cycles BEGIN SELECT RAISE(ABORT,'injected index failure'); END`); err != nil {
@@ -275,6 +279,7 @@ func TestHistoricalResultGrantEventAndIndexCommitTogether(t *testing.T) {
 }
 
 func TestHistoricalResultGrantRetryRejectsMissingIndex(t *testing.T) {
+	t.Parallel()
 	store := openHistoricalGrantStore(t)
 	request := historicalGrantEventFixture(t)
 	if _, err := store.AppendPersisted(request); err != nil {
@@ -294,6 +299,7 @@ func TestHistoricalResultGrantRetryRejectsMissingIndex(t *testing.T) {
 }
 
 func TestHistoricalResultGrantExportImportPreservesAuthority(t *testing.T) {
+	t.Parallel()
 	store := openHistoricalGrantStore(t)
 	durable, err := store.AppendPersisted(historicalGrantEventFixture(t))
 	if err != nil {

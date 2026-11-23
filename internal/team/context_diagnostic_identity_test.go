@@ -10,6 +10,7 @@ import (
 )
 
 func TestCoordinatorDiagnosticIdentityCannotChangeAuthorizationOrCostAttempt(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		executionRunID: "run-1",
 		sessionData: &SessionData{CoordinatorContextManifests: []ContextInjectionManifest{
@@ -38,6 +39,7 @@ func TestCoordinatorDiagnosticIdentityCannotChangeAuthorizationOrCostAttempt(t *
 }
 
 func TestAuxiliaryDiagnosticIdentityUsesExactManifestWithoutAuthority(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{executionRunID: "run-aux", session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "diagnostic"}}, sessionData: NewSession(), taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}}
 	parent := InvocationMetadata{RunID: "run-aux", TaskID: "1", AgentName: "worker", AgentRole: "worker", Attempt: 2, ModelExecutionID: "parent-model", ParentRequestID: "parent-request", Phase: PhaseExecute, Trigger: ContextTriggerRetry}
 	ctx := withTestAuxiliaryInvocationContext(withInvocationMetadata(t.Context(), parent))

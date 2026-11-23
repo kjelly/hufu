@@ -9,6 +9,7 @@ import (
 )
 
 func TestToolPairValidationDiagnosesInvalidRequests(t *testing.T) {
+	t.Parallel()
 	call := func(id string) fantasy.Message {
 		return fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: id, ToolName: "view"}}}
 	}

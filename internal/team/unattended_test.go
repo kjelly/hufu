@@ -26,6 +26,7 @@ func newBudgetCoordinator(t *testing.T) *Coordinator {
 }
 
 func TestSetUnattended(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	if c.IsUnattended() {
 		t.Fatal("default should not be unattended")
@@ -37,6 +38,7 @@ func TestSetUnattended(t *testing.T) {
 }
 
 func TestSetAutoApprove(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	if c.IsAutoApprove() {
 		t.Fatal("default should not be auto-approve")
@@ -48,6 +50,7 @@ func TestSetAutoApprove(t *testing.T) {
 }
 
 func TestBudgetExceeded_Disabled(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	if ex, _ := c.budgetExceeded(); ex {
 		t.Error("no budget configured should never be exceeded")
@@ -55,6 +58,7 @@ func TestBudgetExceeded_Disabled(t *testing.T) {
 }
 
 func TestBudgetExceeded_WallClock(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.sessionTime = time.Now().Add(-10 * time.Minute)
 	c.SetBudget(60, 0) // 60s budget, already 10min elapsed
@@ -68,6 +72,7 @@ func TestBudgetExceeded_WallClock(t *testing.T) {
 }
 
 func TestBudgetExceeded_WallClock_NotYet(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.SetBudget(3600, 0)
 	if ex, _ := c.budgetExceeded(); ex {
@@ -76,6 +81,7 @@ func TestBudgetExceeded_WallClock_NotYet(t *testing.T) {
 }
 
 func TestBudgetExceeded_Tokens(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.SetBudget(0, 1000)
 	c.tokensUsed.Store(1500)
@@ -89,6 +95,7 @@ func TestBudgetExceeded_Tokens(t *testing.T) {
 }
 
 func TestBudgetExceeded_Tokens_NotYet(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.SetBudget(0, 1000)
 	c.tokensUsed.Store(999)
@@ -98,6 +105,7 @@ func TestBudgetExceeded_Tokens_NotYet(t *testing.T) {
 }
 
 func TestSetBudget_IgnoresZero(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.SetBudget(100, 200)
 	c.SetBudget(0, 0) // zeros must not clear existing budgets
@@ -110,6 +118,7 @@ func TestSetBudget_IgnoresZero(t *testing.T) {
 }
 
 func TestRunAcceptance_Empty(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	if _, err := c.runAcceptance(context.Background()); err != nil {
 		t.Errorf("no acceptance command should be a no-op, got %v", err)
@@ -117,6 +126,7 @@ func TestRunAcceptance_Empty(t *testing.T) {
 }
 
 func TestRunAcceptance_Pass(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.SetAcceptance("true")
 	if _, err := c.runAcceptance(context.Background()); err != nil {
@@ -125,6 +135,7 @@ func TestRunAcceptance_Pass(t *testing.T) {
 }
 
 func TestRunAcceptance_Fail(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.SetAcceptance("echo nope >&2; false")
 	if _, err := c.runAcceptance(context.Background()); err == nil {
@@ -133,6 +144,7 @@ func TestRunAcceptance_Fail(t *testing.T) {
 }
 
 func TestRunRollback_Custom(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.SetRollback("true")
 	if err := c.runRollback(context.Background()); err != nil {
@@ -146,6 +158,7 @@ func TestRunRollback_Custom(t *testing.T) {
 }
 
 func TestRunRollbackRequiresExplicitCommand(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	worktreeFile := filepath.Join(tmpDir, "uncommitted.go")
 	if err := os.WriteFile(worktreeFile, []byte("package uncommitted\n"), 0o600); err != nil {
@@ -163,6 +176,7 @@ func TestRunRollbackRequiresExplicitCommand(t *testing.T) {
 }
 
 func TestSelfHealingAndRollback(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.session.Workspace = t.TempDir()
 	c.SetUnattended(true)
@@ -217,6 +231,7 @@ func TestSelfHealingAndRollback(t *testing.T) {
 }
 
 func TestFinishRequiresAcknowledgementForFailedTasks(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.session.Workspace = t.TempDir()
 	failed := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "write final report"}})[0]
@@ -241,6 +256,7 @@ func TestFinishRequiresAcknowledgementForFailedTasks(t *testing.T) {
 }
 
 func TestSessionRestoreTasksAndCache(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "hufu-checkpoint-test")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
@@ -325,6 +341,7 @@ func (m *mockAgent) Generate(ctx context.Context, call fantasy.AgentCall) (*fant
 }
 
 func TestLoopDetection_ToolCallAbort(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.session.Workspace = t.TempDir()
 	var events []StatusEvent
@@ -413,6 +430,7 @@ func TestLoopDetection_ToolCallAbort(t *testing.T) {
 }
 
 func TestLoopDetection_SubmitResultUsesFailureFingerprint(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.session.Workspace = t.TempDir()
 	c.executionRunID = "run-submit-result-loop"
@@ -453,6 +471,7 @@ func TestLoopDetection_SubmitResultUsesFailureFingerprint(t *testing.T) {
 }
 
 func TestSubmitResultFailureFingerprintStructuredPayload(t *testing.T) {
+	t.Parallel()
 	invalid := []string{
 		`structured_payload_invalid: structured_payload does not satisfy result contract "audit": /debate_complete: expected boolean`,
 		`structured_payload_invalid: structured_payload does not satisfy result contract "audit": /supported_claims/0: expected string`,
@@ -477,6 +496,7 @@ func TestSubmitResultFailureFingerprintStructuredPayload(t *testing.T) {
 }
 
 func TestLoopDetection_StopsRepeatedSuccessfulToolCalls(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.session.Workspace = t.TempDir()
 	toolInputs := []string{
@@ -516,6 +536,7 @@ func TestLoopDetection_StopsRepeatedSuccessfulToolCalls(t *testing.T) {
 }
 
 func TestCoordinatorToolErrorTerminatesOrchestratorStream(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.session.Workspace = t.TempDir()
 
@@ -557,6 +578,7 @@ func TestCoordinatorToolErrorTerminatesOrchestratorStream(t *testing.T) {
 }
 
 func TestCoordinatorReadOnlyToolErrorContinuesOrchestratorStream(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.session.Workspace = t.TempDir()
 
@@ -593,6 +615,7 @@ func TestCoordinatorReadOnlyToolErrorContinuesOrchestratorStream(t *testing.T) {
 }
 
 func TestCoordinatorTeamInfoErrorContinuesOrchestratorStream(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.session.Workspace = t.TempDir()
 
@@ -632,6 +655,7 @@ func TestCoordinatorTeamInfoErrorContinuesOrchestratorStream(t *testing.T) {
 }
 
 func TestCoordinatorInitialToolCorrectionContinuesOrchestratorStream(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.session.Workspace = t.TempDir()
 	c.session.Config.Delegation.InitialCoordinatorTool = "agent"
@@ -669,6 +693,7 @@ func TestCoordinatorInitialToolCorrectionContinuesOrchestratorStream(t *testing.
 }
 
 func TestWrapUpRecoveryDoesNotRetryCoordinatorToolFailure(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.SetWrapUp()
 	c.runOrchestratorOverride = func(context.Context, *agent.AgentDef, string) (string, []fantasy.StepResult, error) {

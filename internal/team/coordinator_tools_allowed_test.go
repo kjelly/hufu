@@ -31,6 +31,7 @@ func (t namedCoordinatorTool) Run(context.Context, fantasy.ToolCall) (fantasy.To
 // catches the fast-path regression where a Helper exposed its declared tools
 // to the model but never received them in the runtime permission context.
 func TestWithEffectiveToolsAllowed_DefaultHelperBashPreservesRuntimePermissions(t *testing.T) {
+	t.Parallel()
 	session, err := LoadDefaultTeam(t.TempDir(), nil, "bash")
 	if err != nil {
 		t.Fatalf("LoadDefaultTeam: %v", err)
@@ -47,6 +48,7 @@ func TestWithEffectiveToolsAllowed_DefaultHelperBashPreservesRuntimePermissions(
 }
 
 func TestWithEffectiveToolsAllowed_IncludesActualAgentSpecificMCPTools(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{
 		Config: agent.TeamConfig{Name: "team"},
 		Agents: map[string]*agent.AgentDef{
@@ -70,6 +72,7 @@ func TestWithEffectiveToolsAllowed_IncludesActualAgentSpecificMCPTools(t *testin
 }
 
 func TestBuildOrchestratorToolsAreRuntimeAllowed(t *testing.T) {
+	t.Parallel()
 	allowed := coordinatorAllowedToolNames()
 	coreTools := make([]fantasy.AgentTool, 0, len(coordinatorCoreToolNames))
 	for name := range coordinatorCoreToolNames {
@@ -91,6 +94,7 @@ func TestBuildOrchestratorToolsAreRuntimeAllowed(t *testing.T) {
 }
 
 func TestCoordinatorDoesNotExposeSaveSkill(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		coreTools: []fantasy.AgentTool{namedCoordinatorTool("save_skill")},
 		session: &TeamSession{
@@ -115,6 +119,7 @@ func TestCoordinatorDoesNotExposeSaveSkill(t *testing.T) {
 }
 
 func TestCoordinatorLegacyMemoryAliasesAreScopedExactOptIn(t *testing.T) {
+	t.Parallel()
 	core := workerInvariantCoreTools(t)
 	for _, raw := range []string{"", "all", "ask_user"} {
 		c := &Coordinator{coreTools: core, session: &TeamSession{Agents: map[string]*agent.AgentDef{
@@ -140,6 +145,7 @@ func TestCoordinatorLegacyMemoryAliasesAreScopedExactOptIn(t *testing.T) {
 }
 
 func TestBuildOrchestratorToolsKeepFinishAttachedWithInitialPolicy(t *testing.T) {
+	t.Parallel()
 	coreTools := make([]fantasy.AgentTool, 0, len(coordinatorCoreToolNames))
 	for name := range coordinatorCoreToolNames {
 		coreTools = append(coreTools, namedCoordinatorTool(name))
@@ -212,6 +218,7 @@ func workerInvariantCoreTools(t *testing.T) []fantasy.AgentTool {
 // marks it mandatory for every non-sidecar task and createTaskAgentWithResultTool
 // appends it to the tool set, but it appears in no agent's declared tool list.
 func TestWorkerExposedToolsAreRuntimeAllowed(t *testing.T) {
+	t.Parallel()
 	core := workerInvariantCoreTools(t)
 
 	for _, tc := range []struct {
@@ -252,6 +259,7 @@ func TestWorkerExposedToolsAreRuntimeAllowed(t *testing.T) {
 // it. Without this, every task fails its result protocol on the first pass and
 // only the repair turn can ever complete one.
 func TestWorkerExposedToolsIncludeResultProtocol(t *testing.T) {
+	t.Parallel()
 	session, err := LoadDefaultTeam(t.TempDir(), nil, "bash,terminal")
 	if err != nil {
 		t.Fatalf("LoadDefaultTeam: %v", err)
@@ -286,6 +294,7 @@ func TestWorkerExposedToolsIncludeResultProtocol(t *testing.T) {
 }
 
 func TestWithEffectiveToolsAllowed_NoDeclaredGrantsMatchesExposedTools(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{
 		Config: agent.TeamConfig{Name: "team"},
 		Agents: map[string]*agent.AgentDef{"worker": {Name: "worker"}},
@@ -302,6 +311,7 @@ func TestWithEffectiveToolsAllowed_NoDeclaredGrantsMatchesExposedTools(t *testin
 // TestWorkerExposedToolsAllowlistIsDeduped keeps the union from degrading the
 // allowlist into a bag of repeats as grant sources overlap.
 func TestWorkerExposedToolsAllowlistIsDeduped(t *testing.T) {
+	t.Parallel()
 	session, err := LoadDefaultTeam(t.TempDir(), nil, "bash")
 	if err != nil {
 		t.Fatalf("LoadDefaultTeam: %v", err)

@@ -49,6 +49,7 @@ func reopenRecoveryCoordinator(t *testing.T, previous *Coordinator) *Coordinator
 }
 
 func TestResultCollectionRecoveryRestartsAtDurableBoundaries(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range []string{"before_grant", "after_grant", "reserved", "response", "prepared", "accepted"} {
 		t.Run(boundary, func(t *testing.T) {
 			body := `{"status":"success","summary":"original limitation retained"}`
@@ -165,6 +166,7 @@ func TestResultCollectionRecoveryRestartsAtDurableBoundaries(t *testing.T) {
 }
 
 func TestResultCollectionRecoveryIndependentClaims(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, body        string
 		governingDecision bool
@@ -193,6 +195,7 @@ func TestResultCollectionRecoveryIndependentClaims(t *testing.T) {
 }
 
 func TestResultCollectionRecoveryReusesFrozenDecisionAdmission(t *testing.T) {
+	t.Parallel()
 	const workRunID = "resumed-work"
 	c, item, ctx, receipt := resultCollectionIdentityFixture(t, "http://127.0.0.1:1/v1", false, workRunID, nil, nil)
 	cp, err := c.beginResultCollection(ctx, item.ID, receipt, "complete work report")
@@ -238,6 +241,7 @@ func TestResultCollectionRecoveryReusesFrozenDecisionAdmission(t *testing.T) {
 
 // Historical grants keep the proof rules saved by their evaluator revision.
 func TestResultCollectionRecoveryLegacyAssessmentFingerprint(t *testing.T) {
+	t.Parallel()
 	c, id, _ := blockedRecoveryFixture(t, `{"status":"success","summary":"report"}`, true, RepairFailureSource)
 	original, err := c.AssessResultCollectionRecovery(t.Context(), id)
 	if err != nil {
@@ -272,6 +276,7 @@ func TestResultCollectionRecoveryLegacyAssessmentFingerprint(t *testing.T) {
 }
 
 func TestResultCollectionDecisionRecoveryPreviewRetainsEvidenceWithoutSnapshot(t *testing.T) {
+	t.Parallel()
 	c, id, _, calls := decisionRecoveryFixture(t)
 	events, err := c.EventJournal().ReadEvents(t.Context())
 	if err != nil {

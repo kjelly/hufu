@@ -23,6 +23,7 @@ func acceptedGateInput() CompletionGateInput {
 }
 
 func TestApplyCompletionGatePromotesCanonicalSharedCandidates(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -56,6 +57,7 @@ func TestApplyCompletionGatePromotesCanonicalSharedCandidates(t *testing.T) {
 }
 
 func TestApplyCompletionGatePreservesAcceptedRunWhenExperienceFinalizationFails(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "test"}},
@@ -88,6 +90,7 @@ func TestApplyCompletionGatePreservesAcceptedRunWhenExperienceFinalizationFails(
 }
 
 func TestApplyCompletionGateStillRejectsInvalidRunWhenExperienceFinalizationFails(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "test"}},
@@ -110,6 +113,7 @@ func TestApplyCompletionGateStillRejectsInvalidRunWhenExperienceFinalizationFail
 }
 
 func TestCompletionGateRejectsFalseCompletionInputs(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		mutate func(*CompletionGateInput)
@@ -138,6 +142,7 @@ func TestCompletionGateRejectsFalseCompletionInputs(t *testing.T) {
 }
 
 func TestCompletionGateAcceptsOnlyCompleteEvidence(t *testing.T) {
+	t.Parallel()
 	decision := EvaluateCompletionGate(context.Background(), acceptedGateInput())
 	if !decision.Accepted || len(decision.Reasons) != 0 {
 		t.Fatalf("gate decision = %#v, want accepted", decision)
@@ -145,6 +150,7 @@ func TestCompletionGateAcceptsOnlyCompleteEvidence(t *testing.T) {
 }
 
 func TestApplyCompletionGateDowngradesMissingEvidence(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	c := &Coordinator{
 		session:     &TeamSession{Workspace: ws, Config: agent.TeamConfig{Name: "test"}},
@@ -163,6 +169,7 @@ func TestApplyCompletionGateDowngradesMissingEvidence(t *testing.T) {
 }
 
 func TestApplyCompletionGateDoesNotDowngradeSuccessfulTaskForReportedRisk(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(ws)
 	if err != nil {
@@ -209,6 +216,7 @@ func TestApplyCompletionGateDoesNotDowngradeSuccessfulTaskForReportedRisk(t *tes
 }
 
 func TestApplyCompletionGateReadsActualTerminalLeak(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	manager, err := NewTerminalSessionManager(ws, nil)
 	if err != nil {

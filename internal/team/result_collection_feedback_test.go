@@ -11,6 +11,7 @@ import (
 )
 
 func TestResultCollectionFormatFeedback(t *testing.T) {
+	t.Parallel()
 	info := fantasy.ToolInfo{Parameters: map[string]any{
 		"findings": map[string]any{"type": "array", "items": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"summary": map[string]any{"type": "string"}}, "required": []string{"summary"}}},
 	}}
@@ -54,6 +55,7 @@ func TestResultCollectionFormatFeedback(t *testing.T) {
 }
 
 func TestResultCollectionSyntaxFeedbackLocatesBrokenBoundary(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, raw         string
 		line, column, end int
@@ -89,6 +91,7 @@ func TestResultCollectionSyntaxFeedbackLocatesBrokenBoundary(t *testing.T) {
 }
 
 func TestResultCollectionFormatFeedbackReportsEveryBoundViolation(t *testing.T) {
+	t.Parallel()
 	info := fantasy.ToolInfo{Parameters: map[string]any{
 		"assessments": map[string]any{"type": "array", "items": map[string]any{
 			"type": "object", "properties": map[string]any{
@@ -132,6 +135,7 @@ func TestResultCollectionFormatFeedbackReportsEveryBoundViolation(t *testing.T) 
 }
 
 func TestResultCollectionGuidanceRetainsPinnedBounds(t *testing.T) {
+	t.Parallel()
 	const schema = `{"type":"object","minProperties":2,"required":["bound","rows"],"properties":{"bound":{"type":"string"},"rows":{"type":"array","minItems":1,"maxItems":16,"items":{"$ref":"#/$defs/entry"}}},"$defs":{"entry":{"type":"object","properties":{"label":{"type":"string","minLength":1,"maxLength":256}}}},"x-hufu-runtime-inputs":[{"target":"/bound","source_task":"native","output":"receipt"}]}`
 	c, item, _, _ := receivedCollectionClaimsFixture(t, schema, `{"status":"success","summary":"saved work","structured_payload":{"rows":[]}}`)
 	_, compiled, err := c.boundResultContract(item.ID)
@@ -167,6 +171,7 @@ func TestResultCollectionGuidanceRetainsPinnedBounds(t *testing.T) {
 }
 
 func TestLargeResultContractSyntaxFeedbackIsBounded(t *testing.T) {
+	t.Parallel()
 	properties := make(map[string]any)
 	var required []string
 	for i := range 20 {
@@ -199,6 +204,7 @@ func TestLargeResultContractSyntaxFeedbackIsBounded(t *testing.T) {
 }
 
 func TestFixedCollectionFeedbackLocatesRejectedObjectWithoutRepeatingManifest(t *testing.T) {
+	t.Parallel()
 	for _, mistake := range []string{"nested_analysis", "outer_handling", "invalid_json"} {
 		t.Run(mistake, func(t *testing.T) {
 			c, _, item, plans := fixedCollectionFixture(t, 20)

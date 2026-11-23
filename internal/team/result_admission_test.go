@@ -19,6 +19,7 @@ type rejectingResultSink struct{ err error }
 func (s rejectingResultSink) Submit(context.Context, string, TaskResult) error { return s.err }
 
 func TestLocalResultAdmissionPreservesToolBoundary(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name           string
 		status         string

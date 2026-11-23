@@ -13,6 +13,7 @@ import (
 )
 
 func TestTeamCompositionPresetParity(t *testing.T) {
+	t.Parallel()
 	for _, name := range preset.TeamNames() {
 		for _, versioned := range []bool{false, true} {
 			t.Run(name+map[bool]string{false: "/flat", true: "/versioned"}[versioned], func(t *testing.T) {
@@ -102,6 +103,7 @@ func TestTeamCompositionPresetParity(t *testing.T) {
 }
 
 func TestTeamCompositionInvalidPreset(t *testing.T) {
+	t.Parallel()
 	for _, value := range []string{"null", "42", "false", "[]", "{}", "''", "'  '", "coding", "unknown-preset"} {
 		t.Run(value, func(t *testing.T) {
 			dir := t.TempDir()
@@ -122,6 +124,7 @@ func TestTeamCompositionInvalidPreset(t *testing.T) {
 }
 
 func TestTeamCompositionCollisionAndMixedSources(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		file, body string
 		valid      bool
@@ -158,6 +161,7 @@ func TestTeamCompositionCollisionAndMixedSources(t *testing.T) {
 }
 
 func TestTeamCompositionDiscoveryMigrationAndBindings(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dir := filepath.Join(root, "dev")
 	if err := os.Mkdir(dir, 0o755); err != nil {

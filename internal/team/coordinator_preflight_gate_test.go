@@ -13,6 +13,7 @@ import (
 // is the raw one, so later coordinator calls skip the policy gate and the
 // schema-repair wrapper.
 func TestCoordinatorPreflightRestoresGatedToolsOnLaterSteps(t *testing.T) {
+	t.Parallel()
 	raw := []fantasy.AgentTool{
 		fantasy.NewAgentTool("agent", "delegate", func(context.Context, coordinatorPreflightTestInput, fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			return fantasy.NewTextResponse("ok"), nil
@@ -52,6 +53,7 @@ func TestCoordinatorPreflightRestoresGatedToolsOnLaterSteps(t *testing.T) {
 }
 
 func TestCoordinatorPreflightBindToolsIgnoresEmptySet(t *testing.T) {
+	t.Parallel()
 	raw := []fantasy.AgentTool{fantasy.NewAgentTool("agent", "delegate", func(context.Context, coordinatorPreflightTestInput, fantasy.ToolCall) (fantasy.ToolResponse, error) {
 		return fantasy.NewTextResponse("ok"), nil
 	})}

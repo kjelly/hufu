@@ -17,6 +17,7 @@ import (
 // the exit itself, so List is already current and no Reconcile is needed. If
 // that stopped holding, wait_for would go back to polling dead processes.
 func TestTerminalLivenessProbeReportsRealProcessFacts(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	manager, err := NewTerminalSessionManager(workspace, func(string, string, map[string]interface{}) {})
 	if err != nil {
@@ -83,6 +84,7 @@ func TestTerminalLivenessProbeReportsRealProcessFacts(t *testing.T) {
 // TestTerminalLivenessProbeAbsentWithoutManager keeps the injection inert for a
 // coordinator that has no terminal manager, so no caller needs a special case.
 func TestTerminalLivenessProbeAbsentWithoutManager(t *testing.T) {
+	t.Parallel()
 	if probe := (&Coordinator{}).terminalLivenessProbe(); probe != nil {
 		t.Fatal("a coordinator with no terminal manager must supply no probe")
 	}
@@ -100,6 +102,7 @@ func TestTerminalLivenessProbeAbsentWithoutManager(t *testing.T) {
 // TestTerminalLivenessProbeIsScopedToTheRun stops a wait from being ended by a
 // process fact belonging to a different run.
 func TestTerminalLivenessProbeIsScopedToTheRun(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	manager, err := NewTerminalSessionManager(workspace, func(string, string, map[string]interface{}) {})
 	if err != nil {
@@ -131,6 +134,7 @@ func TestTerminalLivenessProbeIsScopedToTheRun(t *testing.T) {
 // polling dead processes until they time out, which is invisible in every test
 // that does not measure wall-clock time. This keeps the wiring present.
 func TestWorkerTaskContextCarriesTerminalLiveness(t *testing.T) {
+	t.Parallel()
 	src, err := os.ReadFile("coordinator_task_run.go")
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)

@@ -11,6 +11,7 @@ import (
 )
 
 func TestRunBudgetExcludesIdleAcrossStepAndProviderChecks(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	c.SetBudget(60, 0)
 	synctest.Test(t, func(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 )
 
 func TestSubmitResultRejectsForgedExistingArtifactOccurrence(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session:        &TeamSession{Workspace: workspace},
@@ -37,6 +38,7 @@ func TestSubmitResultRejectsForgedExistingArtifactOccurrence(t *testing.T) {
 }
 
 func TestSubmitResultChecksBoundArtifactPathPolicyBeforeStat(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	path := filepath.Join(workspace, "blocked-report.txt")
 	if err := os.WriteFile(path, []byte("must not be materialized"), 0o644); err != nil {
@@ -65,6 +67,7 @@ func TestSubmitResultChecksBoundArtifactPathPolicyBeforeStat(t *testing.T) {
 }
 
 func TestBoundFanOutReviewerResultCompletesVerifiedWorkset(t *testing.T) {
+	t.Parallel()
 	c, producer, child, ref, receipt := newWorksetAuthorizationFixture(t)
 	store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
 	if err != nil {
@@ -149,6 +152,7 @@ func TestBoundFanOutReviewerResultCompletesVerifiedWorkset(t *testing.T) {
 }
 
 func TestCoordinatorTaskResultSinkRejectsUnmaterializedExistingArtifact(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}, taskTracker: NewTaskTracker(), executionRunID: "run-sink-forged"}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "sink proof"}})[0]
@@ -170,6 +174,7 @@ func TestCoordinatorTaskResultSinkRejectsUnmaterializedExistingArtifact(t *testi
 }
 
 func TestSubmitResultProtocolRepairCannotAddArtifactEvidence(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	path := filepath.Join(workspace, "report.txt")
 	if err := os.WriteFile(path, []byte("report"), 0o644); err != nil {
@@ -207,6 +212,7 @@ func TestSubmitResultProtocolRepairCannotAddArtifactEvidence(t *testing.T) {
 }
 
 func TestSubmittedArtifactFanOutReceiptChildRead(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	const runID = "run-submit-fanout"
 	tracker := NewTaskTracker()

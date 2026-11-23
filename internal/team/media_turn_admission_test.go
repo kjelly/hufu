@@ -12,6 +12,7 @@ import (
 )
 
 func TestMediaTurnAdmissionTracksCanonicalCommitIndependentlyOfFailure(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"success", "cancel before checkpoint", "attestation failure", "unreadable checkpoint"} {
 		t.Run(scenario, func(t *testing.T) {
 			c := newMediaPolicyCoordinator(t)
@@ -69,6 +70,7 @@ func TestMediaTurnAdmissionTracksCanonicalCommitIndependentlyOfFailure(t *testin
 }
 
 func TestStagedMediaIngressRejectsMixedOrReleasedSources(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	path := filepath.Join(c.projectDir, "source.png")

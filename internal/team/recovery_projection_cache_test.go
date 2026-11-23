@@ -10,6 +10,7 @@ import (
 )
 
 func TestRecoveryProjectionCacheBindsActualPayload(t *testing.T) {
+	t.Parallel()
 	var cache recoveryProjectionCache
 	events := []RunEvent{{ID: "source", Hash: strings.Repeat("a", 64), Payload: []byte(`{"value":1}`)}}
 	calls := 0
@@ -39,6 +40,7 @@ func TestRecoveryProjectionCacheBindsActualPayload(t *testing.T) {
 }
 
 func TestRecoveryProjectionCachePreservesEmptyPolicyBindings(t *testing.T) {
+	t.Parallel()
 	c := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 1, 0)
 	snapshot := c.ExecutionPolicySnapshot()
 	if snapshot == nil {
@@ -71,6 +73,7 @@ func TestRecoveryProjectionCachePreservesEmptyPolicyBindings(t *testing.T) {
 }
 
 func TestRecoveryObservationProjectionRejectsChangedHistory(t *testing.T) {
+	t.Parallel()
 	response := strings.Replace(researchCollectionResponse(t, 2), `"structured_payload":{`, `"structured_payload":{"locations":["dir/soruce.go:7"],`, 1)
 	c, source, id := contractCollectionFixture(t, response, SideEffectNone, contractCollectionFixtureOptions{
 		Accepted: true, ValidAccepted: true, ArtifactKeys: true, FrozenPaths: []string{"dir/source.go"},

@@ -31,6 +31,7 @@ func (p *recordingExperienceProcessor) Finalize(ctx context.Context, _ RunFinali
 }
 
 func TestFinalizeRunUsesOneExperienceProcessorForAcceptedRun(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "finalizer"}},
@@ -57,6 +58,7 @@ func TestFinalizeRunUsesOneExperienceProcessorForAcceptedRun(t *testing.T) {
 }
 
 func TestFinalizeRunRejectsExperienceForFailedOutcome(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}, taskTracker: NewTaskTracker()}
 	processor := &recordingExperienceProcessor{}
@@ -69,6 +71,7 @@ func TestFinalizeRunRejectsExperienceForFailedOutcome(t *testing.T) {
 }
 
 func TestFailedDirectRunUsesExperienceProcessor(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session:     &TeamSession{Workspace: workspace},
@@ -88,6 +91,7 @@ func TestFailedDirectRunUsesExperienceProcessor(t *testing.T) {
 }
 
 func TestDefaultExperienceProcessorIgnoresStaleMarkdownAndIsIdempotent(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -142,6 +146,7 @@ func TestDefaultExperienceProcessorIgnoresStaleMarkdownAndIsIdempotent(t *testin
 }
 
 func TestDefaultExperienceProcessorDoesNotPromotePreviousFailedRunRecord(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -206,6 +211,7 @@ func TestDefaultExperienceProcessorDoesNotPromotePreviousFailedRunRecord(t *test
 // and must never appear in a later direct-agent prompt nor be re-proposed as
 // persistent candidates.
 func TestFailedRunSharedContextIsNeitherPromptVisibleNorPromotable(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -273,6 +279,7 @@ func TestFailedRunSharedContextIsNeitherPromptVisibleNorPromotable(t *testing.T)
 // prompt bundle, and the accepted finalizer promotes them to confirmed
 // knowledge bound to the evidence manifest.
 func TestAcceptedRunSharedContextIsPromotedAndVisibleToItsOwnRun(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -325,6 +332,7 @@ func TestAcceptedRunSharedContextIsPromotedAndVisibleToItsOwnRun(t *testing.T) {
 }
 
 func TestFinalizeRunRejectsAsyncReflexionCandidateBarrier(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -388,6 +396,7 @@ func TestFinalizeRunRejectsAsyncReflexionCandidateBarrier(t *testing.T) {
 }
 
 func TestFinalizeRunRejectionAppendFailurePreservesOutcomeAndWarns(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	dbPath := filepath.Join(workspace, "context.sqlite")
 	baseRepo, err := contextstore.OpenSQLiteInMemory(filepath.Dir(dbPath))
@@ -454,6 +463,7 @@ func TestFinalizeRunRejectionAppendFailurePreservesOutcomeAndWarns(t *testing.T)
 }
 
 func TestCoordinatorRun_AbortedPathsRejectCandidatesAcrossRestart(t *testing.T) {
+	t.Parallel()
 	t.Run("provider failure recordRunAborted", func(t *testing.T) {
 		workspace := t.TempDir()
 		dbPath := filepath.Join(workspace, "context.sqlite")

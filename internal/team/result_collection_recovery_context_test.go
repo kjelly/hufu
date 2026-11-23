@@ -10,6 +10,7 @@ import (
 )
 
 func TestResultCollectionRecoveryRejectsUnreconciledContext(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"unknown_side_effect", "partial_side_effect", "checkpoint_pause", "decision_discipline", "terminal_running", "terminal_unknown", "terminal_failed"} {
 		t.Run(kind, func(t *testing.T) {
 			c, id, cp := blockedRecoveryFixture(t, `{"status":"success","summary":"report"}`, true, RepairFailureSource)
@@ -49,6 +50,7 @@ func TestResultCollectionRecoveryRejectsUnreconciledContext(t *testing.T) {
 }
 
 func TestResultCollectionRecoveryValidatesUnrelatedRetainedSources(t *testing.T) {
+	t.Parallel()
 	for _, valid := range []bool{false, true} {
 		t.Run(fmt.Sprint("valid_", valid), func(t *testing.T) {
 			c, id, _ := blockedRecoveryFixture(t, `{"status":"success","summary":"report"}`, true, RepairFailureSource)

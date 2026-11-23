@@ -7,6 +7,7 @@ import (
 )
 
 func TestCompactionRetentionReconcilesSupersededAttestations(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"same generation", "replaced generation"} {
 		t.Run(scenario, func(t *testing.T) {
 			workspace := t.TempDir()

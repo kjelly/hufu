@@ -15,6 +15,7 @@ import (
 
 // TestVerifySpecPropagation_ClonePtr verifies that cloneVerificationSpecPtr works correctly.
 func TestVerifySpecPropagation_ClonePtr(t *testing.T) {
+	t.Parallel()
 	vs := &agent.VerificationSpec{
 		Type: agent.VerifyFileExists,
 		Path: "workspace/output.md",
@@ -36,6 +37,7 @@ func TestVerifySpecPropagation_ClonePtr(t *testing.T) {
 }
 
 func TestVerifySpecLegacyModePopulatesMixedTypedTask(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{projectDir: t.TempDir()}
 	verification, err := c.verifyTaskDeliverableWithSpec(context.Background(), nil, TaskDef{
 		Verify:     "exit 1",
@@ -57,6 +59,7 @@ func TestVerifySpecLegacyModePopulatesMixedTypedTask(t *testing.T) {
 }
 
 func TestLegacyVerificationTranslationIsConservative(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		command   string
@@ -102,6 +105,7 @@ func TestLegacyVerificationTranslationIsConservative(t *testing.T) {
 }
 
 func TestLegacyTestExistsExecutionUsesTypedFileExists(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "regular"), []byte("ok"), 0o644); err != nil {
 		t.Fatal(err)
@@ -141,6 +145,7 @@ func TestLegacyTestExistsExecutionUsesTypedFileExists(t *testing.T) {
 }
 
 func TestLegacyFileAndDirectoryChecksPreserveShellSemantics(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	target := filepath.Join(workspace, "target")
 	if err := os.Mkdir(target, 0o755); err != nil {
@@ -180,6 +185,7 @@ func TestLegacyFileAndDirectoryChecksPreserveShellSemantics(t *testing.T) {
 // TestVerifySpecCacheKey_TypedAndLegacyEquivalent verifies that compatibility
 // translation gives equivalent command-exit contracts the same cache identity.
 func TestVerifySpecCacheKey_TypedAndLegacyEquivalent(t *testing.T) {
+	t.Parallel()
 	desc := "compile and test the project"
 	legacyKey := taskCacheIdentityWithSpec(desc, nil, "go build ./...", "success")
 	typedKey := taskCacheIdentityWithSpec(desc, &VerificationSpec{
@@ -195,6 +201,7 @@ func TestVerifySpecCacheKey_TypedAndLegacyEquivalent(t *testing.T) {
 // TestVerifySpecCacheKey_AssertionOrderDeterminism verifies that assertion ordering
 // is canonicalized so identical specs with different ordering produce the same key.
 func TestVerifySpecCacheKey_AssertionOrderDeterminism(t *testing.T) {
+	t.Parallel()
 	desc := "generate report"
 	spec1 := &VerificationSpec{
 		Type: VerifyJSONAssert,
@@ -222,6 +229,7 @@ func TestVerifySpecCacheKey_AssertionOrderDeterminism(t *testing.T) {
 }
 
 func TestRepeatedJSONAssertionPathsCanonicalizeInvalidationJournalAndFingerprint(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	first := &VerificationSpec{
 		Type: VerifyJSONAssert,
@@ -289,6 +297,7 @@ func TestRepeatedJSONAssertionPathsCanonicalizeInvalidationJournalAndFingerprint
 // TestVerifySpecCache_ObservationModeNotCacheable verifies that observation-mode results
 // are not stored in the task cache.
 func TestVerifySpecCache_ObservationModeNotCacheable(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		taskCache: newDefaultTaskCache(taskCacheDependencies{}),
 		session:   &TeamSession{Config: agent.TeamConfig{Name: "test"}},
@@ -314,6 +323,7 @@ func TestVerifySpecCache_ObservationModeNotCacheable(t *testing.T) {
 }
 
 func TestVerifySpecCache_MixedLegacyObservationModeNotCacheable(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		taskCache: newDefaultTaskCache(taskCacheDependencies{}),
 		session:   &TeamSession{Config: agent.TeamConfig{Name: "test"}},
@@ -334,6 +344,7 @@ func TestVerifySpecCache_MixedLegacyObservationModeNotCacheable(t *testing.T) {
 }
 
 func TestTypedVerificationInvalidationAndJournalTombstoneAreContractScoped(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{taskCache: newDefaultTaskCache(taskCacheDependencies{})}
 	c.SetPolicyEngine(&defaultPolicyEngine{c: c})
@@ -391,6 +402,7 @@ func TestTypedVerificationInvalidationAndJournalTombstoneAreContractScoped(t *te
 }
 
 func TestVerifySpecCache_MalformedSpecIsCacheMiss(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		taskCache: &defaultTaskCache{entries: map[string][]cachedTaskEntry{
 			"builder": {{
@@ -408,6 +420,7 @@ func TestVerifySpecCache_MalformedSpecIsCacheMiss(t *testing.T) {
 }
 
 func TestVerifySpecCache_FileAndJSONEvidenceMustRemainFresh(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	c := &Coordinator{
 		taskCache:  newDefaultTaskCache(taskCacheDependencies{}),
@@ -458,6 +471,7 @@ func TestVerifySpecCache_FileAndJSONEvidenceMustRemainFresh(t *testing.T) {
 // TestVerifySpecCache_ObservationModeLookupNotReturned verifies that observation cache
 // entries are excluded from cache hits.
 func TestVerifySpecCache_ObservationModeLookupNotReturned(t *testing.T) {
+	t.Parallel()
 	entry := cachedTaskEntry{
 		taskDesc:   "build the thing",
 		verifySpec: &VerificationSpec{Type: VerifyCommandExit, Command: "echo ok", Mode: "observation"},
@@ -477,6 +491,7 @@ func TestVerifySpecCache_ObservationModeLookupNotReturned(t *testing.T) {
 // the legacy verify fields empty, so only comparing those fields would let a
 // semantically similar task reuse a result verified by a different command.
 func TestVerifySpecCache_SemanticCandidatesRequireEquivalentTypedContract(t *testing.T) {
+	t.Parallel()
 	entry := cachedTaskEntry{
 		taskDesc: "confirm the generated report exists",
 		verifySpec: &VerificationSpec{
@@ -506,6 +521,7 @@ func TestVerifySpecCache_SemanticCandidatesRequireEquivalentTypedContract(t *tes
 // TestFingerprintDeterminism verifies ComputeVerificationFingerprintFull produces
 // identical fingerprints for equivalent (reordered) assertion specs.
 func TestFingerprintDeterminism(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	spec1 := VerificationSpec{
 		Type: VerifyJSONAssert,
@@ -543,6 +559,7 @@ func TestFingerprintDeterminism(t *testing.T) {
 
 // TestAcceptanceVerificationEvidence verifies that runAcceptance populates VerificationEvidence.
 func TestAcceptanceVerificationEvidence(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	sentinel := filepath.Join(dir, "artifact.txt")
 	if err := os.WriteFile(sentinel, []byte("present"), 0o644); err != nil {
@@ -596,6 +613,7 @@ func TestAcceptanceVerificationEvidence(t *testing.T) {
 
 // TestVerifySpecEventStoreRoundTrip verifies that VerifySpec round-trips through JSON.
 func TestVerifySpecEventStoreRoundTrip(t *testing.T) {
+	t.Parallel()
 	vs := &VerificationSpec{
 		Type: VerifyFileExists,
 		Path: "workspace/output.md",
@@ -630,6 +648,7 @@ func TestVerifySpecEventStoreRoundTrip(t *testing.T) {
 }
 
 func TestVerifySpecTaskJournalRoundTrip(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	logsDir := filepath.Join(workspace, "logs")
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
@@ -677,6 +696,7 @@ func TestVerifySpecTaskJournalRoundTrip(t *testing.T) {
 }
 
 func TestAcceptanceConfigParsesTypedVerificationAndLegacyString(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	yamlContent := `
 name: typed-acceptance

@@ -20,6 +20,7 @@ const controlDecisionsBlock = `control-decisions:
 `
 
 func TestControlDecisionsParseInBothManifestForms(t *testing.T) {
+	t.Parallel()
 	indented := "  " + strings.ReplaceAll(strings.TrimSuffix(controlDecisionsBlock, "\n"), "\n", "\n  ") + "\n"
 	manifests := map[string]string{
 		"flat":     "name: control-team\n" + controlDecisionsBlock,
@@ -43,6 +44,7 @@ func TestControlDecisionsParseInBothManifestForms(t *testing.T) {
 }
 
 func TestControlDecisionsRejectInvalidTeamBlock(t *testing.T) {
+	t.Parallel()
 	tests := map[string]string{
 		"unknown mode":    "control-decisions:\n  mode: always\n",
 		"unknown point":   "control-decisions:\n  points:\n    similar-task: {mode: active}\n",
@@ -62,6 +64,7 @@ func TestControlDecisionsRejectInvalidTeamBlock(t *testing.T) {
 }
 
 func TestNoControlDecisionsBlockParsesToZero(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTeamManifest(t, dir, "name: plain-team\n")
 	cfg, err := parseTeamYML(dir, nil)
@@ -116,6 +119,7 @@ func newControlDecisionCoordinator(t *testing.T, session *TeamSession) (*Coordin
 }
 
 func TestCoordinatorMergesHufuAndTeamControlDecisions(t *testing.T) {
+	t.Parallel()
 	global := control.Config{Endpoint: "http://gpu:11434/v1/systemone", Model: "nimble", Mode: control.ModeActive,
 		Points: map[control.Point]control.PointConfig{control.GuardReviewer: {Mode: control.ModeOff}}}
 	session := loadControlDecisionTeam(t, "control-decisions:\n  points:\n    path-reviewer: {mode: active}\n", global)
@@ -142,6 +146,7 @@ func TestCoordinatorMergesHufuAndTeamControlDecisions(t *testing.T) {
 }
 
 func TestCoordinatorRejectsIncompleteMergedControlDecisions(t *testing.T) {
+	t.Parallel()
 	session := loadControlDecisionTeam(t, "control-decisions:\n  mode: active\n", control.Config{})
 	if _, err := newControlDecisionCoordinator(t, session); err == nil || !strings.Contains(err.Error(), "model") {
 		t.Fatalf("NewCoordinator error = %v, want a missing model error", err)
@@ -157,6 +162,7 @@ func TestCoordinatorRejectsIncompleteMergedControlDecisions(t *testing.T) {
 }
 
 func TestCloneSessionCopiesControlDecisions(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{GlobalControlDecisions: control.Config{Points: map[control.Point]control.PointConfig{control.AskUser: {Mode: control.ModeActive}}}}
 	session.Config.ControlDecisions = control.Config{Points: map[control.Point]control.PointConfig{control.PathReviewer: {Mode: control.ModeActive}}}
 	clone := cloneSession(session, "elsewhere")
@@ -168,6 +174,7 @@ func TestCloneSessionCopiesControlDecisions(t *testing.T) {
 }
 
 func TestPolicySnapshotPinsActiveControlDecisionsOnly(t *testing.T) {
+	t.Parallel()
 	c := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 2)
 	snapshotHash := func(config control.Config) (string, string) {
 		t.Helper()

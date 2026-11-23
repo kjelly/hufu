@@ -10,6 +10,7 @@ import (
 )
 
 func TestFixedCollectionRepairRetainsTheSameManifest(t *testing.T) {
+	t.Parallel()
 	for _, purpose := range []string{"result_repair", "protocol_repair"} {
 		t.Run(purpose, func(t *testing.T) {
 			c, _, item, plans := fixedCollectionFixture(t, 2)
@@ -32,6 +33,7 @@ func TestFixedCollectionRepairRetainsTheSameManifest(t *testing.T) {
 }
 
 func TestFixedCollectionGeneratedValuesMustSatisfySchemaBeforeDispatch(t *testing.T) {
+	t.Parallel()
 	for _, contradiction := range []string{"fixed field", "cardinality"} {
 		t.Run(contradiction, func(t *testing.T) {
 			c, _, item, _ := fixedCollectionFixture(t, 2)
@@ -56,6 +58,7 @@ func TestFixedCollectionGeneratedValuesMustSatisfySchemaBeforeDispatch(t *testin
 }
 
 func TestFixedCollectionPayloadClonesDoNotShareProvenance(t *testing.T) {
+	t.Parallel()
 	c, _, item, plans := fixedCollectionFixture(t, 1)
 	payload, rejection := c.structuredPayloadForSubmission(item.ID, []byte(fixedCollectionSubmission(t, plans[0], nil)))
 	if rejection != "" {
@@ -80,6 +83,7 @@ func TestFixedCollectionPayloadClonesDoNotShareProvenance(t *testing.T) {
 }
 
 func TestFixedCollectionDuplicateKeysThroughPolicyAndRepairWrappers(t *testing.T) {
+	t.Parallel()
 	for _, route := range []string{"policy", "repair"} {
 		t.Run(route, func(t *testing.T) {
 			c, _, item, plans := fixedCollectionFixture(t, 1)
@@ -104,6 +108,7 @@ func TestFixedCollectionDuplicateKeysThroughPolicyAndRepairWrappers(t *testing.T
 }
 
 func TestFixedCollectionValidatesTransitiveSourceProvenance(t *testing.T) {
+	t.Parallel()
 	c, sources, parent, plans := fixedCollectionFixture(t, 1)
 	payload, rejection := c.structuredPayloadForSubmission(parent.ID, []byte(fixedCollectionSubmission(t, plans[0], nil)))
 	if rejection != "" {
@@ -147,6 +152,7 @@ func TestFixedCollectionValidatesTransitiveSourceProvenance(t *testing.T) {
 }
 
 func TestFixedCollectionReplayRejectsCyclicProvenance(t *testing.T) {
+	t.Parallel()
 	c, _, _, _ := fixedCollectionFixture(t, 0)
 	dir := t.TempDir()
 	schema := strings.NewReplacer(`"source_contracts":["assets.json"]`, `"source_contracts":["cycle.json"]`, `"source_pointer":"/entries"`, `"source_pointer":"/decisions"`, `"asset":"/id"`, `"asset":"/asset"`).Replace(fixedCollectionTestSchema)

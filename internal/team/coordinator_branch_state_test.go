@@ -55,6 +55,7 @@ func branchActiveModel(t *testing.T, workspace, branchID string) string {
 }
 
 func TestUpdateBranchStateSkipsRewriteWhenRecordedStateIsUnchanged(t *testing.T) {
+	t.Parallel()
 	c, workspace, branchID := newBranchStateTestCoordinator(t)
 	c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "dev", Desc: "t1"}})
 	c.saveCheckpoint()
@@ -89,6 +90,7 @@ func TestUpdateBranchStateSkipsRewriteWhenRecordedStateIsUnchanged(t *testing.T)
 }
 
 func TestUpdateBranchStateConcurrentCheckpoints(t *testing.T) {
+	t.Parallel()
 	c, workspace, branchID := newBranchStateTestCoordinator(t)
 	specs := make([]TodoSpec, 8)
 	for i := range specs {
@@ -124,6 +126,7 @@ func TestUpdateBranchStateConcurrentCheckpoints(t *testing.T) {
 }
 
 func TestBranchStateFingerprint(t *testing.T) {
+	t.Parallel()
 	base := func() []*TodoItem {
 		return []*TodoItem{{ID: "1", Desc: "review", Status: TaskInProgress}}
 	}

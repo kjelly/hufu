@@ -8,6 +8,7 @@ import (
 )
 
 func TestLoadDecisionIndexEntriesReadOnlyDoesNotCreateMissingWorkspace(t *testing.T) {
+	t.Parallel()
 	workspace := filepath.Join(t.TempDir(), "missing")
 	entries, err := LoadDecisionIndexEntriesReadOnly(workspace)
 	if err != nil {
@@ -22,6 +23,7 @@ func TestLoadDecisionIndexEntriesReadOnlyDoesNotCreateMissingWorkspace(t *testin
 }
 
 func TestProjectDecisionEntriesForLineageUsesCanonicalFinalizedRecord(t *testing.T) {
+	t.Parallel()
 	record := DecisionRecord{SchemaVersion: 1, ID: "decision-1", RunID: "run-1", TaskID: "task-1", EvidenceHash: "evidence-hash", FinalOption: "ship"}
 	payload, err := json.Marshal(decisionEvent{
 		DecisionID: record.ID, RunID: record.RunID, TaskID: record.TaskID,

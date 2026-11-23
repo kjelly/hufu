@@ -10,6 +10,7 @@ import (
 )
 
 func TestToolMediaCompactionUsesExplicitFormatAndKeepsClosedPair(t *testing.T) {
+	t.Parallel()
 	c, ctx, tool := toolMediaPublicationFixture(t, true)
 	response, err := c.publishToolMediaResult(ctx, tool, fantasy.ToolCall{ID: "capture"}, internalmcp.RuntimeToolResult{InvocationID: "mcp-test-call", Content: []internalmcp.RuntimeToolContent{
 		{Type: "image", Data: base64.StdEncoding.EncodeToString(mediaStorePNG(t)), MIMEType: "image/png"},

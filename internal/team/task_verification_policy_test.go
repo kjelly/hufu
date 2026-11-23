@@ -3,6 +3,7 @@ package team
 import "testing"
 
 func TestValidateObjectiveVerificationRequiresContractVerify(t *testing.T) {
+	t.Parallel()
 	err := validateObjectiveVerification([]TaskDef{{
 		Agent: "helper",
 		Goal:  "Run drive script",
@@ -17,6 +18,7 @@ func TestValidateObjectiveVerificationRequiresContractVerify(t *testing.T) {
 }
 
 func TestValidateObjectiveVerificationAllowsVerifiedContract(t *testing.T) {
+	t.Parallel()
 	err := validateObjectiveVerification([]TaskDef{{
 		Agent:  "helper",
 		Goal:   "Run drive script",

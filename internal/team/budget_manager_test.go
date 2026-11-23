@@ -12,6 +12,7 @@ import (
 // including the message text other layers surface to users
 // (docs/architecture/decision-runtime.md Phase 0.5).
 func TestBudgetLedgerExceeded(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		maxWallSecs int64
@@ -66,6 +67,7 @@ func TestBudgetLedgerExceeded(t *testing.T) {
 
 // A coordinator's budgetExceeded must agree with the ledger it delegates to.
 func TestCoordinatorBudgetDelegatesToLedger(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{sessionTime: time.Now().Add(-30 * time.Second)}
 	c.SetBudget(10, 0)
 	hit, reason := c.budgetExceeded()
@@ -95,6 +97,7 @@ func TestCoordinatorBudgetDelegatesToLedger(t *testing.T) {
 // Extra-model coordinators share the parent run's ledger, so Budget() must
 // reach the single owner rather than a private zero ledger.
 func TestBudgetReachesRunOwner(t *testing.T) {
+	t.Parallel()
 	root := &Coordinator{sessionTime: time.Now()}
 	root.SetBudget(0, 500)
 	child := &Coordinator{sessionTime: time.Now(), tokenBudgetOwner: root}
@@ -115,6 +118,7 @@ func TestBudgetReachesRunOwner(t *testing.T) {
 // setLimits must keep SetBudget's long-standing behavior: a non-positive value
 // leaves the existing cap untouched rather than clearing it.
 func TestBudgetLedgerSetLimitsIgnoresNonPositive(t *testing.T) {
+	t.Parallel()
 	var l budgetLedger
 	l.setLimits(60, 1000)
 	l.setLimits(0, 0)
@@ -130,6 +134,7 @@ func TestBudgetLedgerSetLimitsIgnoresNonPositive(t *testing.T) {
 }
 
 func TestBudgetLedgerReserveAndCommit(t *testing.T) {
+	t.Parallel()
 	var l budgetLedger
 	l.setLimits(0, 1000)
 
@@ -162,6 +167,7 @@ func TestBudgetLedgerReserveAndCommit(t *testing.T) {
 }
 
 func TestBudgetLedgerSnapshot(t *testing.T) {
+	t.Parallel()
 	var l budgetLedger
 	l.setLimits(120, 5000)
 	l.addTokens(1200)
@@ -175,6 +181,7 @@ func TestBudgetLedgerSnapshot(t *testing.T) {
 // new mutation site outside budget_manager.go reintroduces parallel accounting,
 // which is what StopPolicy must never have to reconcile (spec §29).
 func TestBudgetCountersHaveASingleOwner(t *testing.T) {
+	t.Parallel()
 	mutations := []string{
 		"tokensUsed.Add(",
 		"tokensUsed.Store(",

@@ -12,6 +12,7 @@ import (
 )
 
 func TestRuntimeFaultMatrixCancellationDrainsBufferedCompletionWithoutLaunchingDependent(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{
@@ -97,6 +98,7 @@ func TestRuntimeFaultMatrixCancellationDrainsBufferedCompletionWithoutLaunchingD
 }
 
 func TestRuntimeFaultMatrixRetryReopensSameOccurrenceAndPersistsProjections(t *testing.T) {
+	t.Parallel()
 	worker := scriptFailThenSucceed()
 	c := newTestCoordinator(t, withWorker(worker), withMaxRetries(2))
 	c.executionRunID = "run-fault-matrix-retry"

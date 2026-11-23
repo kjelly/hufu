@@ -10,6 +10,7 @@ import (
 )
 
 func TestApprovedMemoryPolicyLoadsIntoRuntime(t *testing.T) {
+	t.Parallel()
 	repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +49,7 @@ func TestApprovedMemoryPolicyLoadsIntoRuntime(t *testing.T) {
 }
 
 func TestNewMemoryPolicySeparatesCandidateAndInjectLimits(t *testing.T) {
+	t.Parallel()
 	repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +80,7 @@ func TestNewMemoryPolicySeparatesCandidateAndInjectLimits(t *testing.T) {
 // An adopted policy always wins; without one the team configuration applies,
 // except that active, which changes prompt selection, still needs adoption.
 func TestCoordinatorAppliesTeamLearningPolicyWithoutAdoption(t *testing.T) {
+	t.Parallel()
 	withMode := func(mode agent.MemoryLearningMode) agent.MemoryLearningPolicy {
 		policy := agent.DefaultMemoryLearningPolicy()
 		policy.Mode = mode

@@ -17,6 +17,7 @@ type schemaPreflightStreamModel struct {
 func (*schemaPreflightStreamModel) Model() string { return "test" }
 
 func TestSubmitResultSchemaPreflightUsesStableFailureIdentity(t *testing.T) {
+	t.Parallel()
 	info := submitResultToolInfo(taskResultSubmissionContract{})
 	baseline, ok := submitResultFailureFingerprint(submitResultToolName, "invalid submit_result arguments: unknown field")
 	if !ok {
@@ -44,6 +45,7 @@ func TestSubmitResultSchemaPreflightUsesStableFailureIdentity(t *testing.T) {
 // which ignores OnToolResult errors. Vary the failing JSON path at every step;
 // exact-input loop detection cannot make this regression pass accidentally.
 func TestSubmitResultSchemaPreflightStopsLoopWithoutWorkerReplay(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"result_only_repair", "valid_correction", "repair_exhausted"} {
 		t.Run(name, func(t *testing.T) {
 			c := newBudgetCoordinator(t)

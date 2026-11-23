@@ -11,6 +11,7 @@ import (
 )
 
 func TestRuntimeActionOutputSizeMatchesReceiptReplay(t *testing.T) {
+	t.Parallel()
 	// Compact JSON fits. The canonical bytes used for the receipt exceed the
 	// same boundary checked when downstream code loads the accepted result.
 	rows := make([]any, maxRuntimeOutputBytes/32)
@@ -51,6 +52,7 @@ func (oversizedOutputsWorksetProvider) Execute(ctx context.Context, _ Action) (i
 }
 
 func TestRuntimeActionRejectsOutputsBeforeIngestingArtifacts(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	registry := NewProviderRegistry()
 	registry.Register("structured-actions", oversizedOutputsWorksetProvider{})

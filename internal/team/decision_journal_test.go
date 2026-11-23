@@ -8,6 +8,7 @@ import (
 )
 
 func TestBranchScopedDecisionJournalIsolatesSiblingProjectionAndParentTail(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	es, err := NewEventStore(workspace, "run-journal", "session-journal")
 	if err != nil {
@@ -92,6 +93,7 @@ func TestBranchScopedDecisionJournalIsolatesSiblingProjectionAndParentTail(t *te
 }
 
 func TestBranchScopedDecisionJournalNamespacesRetryDedupeByBranch(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	es, err := NewEventStore(workspace, "run-journal", "session-journal")
 	if err != nil {
@@ -150,6 +152,7 @@ func TestBranchScopedDecisionJournalNamespacesRetryDedupeByBranch(t *testing.T) 
 }
 
 func TestBranchScopedDecisionJournalRejectsReturnedBranchMismatch(t *testing.T) {
+	t.Parallel()
 	tree := NewSessionTree()
 	journal, err := newBranchScopedDecisionJournal(wrongBranchJournal{}, tree)
 	if err != nil {
@@ -161,6 +164,7 @@ func TestBranchScopedDecisionJournalRejectsReturnedBranchMismatch(t *testing.T) 
 }
 
 func TestProjectEventsForBranchValidatesStrictMultigenerationLineage(t *testing.T) {
+	t.Parallel()
 	tree := NewSessionTree()
 	left, err := tree.CreateBranch("left", "", nil)
 	if err != nil {
@@ -201,6 +205,7 @@ func TestProjectEventsForBranchValidatesStrictMultigenerationLineage(t *testing.
 }
 
 func TestProjectEventsForBranchRejectsInvalidForkReferences(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		forkEvent string
@@ -256,6 +261,7 @@ func TestProjectEventsForBranchRejectsInvalidForkReferences(t *testing.T) {
 }
 
 func TestProjectEventsForBranchEmptyForkDoesNotInheritParentHistory(t *testing.T) {
+	t.Parallel()
 	tree := NewSessionTree()
 	child, err := tree.CreateBranch("empty-fork", "", nil)
 	if err != nil {

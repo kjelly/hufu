@@ -13,6 +13,7 @@ import (
 )
 
 func TestPrepareContextPreflightRejectsReentryWithoutBlocking(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	tree := NewSessionTree()
 	branch, err := tree.CreateRootBranch("existing-branch")

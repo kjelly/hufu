@@ -20,6 +20,7 @@ func loadReviewProgressTeam(t *testing.T) *TeamSession {
 }
 
 func TestReviewProgressContractsAndBudgets(t *testing.T) {
+	t.Parallel()
 	session := loadReviewProgressTeam(t)
 	c := &Coordinator{session: session, acceptanceSpec: session.Config.AcceptanceSpec}
 	if err := ValidateAcceptanceSpec(c.acceptanceSpec, session.Config.GoalMode); err != nil {
@@ -76,6 +77,7 @@ func TestReviewProgressContractsAndBudgets(t *testing.T) {
 }
 
 func TestReviewFirstAttestationAdvancesOnceAndRejectsUntrustedEvidence(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name       string
 		passed     bool
@@ -161,6 +163,7 @@ func TestReviewFirstAttestationAdvancesOnceAndRejectsUntrustedEvidence(t *testin
 }
 
 func TestReviewWorksetProgressRequiresAllVerifiedChildren(t *testing.T) {
+	t.Parallel()
 	session := loadReviewProgressTeam(t)
 	workspace, c, producer, store := newWorksetArtifactFixture(t)
 	session.Workspace = workspace

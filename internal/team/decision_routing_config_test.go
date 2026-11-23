@@ -17,6 +17,7 @@ import (
 // outside-view.role (plan.md Stage 8 follow-up) must round-trip through the
 // strict team.yaml decoder like every other discipline field.
 func TestParseTeamYMLOutsideViewRole(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `name: routed
 decision:
@@ -52,6 +53,7 @@ decision:
 // judge-role (spec2.md PR-3) must round-trip through the strict team.yaml
 // decoder like every other discipline field.
 func TestParseTeamYMLJudgeRole(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `name: routed
 decision:
@@ -84,6 +86,7 @@ decision:
 
 // DiversityPolicy extensions (spec.md v2 §13) round-trip through YAML.
 func TestParseTeamYMLJudgeRoleDiversityExtensions(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `name: routed
 decision:
@@ -119,6 +122,7 @@ decision:
 // allow-repeated-agent-definition conflicting with min-distinct-agents > 1
 // must fail team load.
 func TestParseTeamYMLRejectsAllowRepeatedAgentDefinitionConflict(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `name: routed
 decision:
@@ -143,6 +147,7 @@ decision:
 // A pin (spec.md v2 §34) round-trips through YAML and requires the
 // profile's discipline.routing.allow-pinned-binding gate.
 func TestParseTeamYMLJudgeRolePin(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `name: routed
 decision:
@@ -179,6 +184,7 @@ decision:
 // A pin without the profile's allow-pinned-binding gate must fail team
 // load, not fail at dispatch time.
 func TestParseTeamYMLRejectsPinWithoutProfileGate(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `name: routed
 decision:
@@ -204,6 +210,7 @@ decision:
 // A judge-role that could never be satisfied by the configured judge count
 // must fail team load, not fail at dispatch time.
 func TestParseTeamYMLRejectsImpossibleJudgeRole(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `decision:
   default-profile: standard
@@ -226,6 +233,7 @@ func TestParseTeamYMLRejectsImpossibleJudgeRole(t *testing.T) {
 // challenge-role (spec2.md PR-4) must round-trip through the strict
 // team.yaml decoder like every other discipline field.
 func TestParseTeamYMLChallengeRole(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `name: routed
 decision:
@@ -260,6 +268,7 @@ decision:
 // adaptive-capabilities (spec.md v2 §39-40) round-trips through YAML and
 // validates against the profile's own configured criteria.
 func TestParseTeamYMLChallengeRoleAdaptiveCapabilities(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `name: routed
 decision:
@@ -301,6 +310,7 @@ decision:
 // A challenge-role.adaptive-capabilities key naming no configured criterion
 // must fail team load (a typo would otherwise silently never fire).
 func TestParseTeamYMLRejectsUnknownAdaptiveCapabilitiesCriterion(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `name: routed
 decision:
@@ -329,6 +339,7 @@ decision:
 // A challenge-role that could never be satisfied by the configured
 // challenge count must fail team load, not fail at dispatch time.
 func TestParseTeamYMLRejectsImpossibleChallengeRole(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `decision:
   default-profile: standard
@@ -353,6 +364,7 @@ func TestParseTeamYMLRejectsImpossibleChallengeRole(t *testing.T) {
 
 // A role declared with no required capabilities must fail team load.
 func TestParseTeamYMLRejectsEmptyOutsideViewRole(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `decision:
   default-profile: standard
@@ -375,6 +387,7 @@ func TestParseTeamYMLRejectsEmptyOutsideViewRole(t *testing.T) {
 // routing-policy.scoring.weights (spec.md v2 §12) must round-trip through
 // the strict team.yaml decoder.
 func TestParseTeamYMLRoutingPolicyScoringWeights(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `name: routed
 routing-policy:
@@ -400,6 +413,7 @@ routing-policy:
 // A negative weight must fail team load, not silently invert ranking at
 // dispatch time.
 func TestParseTeamYMLRejectsNegativeScoringWeight(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `routing-policy:
   scoring:
@@ -417,6 +431,7 @@ func TestParseTeamYMLRejectsNegativeScoringWeight(t *testing.T) {
 // decision.routing-hints (spec.md v2 §16) must round-trip through the
 // strict team.yaml decoder.
 func TestParseTeamYMLRoutingHints(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `name: routed
 decision:
@@ -444,6 +459,7 @@ decision:
 
 // A malformed routing hint must fail team load.
 func TestParseTeamYMLRejectsInvalidRoutingHint(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `decision:
   default-profile: standard

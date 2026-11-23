@@ -147,6 +147,7 @@ func beginCollectionFixture(t *testing.T) (*Coordinator, *TodoItem, context.Cont
 }
 
 func TestResultCollectionPreservesWorkAndReplaysWithoutResultContract(t *testing.T) {
+	t.Parallel()
 	c, item, ctx, receipt := resultCollectionFixture(t)
 	before, err := json.Marshal(receipt, json.Deterministic(true))
 	if err != nil {
@@ -181,6 +182,7 @@ func TestResultCollectionPreservesWorkAndReplaysWithoutResultContract(t *testing
 }
 
 func TestResultCollectionReservesOneConcurrentModelTurn(t *testing.T) {
+	t.Parallel()
 	c, item, ctx, pending := beginCollectionFixture(t)
 	var wg sync.WaitGroup
 	results := make(chan *ResultCollectionCheckpoint, 2)
@@ -216,6 +218,7 @@ func TestResultCollectionReservesOneConcurrentModelTurn(t *testing.T) {
 }
 
 func TestResultCollectionRejectsUntrustedOrMissingWork(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"branch", "policy", "contract", "work_hash", "cas_bytes", "response_binding", "event_failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, item, ctx, checkpoint := beginCollectionFixture(t)
@@ -271,6 +274,7 @@ func TestResultCollectionRejectsUntrustedOrMissingWork(t *testing.T) {
 }
 
 func TestResultCollectionPreparedCommitPersistsBeforePublication(t *testing.T) {
+	t.Parallel()
 	for _, failAppend := range []bool{false, true} {
 		t.Run(map[bool]string{false: "committed", true: "storage_failure"}[failAppend], func(t *testing.T) {
 			c, item, ctx, checkpoint := beginCollectionFixture(t)
@@ -348,6 +352,7 @@ func TestResultCollectionPreparedCommitPersistsBeforePublication(t *testing.T) {
 }
 
 func TestResultCollectionRejectsAmbiguousClaims(t *testing.T) {
+	t.Parallel()
 	c, item, _, _ := beginCollectionFixture(t)
 	for _, raw := range []string{
 		`{"status":"success","summary":"complete","summary":"other"}`,
@@ -364,6 +369,7 @@ func TestResultCollectionRejectsAmbiguousClaims(t *testing.T) {
 }
 
 func TestResultCollectionRetriesOnlyRejectedSchema(t *testing.T) {
+	t.Parallel()
 	c, _, ctx, checkpoint := beginCollectionFixture(t)
 	first, err := c.reserveResultCollection(ctx, checkpoint, "first-collection", []byte(`{"tools":[]}`))
 	if err != nil {
@@ -393,6 +399,7 @@ func TestResultCollectionRetriesOnlyRejectedSchema(t *testing.T) {
 }
 
 func TestResultCollectionCrashResumeKeepsOriginalWorkAndBudget(t *testing.T) {
+	t.Parallel()
 	c, item, ctx, checkpoint := beginCollectionFixture(t)
 	checkpoint, err := c.reserveResultCollection(ctx, checkpoint, "lost-invocation", []byte(`{"tools":[]}`))
 	if err != nil {
@@ -426,6 +433,7 @@ func TestResultCollectionCrashResumeKeepsOriginalWorkAndBudget(t *testing.T) {
 }
 
 func TestResultCollectionOperatorGrantBindsSubmissionLease(t *testing.T) {
+	t.Parallel()
 	c, item, ctx, checkpoint := beginCollectionFixture(t)
 	checkpoint, err := c.blockResultCollection(ctx, checkpoint, repairFailureCollectionUnavailable)
 	if err != nil {
@@ -462,6 +470,7 @@ func TestResultCollectionOperatorGrantBindsSubmissionLease(t *testing.T) {
 }
 
 func TestResultCollectionFrozenInputHashCompatibility(t *testing.T) {
+	t.Parallel()
 	_, _, _, original := beginCollectionFixture(t)
 	for _, tc := range []struct {
 		name, hash string
@@ -495,6 +504,7 @@ func TestResultCollectionFrozenInputHashCompatibility(t *testing.T) {
 }
 
 func TestResultCollectionPolicyPreservesFrozenAuthority(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"unchanged", "unused_environment", "reachable_environment", "backend", "network", "corrupt_hash", "unhashed_network"} {
 		t.Run(name, func(t *testing.T) {
 			c, _, _, receipt := resultCollectionProviderFixture(t, "http://127.0.0.1:1/v1", false, func(c *Coordinator) {

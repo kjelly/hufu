@@ -12,6 +12,7 @@ import (
 )
 
 func TestCanonicalizeRuntimeOutputsIsDeterministicBoundedAndDetached(t *testing.T) {
+	t.Parallel()
 	first, firstHash, err := CanonicalizeRuntimeOutputs(map[string]any{
 		" scope ": map[string]any{"satisfied": true, "count": 10},
 	})
@@ -48,6 +49,7 @@ func TestCanonicalizeRuntimeOutputsIsDeterministicBoundedAndDetached(t *testing.
 // stay valid through session save/load and event replay: redaction applies
 // to presentation, never to the canonical digest-bound payload.
 func TestRuntimeOutputsRemainValidWhenLearnedSecretsGrow(t *testing.T) {
+	t.Parallel()
 	const collision = "runtime-output-secret-collision-7f2c9b1e"
 	outputs, digest, err := CanonicalizeRuntimeOutputs(map[string]any{
 		"documentation_verification": map[string]any{
@@ -110,6 +112,7 @@ func TestRuntimeOutputsRemainValidWhenLearnedSecretsGrow(t *testing.T) {
 }
 
 func TestTaskOutputAssertUsesRuntimeOccurrenceAndFrozenInput(t *testing.T) {
+	t.Parallel()
 	definitions := []RunInputDefinition{{Name: "review.scope", Schema: RunInputSchema{Type: "object"}, Required: true}}
 	snapshot := mustRunInputSnapshot(t, definitions, []RunInputAssignment{{
 		Name: "review.scope", RawValue: []byte(`{"kind":"last_n","count":10}`), Source: RunInputSourceCLI,
@@ -186,6 +189,7 @@ func TestTaskOutputAssertUsesRuntimeOccurrenceAndFrozenInput(t *testing.T) {
 }
 
 func TestRuntimeOutputsReplayWithTaskOccurrenceIdentity(t *testing.T) {
+	t.Parallel()
 	outputs, digest, err := CanonicalizeRuntimeOutputs(map[string]any{"scope": map[string]any{"satisfied": true}})
 	if err != nil {
 		t.Fatal(err)
@@ -210,6 +214,7 @@ func TestRuntimeOutputsReplayWithTaskOccurrenceIdentity(t *testing.T) {
 }
 
 func TestTaskOutputAssertManifestShapeAndScopeLint(t *testing.T) {
+	t.Parallel()
 	raw := []byte(`type: task_output_assert
 source-task: produce-workset
 output: scope

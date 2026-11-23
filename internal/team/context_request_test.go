@@ -13,6 +13,7 @@ func validTestContextRequest() ContextRequest {
 }
 
 func TestNewTaskContextRequestCopiesVerifierTouchedPaths(t *testing.T) {
+	t.Parallel()
 	paths := []string{"internal/team/context_router.go", "cmd/hufu/main.go"}
 	task := TaskDef{
 		Agent: "reviewer", Goal: "verify", Phase: PhaseVerify,
@@ -38,6 +39,7 @@ func TestNewTaskContextRequestCopiesVerifierTouchedPaths(t *testing.T) {
 }
 
 func TestContextRequestTriggerValidationMatrix(t *testing.T) {
+	t.Parallel()
 	base := validTestContextRequest()
 	cases := []struct {
 		name    string
@@ -78,6 +80,7 @@ func TestContextRequestTriggerValidationMatrix(t *testing.T) {
 }
 
 func TestContextRequestFingerprintSeparatesModelExecutions(t *testing.T) {
+	t.Parallel()
 	a := validTestContextRequest()
 	b := a
 	b.ModelExecutionID = "model-execution-2"
@@ -88,6 +91,7 @@ func TestContextRequestFingerprintSeparatesModelExecutions(t *testing.T) {
 }
 
 func TestContextRequestFingerprintSeparatesParentInvocations(t *testing.T) {
+	t.Parallel()
 	request := validTestContextRequest()
 	request.ParentTrigger = ContextTriggerRetry
 	request.ParentRequestID = "ctx-parent-a"
@@ -102,6 +106,7 @@ func TestContextRequestFingerprintSeparatesParentInvocations(t *testing.T) {
 }
 
 func TestContextRequestJSONNeverPersistsFailureEvidence(t *testing.T) {
+	t.Parallel()
 	r := validTestContextRequest()
 	r.Failure = &ContextFailure{ErrorClass: "tool_error", EvidenceRefs: []string{"raw transcript api_key=secret-value"}, ToolInputHash: "opaque-hash"}
 	data, err := json.Marshal(r)
@@ -114,6 +119,7 @@ func TestContextRequestJSONNeverPersistsFailureEvidence(t *testing.T) {
 }
 
 func TestTaskContextRequestUsesIsolatedModelExecutionIdentity(t *testing.T) {
+	t.Parallel()
 	c, item, _, _ := resultCollectionFixture(t)
 	c.modelExecutionID = "extra-model-slot-2"
 	r := c.newTaskContextRequest(TaskDef{Goal: "task", Model: "same-model"}, item.ID, 1, ContextTriggerTaskDispatch, "worker", "worker", nil)
@@ -136,6 +142,7 @@ func TestTaskContextRequestUsesIsolatedModelExecutionIdentity(t *testing.T) {
 }
 
 func TestTaskContextRequestNormalizesConfigPhase(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{executionRunID: "run-1"}
 	r := c.newTaskContextRequest(TaskDef{Agent: "inventory", Goal: "prepare", Phase: Phase("prepare")}, "task-1", 1, ContextTriggerTaskDispatch, "inventory", "worker", nil)
 	if r.Phase != PhasePrepare {
@@ -147,6 +154,7 @@ func TestTaskContextRequestNormalizesConfigPhase(t *testing.T) {
 }
 
 func TestCoordinatorContextRequestUsesExplicitPurpose(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{executionRunID: "run-1"}
 	start := c.newCoordinatorContextRequest("coordinate", false, 1)
 	continuation := c.newCoordinatorContextRequest("continue", true, 2)
@@ -156,6 +164,7 @@ func TestCoordinatorContextRequestUsesExplicitPurpose(t *testing.T) {
 }
 
 func TestContextRequestTerminalPhaseAllowsOnlyDeliveryContext(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	for _, phase := range []Phase{PhaseDone, PhaseFailed} {
 		for _, purpose := range []string{"request_acceptance_review", "request_acceptance_evidence", "compactor", "final_summary_repair"} {
@@ -193,6 +202,7 @@ func TestContextRequestTerminalPhaseAllowsOnlyDeliveryContext(t *testing.T) {
 }
 
 func TestContextRequestValidateQueryAndFingerprint(t *testing.T) {
+	t.Parallel()
 	r := validTestContextRequest()
 	if err := r.Validate(); err != nil {
 		t.Fatal(err)
@@ -223,6 +233,7 @@ func TestContextRequestValidateQueryAndFingerprint(t *testing.T) {
 }
 
 func TestContextRequestRejectsInvalidAttemptAndMissingRetryFailure(t *testing.T) {
+	t.Parallel()
 	r := validTestContextRequest()
 	r.Attempt = 0
 	if err := r.Validate(); err == nil {
@@ -241,6 +252,7 @@ func TestContextRequestRejectsInvalidAttemptAndMissingRetryFailure(t *testing.T)
 }
 
 func TestTaskContextRequestScopesModelIdentityToLifecycle(t *testing.T) {
+	t.Parallel()
 	c, item, _, _ := resultCollectionFixture(t)
 	task := taskDefFromTodoItem(item)
 	first := c.newTaskContextRequest(task, item.ID, 1, ContextTriggerTaskDispatch, item.Agent, "worker", nil)

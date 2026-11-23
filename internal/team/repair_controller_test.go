@@ -7,6 +7,7 @@ import (
 )
 
 func TestRepairControllerFailClosedAndCheckpointed(t *testing.T) {
+	t.Parallel()
 	rc := NewRepairController()
 	checkpointed, retried := false, false
 	result := rc.Execute(context.Background(), RepairRequest{
@@ -35,6 +36,7 @@ func TestRepairControllerFailClosedAndCheckpointed(t *testing.T) {
 }
 
 func TestRepairControllerReconcileAndRollbackGuards(t *testing.T) {
+	t.Parallel()
 	rc := NewRepairController()
 	result := rc.Execute(context.Background(), RepairRequest{
 		Task:       TaskDef{Recovery: RecoveryReconcile},
@@ -65,6 +67,7 @@ func TestRepairControllerReconcileAndRollbackGuards(t *testing.T) {
 }
 
 func TestRepairControllerAllowsRetryAfterReconcileProvesNotStarted(t *testing.T) {
+	t.Parallel()
 	rc := NewRepairController()
 	checkpointed, retried := false, false
 	result := rc.Execute(context.Background(), RepairRequest{
@@ -79,6 +82,7 @@ func TestRepairControllerAllowsRetryAfterReconcileProvesNotStarted(t *testing.T)
 }
 
 func TestRepairControllerDecisionMatrix(t *testing.T) {
+	t.Parallel()
 	replay := true
 	noReplay := false
 	tests := []struct {
@@ -117,6 +121,7 @@ func TestRepairControllerDecisionMatrix(t *testing.T) {
 }
 
 func TestRepairControllerCheckpointFailureRunsNoActionCallback(t *testing.T) {
+	t.Parallel()
 	callbackCalls := 0
 	result := NewRepairController().Execute(t.Context(), RepairRequest{
 		Task:       TaskDef{},

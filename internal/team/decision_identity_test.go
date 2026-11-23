@@ -7,6 +7,7 @@ import (
 )
 
 func TestCanonicalDecisionJSONVectors(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		input      any
@@ -53,6 +54,7 @@ func TestCanonicalDecisionJSONVectors(t *testing.T) {
 }
 
 func TestDecisionIdentityVectors(t *testing.T) {
+	t.Parallel()
 	teamID, err := DecisionTeamID(" fixture-team ")
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +80,7 @@ func TestDecisionIdentityVectors(t *testing.T) {
 }
 
 func TestNewLogicalRunIDFailsClosedOnEntropyError(t *testing.T) {
+	t.Parallel()
 	if _, err := newLogicalRunID(errorReader{}); err == nil {
 		t.Fatal("expected entropy failure")
 	}

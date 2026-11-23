@@ -8,6 +8,7 @@ import (
 // Fixed IDs and timestamps make this example reproducible in disposable SQLite
 // stores. A complete historical snapshot is not proof of a worker's test claim.
 func TestRetrospectiveSyntheticSnapshotProvenance(t *testing.T) {
+	t.Parallel()
 	var first []byte
 	for range 2 {
 		workspace := t.TempDir()

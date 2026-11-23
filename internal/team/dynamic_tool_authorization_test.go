@@ -25,6 +25,7 @@ func (dynamicTestTool) Run(_ context.Context, _ fantasy.ToolCall) (fantasy.ToolR
 }
 
 func TestDynamicToolAuthorizationSnapshotValidationAndClone(t *testing.T) {
+	t.Parallel()
 	targets := []FrozenDynamicToolTarget{
 		{Name: "a__one", DescriptorSHA256: strings.Repeat("a", 64)},
 		{Name: "z__two", DescriptorSHA256: strings.Repeat("b", 64)},
@@ -47,6 +48,7 @@ func TestDynamicToolAuthorizationSnapshotValidationAndClone(t *testing.T) {
 }
 
 func TestDynamicToolAuthorizationProjectionRoundTrip(t *testing.T) {
+	t.Parallel()
 	snapshot := newEmptyDynamicToolAuthorizationSnapshot()
 	spec := TodoSpec{Agent: "worker", Desc: "inspect", DynamicToolAuthorization: snapshot}
 	item := todoItemFromSpec(spec, "1")
@@ -72,6 +74,7 @@ func TestDynamicToolAuthorizationProjectionRoundTrip(t *testing.T) {
 }
 
 func TestResolvedWorkerToolsKeepDirectSurfaceAndLogicalDigest(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "view", nil, nil)
 	todoID := resolverTodoID(t, c, "dynamic-surface")
 	item := c.todoItemByID(todoID)
@@ -94,6 +97,7 @@ func TestResolvedWorkerToolsKeepDirectSurfaceAndLogicalDigest(t *testing.T) {
 }
 
 func TestFrozenDynamicAuthorizationCannotWiden(t *testing.T) {
+	t.Parallel()
 	descriptor := internalmcp.MCPTool{Name: "server__allowed", ServerName: "server", OrigName: "allowed", InputSchema: map[string]any{"type": "object"}}
 	fingerprint, err := internalmcp.MCPToolDescriptorSHA256(descriptor)
 	if err != nil {
@@ -116,6 +120,7 @@ func TestFrozenDynamicAuthorizationCannotWiden(t *testing.T) {
 }
 
 func TestFrozenDynamicAuthorizationReportsChangedOptionalTarget(t *testing.T) {
+	t.Parallel()
 	descriptor := internalmcp.MCPTool{Name: "server__tool", ServerName: "server", OrigName: "tool", Description: "old", InputSchema: map[string]any{"type": "object"}}
 	fingerprint, err := internalmcp.MCPToolDescriptorSHA256(descriptor)
 	if err != nil {
@@ -138,6 +143,7 @@ func TestFrozenDynamicAuthorizationReportsChangedOptionalTarget(t *testing.T) {
 }
 
 func TestTaskCacheUsesLogicalToolsetAndResourceScopeDigests(t *testing.T) {
+	t.Parallel()
 	coordinator := &Coordinator{}
 	policy := &defaultPolicyEngine{c: coordinator}
 	cache := newDefaultTaskCache(taskCacheDependencies{PolicyEngine: func() PolicyEngine { return policy }, Identity: func(req TaskCacheLookupRequest) CacheIdentity {

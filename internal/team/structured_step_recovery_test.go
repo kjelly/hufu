@@ -10,6 +10,7 @@ import (
 )
 
 func TestStructuredStepReplayFollowsForkBoundary(t *testing.T) {
+	t.Parallel()
 	original, events, receipt := stepGenerationEvidence(t, false)
 	if err := original.Close(); err != nil {
 		t.Fatal(err)
@@ -60,6 +61,7 @@ func TestStructuredStepReplayFollowsForkBoundary(t *testing.T) {
 }
 
 func TestStructuredStepReplayRejectsMissingOrCorruptCAS(t *testing.T) {
+	t.Parallel()
 	for _, missing := range []bool{false, true} {
 		name := "corrupt"
 		if missing {

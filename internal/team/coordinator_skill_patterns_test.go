@@ -16,6 +16,7 @@ import (
 )
 
 func TestSkillPatternSnapshotEmptyEvaluationReplacesPreviousData(t *testing.T) {
+	t.Parallel()
 	c := skillPatternSnapshotTestCoordinator(t.TempDir())
 	candidate := teamSnapshotTestCandidate(time.Now().UTC())
 	if err := c.persistSkillPatternSnapshot([]skill.PatternCandidate{candidate}, nil); err != nil {
@@ -34,6 +35,7 @@ func TestSkillPatternSnapshotEmptyEvaluationReplacesPreviousData(t *testing.T) {
 }
 
 func TestSkillPatternAnalysisRequiresAutoSkills(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := skillPatternSnapshotTestCoordinator(workspace)
 	c.autoSkillsEnabled = false
@@ -49,6 +51,7 @@ func TestSkillPatternAnalysisRequiresAutoSkills(t *testing.T) {
 }
 
 func TestSkillPatternRecordingRequiresAutoSkillsAndIgnoresControlTools(t *testing.T) {
+	t.Parallel()
 	c := skillPatternSnapshotTestCoordinator(t.TempDir())
 	c.skillDetector = skill.NewSkillPatternDetector(1, 2, 2)
 	c.autoSkillsEnabled = false
@@ -69,6 +72,7 @@ func TestSkillPatternRecordingRequiresAutoSkillsAndIgnoresControlTools(t *testin
 }
 
 func TestSkillPatternSnapshotAtomicWriteFailureDoesNotFailRun(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "skills"), []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
@@ -82,6 +86,7 @@ func TestSkillPatternSnapshotAtomicWriteFailureDoesNotFailRun(t *testing.T) {
 }
 
 func TestSkillPatternEvaluationDoesNotReplaceSnapshotAfterCancellation(t *testing.T) {
+	t.Parallel()
 	c := skillPatternSnapshotTestCoordinator(t.TempDir())
 	candidate := teamSnapshotTestCandidate(time.Now().UTC())
 	if err := c.persistSkillPatternSnapshot([]skill.PatternCandidate{candidate}, nil); err != nil {
@@ -107,6 +112,7 @@ func TestSkillPatternEvaluationDoesNotReplaceSnapshotAfterCancellation(t *testin
 }
 
 func TestRunDirectAgentEvaluatesSkillPatternsAtInvocationBoundary(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
 	c.autoSkillsEnabled = true
 	c.skillDetector = skill.NewSkillPatternDetector(1, 2, 2)
@@ -132,6 +138,7 @@ func (i failingIfCalledSkillInvoker) Invoke(context.Context, string, string) (st
 }
 
 func TestSkillPatternSnapshotReusesDraftNameByPatternID(t *testing.T) {
+	t.Parallel()
 	c := skillPatternSnapshotTestCoordinator(t.TempDir())
 	candidate := teamSnapshotTestCandidate(time.Now().UTC())
 	patternID, err := skill.PatternCandidateID(candidate)
@@ -159,6 +166,7 @@ func TestSkillPatternSnapshotReusesDraftNameByPatternID(t *testing.T) {
 }
 
 func TestSavedPatternDraftStoresNameWithoutPersistingPath(t *testing.T) {
+	t.Parallel()
 	candidate := teamSnapshotTestCandidate(time.Now().UTC())
 	draft, err := savedPatternDraft(candidate, filepath.Join("private", "team", "skills", "drafts", "draft-safe", "SKILL.md"))
 	if err != nil {
@@ -170,6 +178,7 @@ func TestSavedPatternDraftStoresNameWithoutPersistingPath(t *testing.T) {
 }
 
 func TestSkillDraftReviewCommandTargetsNamedTeamDirectory(t *testing.T) {
+	t.Parallel()
 	searchPath := filepath.Join(t.TempDir(), ".agent-teams")
 	c := &Coordinator{session: &TeamSession{
 		Dir:       filepath.Join(searchPath, "directory-name"),

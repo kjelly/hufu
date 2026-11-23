@@ -7,6 +7,7 @@ import (
 )
 
 func TestTodoListAddBatch(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 
 	items := tl.AddBatch([]TodoSpec{
@@ -36,6 +37,7 @@ func TestTodoListAddBatch(t *testing.T) {
 }
 
 func TestTodoListHasIgnoresSyntheticAndUnknownIDs(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 	items := tl.AddBatch([]TodoSpec{{Agent: "worker", Desc: "task"}})
 	if !tl.Has(items[0].ID) {
@@ -49,6 +51,7 @@ func TestTodoListHasIgnoresSyntheticAndUnknownIDs(t *testing.T) {
 }
 
 func TestTodoListUpdateStatus(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 
 	tl.AddBatch([]TodoSpec{
@@ -82,6 +85,7 @@ func TestTodoListUpdateStatus(t *testing.T) {
 }
 
 func TestTodoListClear(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 
 	tl.AddBatch([]TodoSpec{
@@ -109,6 +113,7 @@ func TestTodoListClear(t *testing.T) {
 }
 
 func TestTodoListIDsAutoIncrement(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 
 	batch1 := tl.AddBatch([]TodoSpec{
@@ -131,6 +136,7 @@ func TestTodoListIDsAutoIncrement(t *testing.T) {
 }
 
 func TestTodoListDeleteIDs(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 
 	items := tl.AddBatch([]TodoSpec{
@@ -151,6 +157,7 @@ func TestTodoListDeleteIDs(t *testing.T) {
 }
 
 func TestTaskTrackerTodoList(t *testing.T) {
+	t.Parallel()
 	tr := NewTaskTracker()
 
 	if tr.TodoList() == nil {
@@ -171,6 +178,7 @@ func TestTaskTrackerTodoList(t *testing.T) {
 }
 
 func TestTodoListUpdateStatusPreventDoneToInProgress(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 
 	tl.AddBatch([]TodoSpec{
@@ -194,6 +202,7 @@ func TestTodoListUpdateStatusPreventDoneToInProgress(t *testing.T) {
 }
 
 func TestTodoListUpdateStatusAllowErrorToInProgressForRetry(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 
 	tl.AddBatch([]TodoSpec{
@@ -221,6 +230,7 @@ func TestTodoListUpdateStatusAllowErrorToInProgressForRetry(t *testing.T) {
 }
 
 func TestCanTransitionAndTryUpdateStatus(t *testing.T) {
+	t.Parallel()
 	if !CanTransition(TaskInProgress, TaskVerifying) {
 		t.Fatal("expected in_progress -> verifying to be allowed")
 	}
@@ -251,6 +261,7 @@ func TestCanTransitionAndTryUpdateStatus(t *testing.T) {
 }
 
 func TestTodoToolHandleUpdatePreventDoneToInProgress(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		taskTracker: NewTaskTracker(),
 	}
@@ -281,6 +292,7 @@ func TestTodoToolHandleUpdatePreventDoneToInProgress(t *testing.T) {
 }
 
 func TestTodoToolHandleUpdatePreventErrorToDone(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		taskTracker: NewTaskTracker(),
 		session: &TeamSession{
@@ -316,6 +328,7 @@ func TestTodoToolHandleUpdatePreventErrorToDone(t *testing.T) {
 }
 
 func TestTodoListUpdateStatusPreventDoneToPlanned(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 
 	tl.AddBatch([]TodoSpec{
@@ -334,6 +347,7 @@ func TestTodoListUpdateStatusPreventDoneToPlanned(t *testing.T) {
 }
 
 func TestTodoListUpdateStatusPreventDoneToPaused(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 
 	tl.AddBatch([]TodoSpec{
@@ -352,6 +366,7 @@ func TestTodoListUpdateStatusPreventDoneToPaused(t *testing.T) {
 }
 
 func TestTodoListUpdateStatusPreventErrorToPlanned(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 
 	tl.AddBatch([]TodoSpec{
@@ -370,6 +385,7 @@ func TestTodoListUpdateStatusPreventErrorToPlanned(t *testing.T) {
 }
 
 func TestTodoListUpdateStatusAllowErrorToInProgress(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 
 	tl.AddBatch([]TodoSpec{
@@ -392,6 +408,7 @@ func TestTodoListUpdateStatusAllowErrorToInProgress(t *testing.T) {
 }
 
 func TestTodoListUpdateStatusPreventSkippedToPending(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 
 	tl.AddBatch([]TodoSpec{
@@ -409,6 +426,7 @@ func TestTodoListUpdateStatusPreventSkippedToPending(t *testing.T) {
 }
 
 func TestTodoListUpdateStatusPreventSkippedToInProgress(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{}
 
 	tl.AddBatch([]TodoSpec{
@@ -426,6 +444,7 @@ func TestTodoListUpdateStatusPreventSkippedToInProgress(t *testing.T) {
 }
 
 func TestTodoToolHandleUpdatePreventDoneToAny(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		taskTracker: NewTaskTracker(),
 		session: &TeamSession{
@@ -460,6 +479,7 @@ func TestTodoToolHandleUpdatePreventDoneToAny(t *testing.T) {
 }
 
 func TestTodoToolHandleUpdatePreventSkippedToAny(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		taskTracker: NewTaskTracker(),
 		session: &TeamSession{

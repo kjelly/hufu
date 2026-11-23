@@ -8,6 +8,7 @@ import (
 // TestBorrowEventStore lends only a live, valid store for the same workspace;
 // anything else is replaced by a freshly opened store that release closes.
 func TestBorrowEventStore(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		lender   func(t *testing.T, workspace string) *EventStore
@@ -75,6 +76,7 @@ func newBorrowTestStore(t *testing.T, workspace string) *EventStore {
 // the caller's store: both the fork lineage and checkpoint pruning read it
 // instead of rescanning the log.
 func TestMaterializeCompactionBranchReadsLentEventStore(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	state := testCompactionState(t, workspace)
 	generation := state.Generations["g-1"]

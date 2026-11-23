@@ -11,6 +11,7 @@ import (
 )
 
 func TestResolvedSkillContentUsesLockedSnapshotWhenDeclared(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.setLoadedRequiredResources([]*LoadedResource{
 		{LockedResource: LockedResource{Name: "verification-policy", Kind: agent.ResourceSkill}, Content: "locked snapshot body"},
@@ -23,6 +24,7 @@ func TestResolvedSkillContentUsesLockedSnapshotWhenDeclared(t *testing.T) {
 }
 
 func TestResolvedSkillContentFallsBackWithoutDeclaration(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	def := &skill.SkillDef{Name: "undeclared-skill", Content: "ordinary cached copy"}
 	if got := c.resolvedSkillContent(def); got != "ordinary cached copy" {
@@ -31,6 +33,7 @@ func TestResolvedSkillContentFallsBackWithoutDeclaration(t *testing.T) {
 }
 
 func TestResolvedSkillContentNilDefIsSafe(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	if got := c.resolvedSkillContent(nil); got != "" {
 		t.Fatalf("resolvedSkillContent(nil) = %q, want empty", got)
@@ -38,6 +41,7 @@ func TestResolvedSkillContentNilDefIsSafe(t *testing.T) {
 }
 
 func TestBuildSkillContextItemsUsesLockedSnapshotInFullFallback(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{skills: []*skill.SkillDef{{Name: "x", Content: "stale cached copy"}}}
 	c.setLoadedRequiredResources([]*LoadedResource{
 		{LockedResource: LockedResource{Name: "x", Kind: agent.ResourceSkill}, Content: "verified locked copy"},
@@ -57,6 +61,7 @@ func TestBuildSkillContextItemsUsesLockedSnapshotInFullFallback(t *testing.T) {
 }
 
 func TestBuildSkillContextItemsUsesCachedContentWithoutLock(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{skills: []*skill.SkillDef{{Name: "x", Content: "ordinary cached copy"}}}
 	agentDef := &agent.AgentDef{Name: "worker", Skills: "x"}
 
@@ -70,6 +75,7 @@ func TestBuildSkillContextItemsUsesCachedContentWithoutLock(t *testing.T) {
 }
 
 func TestLoadSkillToolReturnsLockedSnapshot(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{skills: []*skill.SkillDef{{Name: "x", Content: "stale cached copy"}}}
 	c.setLoadedRequiredResources([]*LoadedResource{
 		{LockedResource: LockedResource{Name: "x", Kind: agent.ResourceSkill}, Content: "verified locked copy"},
@@ -89,6 +95,7 @@ func TestLoadSkillToolReturnsLockedSnapshot(t *testing.T) {
 }
 
 func TestLoadSkillToolReturnsCachedContentWithoutLock(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{skills: []*skill.SkillDef{{Name: "x", Content: "ordinary cached copy"}}}
 	tool := &loadSkillTool{coordinator: c}
 

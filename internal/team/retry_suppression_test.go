@@ -3,6 +3,7 @@ package team
 import "testing"
 
 func TestRetrySuppressionReason(t *testing.T) {
+	t.Parallel()
 	base := RecoveryDecisionInput{
 		FailureClass:     FailureExecution,
 		Attempt:          1,
@@ -40,6 +41,7 @@ func TestRetrySuppressionReason(t *testing.T) {
 }
 
 func TestRetrySuppressionEventAndMetricsSurviveEventReplay(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-r3", "session-r3")
 	if err != nil {

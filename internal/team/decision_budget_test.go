@@ -16,6 +16,7 @@ func budgetWith(maxTokens, used int64) BudgetManager {
 }
 
 func TestRequiredDecisionTokens(t *testing.T) {
+	t.Parallel()
 	// An explicit allowance is authoritative.
 	if got := requiredDecisionTokens(DecisionPolicy{IndependentJudgments: 5, MaxTokens: 12345}); got != 12345 {
 		t.Fatalf("requiredDecisionTokens = %d, want the configured allowance", got)
@@ -28,6 +29,7 @@ func TestRequiredDecisionTokens(t *testing.T) {
 }
 
 func TestRemainingDecisionTokens(t *testing.T) {
+	t.Parallel()
 	if got := remainingDecisionTokens(nil); got != -1 {
 		t.Fatalf("remainingDecisionTokens(nil) = %d, want -1 for an unbounded run", got)
 	}
@@ -45,6 +47,7 @@ func TestRemainingDecisionTokens(t *testing.T) {
 // The default is fail-closed: a profile that cannot run at its configured rigor
 // does not quietly run at less (spec §34.1, Phase 1 budget acceptance).
 func TestDecisionBudgetFailsClosedByDefault(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	runner := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
 		return scoredOpinion(8, 4, "migrate", 0.8), nil
@@ -66,6 +69,7 @@ func TestDecisionBudgetFailsClosedByDefault(t *testing.T) {
 
 // Silently reducing five judges to one is exactly what the runtime must not do.
 func TestDecisionBudgetDoesNotSilentlyReduceJudges(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	dispatched := 0
 	runner := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
@@ -89,6 +93,7 @@ func TestDecisionBudgetDoesNotSilentlyReduceJudges(t *testing.T) {
 // Opting into degradation reduces rigor in a fixed order, and never silently:
 // every step is an event and lands in the record (spec §34.1).
 func TestDecisionBudgetExplicitDegradationLadder(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	runner := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
 		return scoredOpinion(8, 4, "migrate", 0.8), nil
@@ -141,6 +146,7 @@ func TestDecisionBudgetExplicitDegradationLadder(t *testing.T) {
 }
 
 func TestDirectDecisionBudgetDegradationBindsEffectiveEnvelopeDigest(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	runner := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
 		return scoredOpinion(8, 4, "migrate", 0.8), nil
@@ -188,6 +194,7 @@ func TestDirectDecisionBudgetDegradationBindsEffectiveEnvelopeDigest(t *testing.
 // Even with degradation enabled, a budget that cannot support the floor fails
 // closed rather than dropping below min-independent-judgments (spec §34.2).
 func TestDecisionBudgetFailsClosedBelowTheFloor(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	runner := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
 		return scoredOpinion(8, 4, "migrate", 0.8), nil
@@ -208,6 +215,7 @@ func TestDecisionBudgetFailsClosedBelowTheFloor(t *testing.T) {
 
 // Quality gates are never on the ladder (spec §34.2).
 func TestDegradationNeverTouchesQualityGates(t *testing.T) {
+	t.Parallel()
 	policy := DecisionPolicy{
 		IndependentJudgments:    5,
 		MinIndependentJudgments: 3,

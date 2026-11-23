@@ -6,14 +6,12 @@ import (
 	"errors"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/kjelly/hufu/internal/media"
 )
 
 const codexProjectionConsumerPrefix = ".consumer-"
 const maxCodexProjectionConsumers = 1024
-const codexProjectionCleanupTimeout = 5 * time.Second
 
 // A consumer owns an independent kernel lock, not a process-local reference
 // count. Only the workspace lock may publish/remove consumer files or images.
@@ -161,13 +159,11 @@ type codexProjectionLease struct {
 	maxImages     int
 }
 
-func (lease *codexProjectionLease) close() error {
+func (lease *codexProjectionLease) close(ctx context.Context) error {
 	defer func() { _ = lease.root.Close(); _ = lease.base.Close() }()
 	if lease.consumer != nil {
 		defer func() { _ = lease.consumer.file.Close() }()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), codexProjectionCleanupTimeout)
-	defer cancel()
 	unlock, err := acquireCodexStateFileLock(ctx, lease.lockPath)
 	if err != nil {
 		return err

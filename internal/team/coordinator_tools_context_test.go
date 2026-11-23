@@ -25,6 +25,7 @@ func (c *recordingRecoveryCompiler) CompileWorkerContext(_ context.Context, inpu
 }
 
 func TestContextQueryToolUsesBoundInvocationModelContext(t *testing.T) {
+	t.Parallel()
 	c, _ := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	compileErr := errors.New("stop after recording bound model context")
 	compiler := &mockContextCompiler{compileWorkerErr: compileErr}
@@ -43,6 +44,7 @@ func TestContextQueryToolUsesBoundInvocationModelContext(t *testing.T) {
 }
 
 func TestCompileRoutedContextForToolFailsClosedWithoutBoundInvocationContext(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
 	compiler := &mockContextCompiler{}
 	c.SetContextCompiler(compiler)
@@ -57,6 +59,7 @@ func TestCompileRoutedContextForToolFailsClosedWithoutBoundInvocationContext(t *
 }
 
 func TestContextToolRequestInheritsRetryInvocationMetadata(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	c.executionRunID = "run-current"
 	item := rankingItem("retry-only", 30)
@@ -96,6 +99,7 @@ func TestContextToolRequestInheritsRetryInvocationMetadata(t *testing.T) {
 }
 
 func TestToolFailureRecoveryPreservesDispatchInvariantApplicability(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	c := &Coordinator{
 		projectDir:     "/repo",
@@ -162,6 +166,7 @@ func TestToolFailureRecoveryPreservesDispatchInvariantApplicability(t *testing.T
 }
 
 func TestToolFailureRecoveryUsesInvocationBoundTaskGoal(t *testing.T) {
+	t.Parallel()
 	c, _ := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	c.executionRunID = "run-parallel-review"
 	c.taskTracker = NewTaskTracker()
@@ -195,6 +200,7 @@ func TestToolFailureRecoveryUsesInvocationBoundTaskGoal(t *testing.T) {
 }
 
 func TestGetAuthorizedContextItemUsesTypedActivationProjection(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	c.executionRunID = "run-current"
 	item := rankingItem("verify-only", 30)
@@ -218,6 +224,7 @@ func TestGetAuthorizedContextItemUsesTypedActivationProjection(t *testing.T) {
 }
 
 func TestContextToolRequestWithoutInvocationUsesContextToolPurpose(t *testing.T) {
+	t.Parallel()
 	c, _ := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	request := c.contextToolRequest(context.Background(), "bounded lookup", "", nil)
 	if request.Trigger != ContextTriggerAuxiliary || request.Purpose != "context_tool" {
@@ -226,6 +233,7 @@ func TestContextToolRequestWithoutInvocationUsesContextToolPurpose(t *testing.T)
 }
 
 func TestGetAuthorizedContextItemRejectsForeignCandidate(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	c.executionRunID = "run-current"
 	item := contextstore.ContextItem{ID: "foreign-candidate", Kind: contextstore.ContextObservation, Content: "candidate from another run", Scope: c.contextScope(), Lifecycle: contextstore.LifecycleCandidate, Metadata: map[string]string{"run_id": "other-run"}}
@@ -243,6 +251,7 @@ func TestGetAuthorizedContextItemRejectsForeignCandidate(t *testing.T) {
 // BUG-12: the lookup used to fetch the first 200 scoped items and match the
 // ID in Go, so an authorized item beyond them looked missing.
 func TestGetAuthorizedContextItemFindsItemsBeyondTheFirstPage(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	target := rankingItem("oldest-low-priority", 1)
 	if err := repo.Append(context.Background(), target); err != nil {

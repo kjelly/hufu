@@ -74,10 +74,16 @@ func legacyNativeActionRecoveryFixture(t *testing.T) (*Coordinator, *versionFixt
 }
 
 func TestContractRecoveryActionReconstructsRedactedPayloadAndResumesChild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	testNativeActionRecoveryChild(t, true)
 }
 
 func TestContractRecoveryPayloadProofRejectsAlterations(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	c, f, source, _ := legacyNativeActionRecoveryFixture(t)
 	ctx := WithActionPayloadReconstruction(WithReadOnlyActionRepair(WithMetadataOnlyContractRecovery(t.Context()), "8"))
 	plan, err := c.AssessContractRecovery(ctx, source)
@@ -155,6 +161,9 @@ func TestReconstructedPayloadPathsRestrictsPublicNumericMetadata(t *testing.T) {
 }
 
 func TestContractRecoveryPayloadReconstructionHonorsActiveRedaction(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	c, f, source, _ := legacyNativeActionRecoveryFixture(t)
 	ctx := WithActionPayloadReconstruction(WithReadOnlyActionRepair(WithMetadataOnlyContractRecovery(t.Context()), "8"))
 	plan, err := c.AssessContractRecovery(ctx, source)

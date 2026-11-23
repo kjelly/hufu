@@ -17,6 +17,7 @@ import (
 )
 
 func TestNewCoordinatorCompositionRootPartialInjection(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	session := &TeamSession{
 		Workspace: workspace,
@@ -50,6 +51,7 @@ func TestNewCoordinatorCompositionRootPartialInjection(t *testing.T) {
 }
 
 func TestCoordinatorCloseIsConcurrentIdempotentAndReleasesOwnedResources(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c, err := newCoordinator(coordinatorParams{Session: &TeamSession{
 		Workspace: workspace,
@@ -84,6 +86,7 @@ func TestCoordinatorCloseIsConcurrentIdempotentAndReleasesOwnedResources(t *test
 }
 
 func TestCoordinatorCloseWaitsForAsyncTasks(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -107,6 +110,7 @@ func TestCoordinatorCloseWaitsForAsyncTasks(t *testing.T) {
 }
 
 func TestCoordinatorCloseReleasesActiveContextPreflight(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c, err := newCoordinator(coordinatorParams{Session: &TeamSession{
 		Workspace: workspace,
@@ -134,6 +138,7 @@ func TestCoordinatorCloseReleasesActiveContextPreflight(t *testing.T) {
 }
 
 func TestCoordinatorCloseDoesNotReleaseAnotherCoordinatorResources(t *testing.T) {
+	t.Parallel()
 	newNamedCoordinator := func(name string) *Coordinator {
 		t.Helper()
 		c, err := newCoordinator(coordinatorParams{Session: &TeamSession{
@@ -178,12 +183,14 @@ func TestCoordinatorCloseDoesNotReleaseAnotherCoordinatorResources(t *testing.T)
 }
 
 func TestNewCoordinatorRejectsNilSession(t *testing.T) {
+	t.Parallel()
 	if _, err := newCoordinator(coordinatorParams{}, RuntimeServices{}); err == nil {
 		t.Fatal("newCoordinator accepted a nil session")
 	}
 }
 
 func TestNewCoordinatorErrorClosesOwnedResources(t *testing.T) {
+	t.Parallel()
 	if _, err := os.ReadDir("/proc/self/fd"); err != nil {
 		t.Skip("open file descriptor inspection is unavailable")
 	}
@@ -221,6 +228,7 @@ func openFileDescriptorsUnder(t *testing.T, root string) []string {
 
 // Exercise the production default reporter: maintenance never installs a UI.
 func TestCoordinatorDefaultReporterTracksProgressAndStillCancelsStalls(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"status", "validation"} {
 		t.Run(mode, func(t *testing.T) {
 			c, err := newCoordinator(coordinatorParams{Session: &TeamSession{

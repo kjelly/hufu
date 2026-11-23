@@ -7,6 +7,7 @@ import (
 )
 
 func TestModelContextSpecFromProfile(t *testing.T) {
+	t.Parallel()
 	profile := modelprofile.ResolveModelProfile(modelprofile.ModelProfileInput{
 		ModelID:         "qwen3:8b",
 		Family:          "qwen",
@@ -24,6 +25,7 @@ func TestModelContextSpecFromProfile(t *testing.T) {
 }
 
 func TestModelContextSpecFromProfilePreservesResolvedEstimator(t *testing.T) {
+	t.Parallel()
 	profile := modelprofile.ResolveModelProfile(modelprofile.ModelProfileInput{
 		ModelID: "catalog-model",
 		Family:  "family",
@@ -43,6 +45,7 @@ func TestModelContextSpecFromProfilePreservesResolvedEstimator(t *testing.T) {
 }
 
 func TestModelContextSpecFromProfileUsesEffectiveProviderValue(t *testing.T) {
+	t.Parallel()
 	profile := modelprofile.ResolveModelProfile(modelprofile.ModelProfileInput{
 		ModelID: "local-model",
 		MaxOutputTokens: modelprofile.ResolvedValue[int]{

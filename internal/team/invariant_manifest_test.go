@@ -9,6 +9,7 @@ import (
 )
 
 func TestLoadInvariantCatalogNormalizesDeterministically(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeInvariantTestFile(t, dir, `schema-version: 1
 invariants:
@@ -45,6 +46,7 @@ invariants:
 }
 
 func TestLoadInvariantCatalogAbsent(t *testing.T) {
+	t.Parallel()
 	catalog, err := loadInvariantCatalog(t.TempDir())
 	if err != nil || catalog != nil {
 		t.Fatalf("absent catalog = %#v, %v", catalog, err)
@@ -52,6 +54,7 @@ func TestLoadInvariantCatalogAbsent(t *testing.T) {
 }
 
 func TestLoadTeamOwnsInvariantCatalogWithoutTemplating(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: catalog-team\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -71,6 +74,7 @@ func TestLoadTeamOwnsInvariantCatalogWithoutTemplating(t *testing.T) {
 }
 
 func TestLoadInvariantCatalogRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		content string
@@ -104,6 +108,7 @@ func TestLoadInvariantCatalogRejectsInvalidInput(t *testing.T) {
 }
 
 func TestLoadInvariantCatalogRejectsSymlinkAndOversize(t *testing.T) {
+	t.Parallel()
 	t.Run("symlink", func(t *testing.T) {
 		dir := t.TempDir()
 		target := filepath.Join(dir, "catalog-source.yaml")

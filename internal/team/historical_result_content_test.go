@@ -11,6 +11,7 @@ import (
 )
 
 func TestHistoricalTypedProjectionPreservesCompleteJSON(t *testing.T) {
+	t.Parallel()
 	source := []byte(`{"summary":"analysis","future_detail":{"count":9007199254740993,"text":"完整未知欄位","source":"runtime","runtime_outputs":{"api_key":"history-nested-credential-8d1ca2"}},"api_key":"historical-projection-credential-6d9bf1"}`)
 	original := bytes.Clone(source)
 	projected, digest, err := ProjectHistoricalTaskResult(source)
@@ -34,6 +35,7 @@ func TestHistoricalTypedProjectionPreservesCompleteJSON(t *testing.T) {
 }
 
 func TestHistoricalTypedProjectionPreservesRuntimeReceipts(t *testing.T) {
+	t.Parallel()
 	const collision = "history-runtime-output-collision-7461fca2"
 	outputs, digest, err := CanonicalizeRuntimeOutputs(map[string]any{"receipt": map[string]any{
 		"observation": collision, "count": jsonv1.Number("9007199254740993"),

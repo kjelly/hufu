@@ -36,6 +36,7 @@ func admissionForTest(t *testing.T, enabled bool) DecisionAdmission {
 }
 
 func TestDecisionAdmissionFreezesResolvedProfile(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	c.executionRunID = "run-frozen"
 	task := decisionTask()
@@ -56,6 +57,7 @@ func TestDecisionAdmissionFreezesResolvedProfile(t *testing.T) {
 }
 
 func TestRetryCreatesNextDecisionAdmission(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		sessionTime: time.Now(), eventJournal: &memoryJournal{}, taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {},
 		session: &TeamSession{Config: agent.TeamConfig{Decision: dispatchConfig(), RequestContract: dispatchRequestContract()}},
@@ -73,6 +75,7 @@ func TestRetryCreatesNextDecisionAdmission(t *testing.T) {
 	}
 }
 func TestDecisionAdmissionOffAndEnabled(t *testing.T) {
+	t.Parallel()
 	for _, enabled := range []bool{false, true} {
 		j := &memoryJournal{}
 		want := admissionForTest(t, enabled)
@@ -89,6 +92,7 @@ func TestDecisionAdmissionOffAndEnabled(t *testing.T) {
 	}
 }
 func TestDecisionAdmissionIdempotentAndConflicting(t *testing.T) {
+	t.Parallel()
 	j := &memoryJournal{}
 	a := admissionForTest(t, true)
 	if _, err := appendDecisionAdmission(context.Background(), j, a); err != nil {
@@ -106,6 +110,7 @@ func TestDecisionAdmissionIdempotentAndConflicting(t *testing.T) {
 	}
 }
 func TestDecisionAdmissionLookupByTaskAttempt(t *testing.T) {
+	t.Parallel()
 	j := &memoryJournal{}
 	a := admissionForTest(t, false)
 	if _, err := appendDecisionAdmission(context.Background(), j, a); err != nil {
@@ -121,6 +126,7 @@ func TestDecisionAdmissionLookupByTaskAttempt(t *testing.T) {
 }
 
 func TestDecisionAdmissionDigestBindsExecutableTaskContract(t *testing.T) {
+	t.Parallel()
 	base := decisionTask()
 	base.PlanFirst = true
 	base.PlanID = "plan-1"
@@ -177,6 +183,7 @@ func TestDecisionAdmissionDigestBindsExecutableTaskContract(t *testing.T) {
 }
 
 func TestDecisionAdmissionAcceptsOnlyValidatedLegacyExecutionTargetMigration(t *testing.T) {
+	t.Parallel()
 	legacy := &TodoItem{
 		ID: "legacy-1", Agent: "worker", Desc: "resume legacy work", Goal: "resume legacy work",
 		Status: TaskInProgress, Model: "legacy-model", SubagentProvider: localSubagentProviderName,
@@ -226,6 +233,7 @@ func TestDecisionAdmissionAcceptsOnlyValidatedLegacyExecutionTargetMigration(t *
 }
 
 func TestProtocolRepairRejectsDurableTaskWithoutAdmission(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	item := todoItemFromSpec(TodoSpec{Agent: "worker", Desc: "repair only", Goal: "repair only", Execution: ExecutionContract{RequiresResult: true}}, "todo-protocol")
 	item.Status, item.Output = TaskProtocolIncomplete, "checkpointed worker output"
@@ -242,6 +250,7 @@ func TestProtocolRepairRejectsDurableTaskWithoutAdmission(t *testing.T) {
 }
 
 func TestResumeProtocolRepairRejectsDurableTaskWithoutAdmission(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	item := todoItemFromSpec(TodoSpec{Agent: "worker", Desc: "repair only", Goal: "repair only", Execution: ExecutionContract{RequiresResult: true}}, "todo-resume-protocol")
 	item.Status, item.Output = TaskProtocolIncomplete, "checkpointed worker output"

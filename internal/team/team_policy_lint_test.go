@@ -28,6 +28,7 @@ func policyTestSession() *TeamSession {
 }
 
 func TestValidateTeamPolicyContractsAcceptsConsistentTeam(t *testing.T) {
+	t.Parallel()
 	session := policyTestSession()
 	session.Config.Requirements = agent.ContractRequirements{Tools: []string{"bash"}}
 	session.Agents["worker"].Requirements = agent.ContractRequirements{Tools: []string{"view"}}
@@ -38,6 +39,7 @@ func TestValidateTeamPolicyContractsAcceptsConsistentTeam(t *testing.T) {
 }
 
 func TestValidateTeamPolicyContractsFindsStructuralConflicts(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		edit func(*TeamSession)
@@ -113,6 +115,7 @@ func TestValidateTeamPolicyContractsFindsStructuralConflicts(t *testing.T) {
 }
 
 func TestLintEffectiveTeamContractsFindsResolvedPolicyConflicts(t *testing.T) {
+	t.Parallel()
 	allowedRoot := t.TempDir()
 	outside := t.TempDir()
 	session := policyTestSession()
@@ -148,6 +151,7 @@ func TestLintEffectiveTeamContractsFindsResolvedPolicyConflicts(t *testing.T) {
 }
 
 func TestLintEffectiveTeamContractsAcceptsSatisfiedRequirements(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	session := policyTestSession()
 	session.Config.Requirements = agent.ContractRequirements{
@@ -170,6 +174,7 @@ func TestLintEffectiveTeamContractsAcceptsSatisfiedRequirements(t *testing.T) {
 }
 
 func TestLoadTeamParsesGenericRequirements(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	teamYAML := `name: contract-team
 requires:
@@ -242,6 +247,7 @@ func (policyLintActionProvider) Execute(context.Context, Action) (any, error) {
 }
 
 func TestValidateWorksetAndActionContractsRejectsImpossiblePolicies(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{
 		Config: agent.TeamConfig{Unattended: true, ActionProviders: map[string]agent.ActionProviderConfig{}},
 		ContractTasks: []TaskDef{
@@ -263,6 +269,7 @@ func TestValidateWorksetAndActionContractsRejectsImpossiblePolicies(t *testing.T
 }
 
 func TestValidateWorksetAndActionContractsAcceptsBoundedValidContract(t *testing.T) {
+	t.Parallel()
 	registry := NewProviderRegistry()
 	registry.Register("producer", policyLintActionProvider{})
 	session := &TeamSession{
@@ -286,6 +293,7 @@ func TestValidateWorksetAndActionContractsAcceptsBoundedValidContract(t *testing
 }
 
 func TestValidateWorksetVerificationMatchesCaseInsensitiveFanOutID(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{ContractTasks: []TaskDef{
 		{ID: "FanOut", Agent: "producer", FanOut: &FanOutSpec{Source: "manifest.json", GoalTemplate: "process {item}"}},
 		{ID: "consumer", Agent: "worker", VerifySpec: &VerificationSpec{Type: VerifyWorksetComplete, WorksetSourceTask: " fanout "}},
@@ -298,6 +306,7 @@ func TestValidateWorksetVerificationMatchesCaseInsensitiveFanOutID(t *testing.T)
 }
 
 func TestValidateWorksetReferencesRejectsIncompleteUnknownAmbiguousAndUnordered(t *testing.T) {
+	t.Parallel()
 	consumer := func(taskID, artifact string) TaskDef {
 		return TaskDef{ID: "consumer", Agent: "worker", FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: taskID, Artifact: artifact}, GoalTemplate: "review {item}"}}
 	}
@@ -326,6 +335,7 @@ func TestValidateWorksetReferencesRejectsIncompleteUnknownAmbiguousAndUnordered(
 }
 
 func TestDryRunUsesTheSameContractFindingCodes(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinatorForDryRun(t, nil, nil, agent.TeamConfig{})
 	c.session.ContractTasks = []TaskDef{{
 		ID: "prepare",

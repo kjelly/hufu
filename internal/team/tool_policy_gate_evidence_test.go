@@ -33,6 +33,7 @@ func (j *rejectedEvidenceJournal) Append(ctx context.Context, event RunEvent) (R
 }
 
 func TestPolicyGateAccountsForEvidenceCaptureFailure(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name           string
 		checkpointStop bool

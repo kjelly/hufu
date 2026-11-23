@@ -15,6 +15,7 @@ import (
 
 // Minimum Test Matrix Item 5: worker says success while json_assert sees a failed value
 func TestVerification_JSONAssert_WorkerSuccessValueFailed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	jsonFile := filepath.Join(dir, "output.json")
 	if err := os.WriteFile(jsonFile, []byte(`{"status": "error", "code": 500}`), 0o644); err != nil {
@@ -43,6 +44,7 @@ func TestVerification_JSONAssert_WorkerSuccessValueFailed(t *testing.T) {
 // declared output remains authoritative. The expected value is scalar so a
 // missing-key failure is distinguished from a malformed-spec failure.
 func TestCharacterizationTypedVerificationRejectsMissingGenericItem(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "result.json"), []byte(`{"items":{"alpha":true,"beta":true}}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -64,6 +66,7 @@ func TestCharacterizationTypedVerificationRejectsMissingGenericItem(t *testing.T
 }
 
 func TestVerification_JSONAssertDoesNotCoerceStringToNumber(t *testing.T) {
+	t.Parallel()
 	if equalJSONValues(float64(42), "42") {
 		t.Fatal("JSON scalar equality must not coerce a numeric string to a number")
 	}
@@ -76,6 +79,7 @@ func TestVerification_JSONAssertDoesNotCoerceStringToNumber(t *testing.T) {
 }
 
 func TestVerification_JSONAssertPreservesLargeIntegerPrecision(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "result.json"), []byte(`{"id":9007199254740993}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -103,6 +107,7 @@ func TestVerification_JSONAssertPreservesLargeIntegerPrecision(t *testing.T) {
 }
 
 func TestVerification_JSONAssertCommandUsesUntruncatedOutput(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	const payload = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
 	if err := os.WriteFile(filepath.Join(dir, "large.json"), []byte(`{"status":"ok","payload":"`+payload+`"}`), 0o644); err != nil {
@@ -126,6 +131,7 @@ func TestVerification_JSONAssertCommandUsesUntruncatedOutput(t *testing.T) {
 }
 
 func TestVerification_JSONAssertRejectsTrailingJSONData(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "result.json"), []byte(`{"status":"ok"} {"extra":true}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -143,6 +149,7 @@ func TestVerification_JSONAssertRejectsTrailingJSONData(t *testing.T) {
 
 // Minimum Test Matrix Item 6: legacy shell verifier that prints failure but exits zero retains shell exit semantics and emits weak-verifier warning
 func TestVerification_CommandExit_WeakVerifierWarning(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	spec := VerificationSpec{
 		Type:    VerifyCommandExit,
@@ -168,6 +175,7 @@ func TestVerification_CommandExit_WeakVerifierWarning(t *testing.T) {
 }
 
 func TestVerification_CommandExit_UnresolvedPipelineStageIsEnvironmentNotPolarity(t *testing.T) {
+	t.Parallel()
 	// The literal angle-bracket token mirrors the incident shape recorded in
 	// the reliability spec. Its diagnostic would be swallowed by grep if the
 	// shell were allowed to run the pipeline.
@@ -206,6 +214,7 @@ func TestVerification_CommandExit_UnresolvedPipelineStageIsEnvironmentNotPolarit
 }
 
 func TestVerification_UnresolvedPipelineStageNeverAcceptedByNonSuccessModes(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"expected_failure", "observation"} {
 		t.Run(mode, func(t *testing.T) {
 			res, err := ExecuteVerificationSpec(context.Background(), "sh", t.TempDir(), VerificationSpec{
@@ -235,6 +244,7 @@ func TestVerification_UnresolvedPipelineStageNeverAcceptedByNonSuccessModes(t *t
 }
 
 func TestVerification_CaseBodyUnresolvedPipelineStageIsEnvironmentNotPolarity(t *testing.T) {
+	t.Parallel()
 	const command = "case x in x) definitely_missing_cmd_99999 | grep -c running ;; esac"
 	res, err := ExecuteVerificationSpec(context.Background(), "sh", t.TempDir(), VerificationSpec{
 		Type:    VerifyCommandExit,
@@ -253,6 +263,7 @@ func TestVerification_CaseBodyUnresolvedPipelineStageIsEnvironmentNotPolarity(t 
 }
 
 func TestVerification_CaseCommandSubstitutionSelectorIsValid(t *testing.T) {
+	t.Parallel()
 	res, err := ExecuteVerificationSpec(context.Background(), "sh", t.TempDir(), VerificationSpec{
 		Type:    VerifyCommandExit,
 		Command: `case "$(printf x)" in x) true ;; *) false ;; esac`,
@@ -263,6 +274,7 @@ func TestVerification_CaseCommandSubstitutionSelectorIsValid(t *testing.T) {
 }
 
 func TestVerification_CaseCommandSubstitutionSelectorStillRejectsUnresolvedBody(t *testing.T) {
+	t.Parallel()
 	res, err := ExecuteVerificationSpec(context.Background(), "sh", t.TempDir(), VerificationSpec{
 		Type:    VerifyCommandExit,
 		Command: `case "$(printf x)" in x) definitely_missing_cmd_99999 ;; *) false ;; esac`,
@@ -277,6 +289,7 @@ func TestVerification_CaseCommandSubstitutionSelectorStillRejectsUnresolvedBody(
 }
 
 func TestVerification_CaseCommandSubstitutionSelectorMismatchIsNonZero(t *testing.T) {
+	t.Parallel()
 	res, err := ExecuteVerificationSpec(context.Background(), "sh", t.TempDir(), VerificationSpec{
 		Type:    VerifyCommandExit,
 		Command: `case "$(printf y)" in x) true ;; *) false ;; esac`,
@@ -287,6 +300,7 @@ func TestVerification_CaseCommandSubstitutionSelectorMismatchIsNonZero(t *testin
 }
 
 func TestVerification_CommandExitDoesNotInterpretPrintedStatus(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	res, err := ExecuteVerificationSpec(context.Background(), "sh", dir, VerificationSpec{
 		Type:    VerifyCommandExit,
@@ -302,6 +316,7 @@ func TestVerification_CommandExitDoesNotInterpretPrintedStatus(t *testing.T) {
 
 // Minimum Test Matrix Item 7: observation records stdout and exit status but cannot satisfy a mandatory criterion
 func TestVerification_Observation_CannotSatisfyMandatoryCriterion(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	spec := VerificationSpec{
 		Type:    VerifyCommandExit,
@@ -344,6 +359,7 @@ func TestVerification_Observation_CannotSatisfyMandatoryCriterion(t *testing.T) 
 }
 
 func TestVerification_ObservationMayAccompanyMandatoryAcceptance(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{Config: agent.TeamConfig{Name: "test"}},
@@ -368,6 +384,7 @@ func TestVerification_ObservationMayAccompanyMandatoryAcceptance(t *testing.T) {
 }
 
 func TestVerification_MalformedObservationFailsAcceptanceClosed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{Config: agent.TeamConfig{Name: "test"}},
@@ -398,6 +415,7 @@ func TestVerification_MalformedObservationFailsAcceptanceClosed(t *testing.T) {
 }
 
 func TestVerification_AcceptanceExpectedFailureCanSatisfyCriterion(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	spec := VerificationSpec{
 		Type:    VerifyCommandExit,
@@ -427,6 +445,7 @@ func TestVerification_AcceptanceExpectedFailureCanSatisfyCriterion(t *testing.T)
 }
 
 func TestVerification_EmptyAcceptanceSpecIsNotConfigured(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session:        &TeamSession{Config: agent.TeamConfig{Name: "test"}},
 		acceptanceSpec: &agent.AcceptanceSpec{},
@@ -444,6 +463,7 @@ func TestVerification_EmptyAcceptanceSpecIsNotConfigured(t *testing.T) {
 
 // Minimum Test Matrix Item 8: file existence and absence assertions handle relative and absolute paths consistently
 func TestVerification_FileExistsAndAbsent_RelativeAndAbsolute(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	relFile := "reports/summary.md"
 	absFile := filepath.Join(dir, relFile)
@@ -522,6 +542,7 @@ func toolResultStep(toolName, text string) fantasy.StepResult {
 // assertion reads the already-typed StepResult history directly, with no
 // text-escaping or SIGPIPE-under-pipefail failure mode to get wrong.
 func TestVerification_ToolCallAssert_PassesOnGenuineCallAndResult(t *testing.T) {
+	t.Parallel()
 	steps := []fantasy.StepResult{
 		toolCallStep("inspect", `{"file_path":"inputs/items.tsv","purpose":"input"}`),
 		toolResultStep("inspect", "observed: alpha"),
@@ -543,6 +564,7 @@ func TestVerification_ToolCallAssert_PassesOnGenuineCallAndResult(t *testing.T) 
 // this type exists to catch (a worker that claims completion without the
 // evidence to back it).
 func TestVerification_ToolCallAssert_FailsWhenCallMissing(t *testing.T) {
+	t.Parallel()
 	steps := []fantasy.StepResult{
 		toolCallStep("inspect", `{"file_path":"inputs/other.tsv"}`),
 	}
@@ -562,6 +584,7 @@ func TestVerification_ToolCallAssert_FailsWhenCallMissing(t *testing.T) {
 // matching call alone is not enough when ResultContains is set: the call
 // could still have errored or returned something else.
 func TestVerification_ToolCallAssert_FailsWhenResultMissing(t *testing.T) {
+	t.Parallel()
 	steps := []fantasy.StepResult{
 		toolCallStep("inspect", `{"file_path":"inputs/items.tsv"}`),
 		toolResultStep("inspect", "observation unavailable"),
@@ -582,6 +605,7 @@ func TestVerification_ToolCallAssert_FailsWhenResultMissing(t *testing.T) {
 // min_count is enforced per assertion and that every assertion in the list
 // must independently pass.
 func TestVerification_ToolCallAssert_MinCountAndMultipleAssertions(t *testing.T) {
+	t.Parallel()
 	steps := []fantasy.StepResult{
 		toolCallStep("view", `{"file_path":"a.txt"}`),
 		toolCallStep("view", `{"file_path":"b.txt"}`),
@@ -610,6 +634,7 @@ func TestVerification_ToolCallAssert_MinCountAndMultipleAssertions(t *testing.T)
 // a clear "not supported here" reason rather than treating absent evidence
 // as satisfied.
 func TestVerification_ToolCallAssert_NilStepsFailsClosed(t *testing.T) {
+	t.Parallel()
 	spec := VerificationSpec{
 		Type:               VerifyToolCallAssert,
 		ToolCallAssertions: []ToolCallAssertion{{Tool: "view"}},
@@ -622,6 +647,7 @@ func TestVerification_ToolCallAssert_NilStepsFailsClosed(t *testing.T) {
 
 // Minimum Test Matrix Item 9: malformed typed verification fails closed
 func TestVerification_Malformed_FailsClosed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// 1. Invalid verification type
@@ -686,6 +712,7 @@ func TestVerification_Malformed_FailsClosed(t *testing.T) {
 }
 
 func TestVerification_JSONAssertRejectsNonScalarExpectedValue(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "output.json"), []byte(`{"state":{"ready":true}}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -708,6 +735,7 @@ func TestVerification_JSONAssertRejectsNonScalarExpectedValue(t *testing.T) {
 }
 
 func TestVerification_InvalidModeFailsClosed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "must-not-run")
 	res, err := ExecuteVerificationSpec(context.Background(), "sh", dir, VerificationSpec{
@@ -727,6 +755,7 @@ func TestVerification_InvalidModeFailsClosed(t *testing.T) {
 }
 
 func TestVerification_EvidenceFingerprint(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "data.json")
 	if err := os.WriteFile(filePath, []byte(`{"value": 42}`), 0o644); err != nil {

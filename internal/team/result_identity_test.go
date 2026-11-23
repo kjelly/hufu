@@ -9,6 +9,7 @@ import (
 )
 
 func TestHistoricalResultIDIsStableAndTerminalOnly(t *testing.T) {
+	t.Parallel()
 	event := RunEvent{ID: "evt-saved", RunID: "run-1", SessionID: "session-1", TaskID: "1", Type: string(EventTaskCompleted)}
 	id := HistoricalResultID(event)
 	if !strings.HasPrefix(id, "res-") || len(id) != 68 {
@@ -29,6 +30,7 @@ func TestHistoricalResultIDIsStableAndTerminalOnly(t *testing.T) {
 }
 
 func TestResultReadyIsEmittedOnlyAfterDurableCommit(t *testing.T) {
+	t.Parallel()
 	for _, fail := range []bool{false, true} {
 		t.Run(map[bool]string{false: "saved", true: "failed"}[fail], func(t *testing.T) {
 			c := &Coordinator{taskTracker: NewTaskTracker(), session: &TeamSession{Config: agent.TeamConfig{Name: "review"}}}

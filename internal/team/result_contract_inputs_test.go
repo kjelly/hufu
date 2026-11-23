@@ -66,6 +66,7 @@ func reviewedInputsFixture(t *testing.T) (*Coordinator, *TodoItem, *TodoItem, ma
 }
 
 func TestResultEvidenceInputBinding(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"valid", "quoted_id", "wrong_id", "wrong_hash", "wrong_value", "duplicate", "omitted", "partial_empty", "partial_forged", "tampered_source", "missing_source"} {
 		t.Run(name, func(t *testing.T) {
 			c, source, audit, value := reviewedInputsFixture(t)
@@ -106,6 +107,7 @@ func TestResultEvidenceInputBinding(t *testing.T) {
 }
 
 func TestResultEvidenceInputSubmissionRoutes(t *testing.T) {
+	t.Parallel()
 	for _, route := range []string{"local", "external"} {
 		for _, forged := range []bool{false, true} {
 			name := route + "/valid"
@@ -153,6 +155,7 @@ func TestResultEvidenceInputSubmissionRoutes(t *testing.T) {
 }
 
 func TestResultEvidenceInputReplayRejectsSourceDrift(t *testing.T) {
+	t.Parallel()
 	c, source, audit, value := reviewedInputsFixture(t)
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -201,6 +204,7 @@ func TestResultEvidenceInputReplayRejectsSourceDrift(t *testing.T) {
 }
 
 func TestResultEvidenceInputExtensionRejectsInvalidDeclarations(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{"null", "{}", "{\"unknown\":true}", "{\"items_pointer\":\"not/a/pointer\",\"task_id_pointer\":\"/id\",\"hash_pointer\":\"/hash\",\"complete_pointer\":\"/done\"}"} {
 		t.Run(raw, func(t *testing.T) {
 			var declaration any

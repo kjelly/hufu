@@ -41,6 +41,7 @@ func (p *checkpointActionProvider) Execute(ctx context.Context, action Action) (
 }
 
 func TestCoordinatorRunsBoundPrepareAndReadOnlyVerifyActions(t *testing.T) {
+	t.Parallel()
 	for _, passed := range []bool{true, false} {
 		t.Run(fmt.Sprintf("passed=%v", passed), func(t *testing.T) {
 			session := workflowTestSession(t)
@@ -102,6 +103,7 @@ func TestCoordinatorRunsBoundPrepareAndReadOnlyVerifyActions(t *testing.T) {
 }
 
 func TestVerifyActionRejectsMutationBeforeProviderExecution(t *testing.T) {
+	t.Parallel()
 	for _, sideEffect := range []SideEffectClass{SideEffectWorkspaceWrite, SideEffectExternalWrite, ""} {
 		t.Run(string(sideEffect), func(t *testing.T) {
 			w := workflowAt(t, PhaseVerify)
@@ -116,6 +118,7 @@ func TestVerifyActionRejectsMutationBeforeProviderExecution(t *testing.T) {
 }
 
 func TestVerifyActionConfigurationRequiresExplicitNoSideEffects(t *testing.T) {
+	t.Parallel()
 	for _, sideEffect := range []SideEffectClass{SideEffectNone, SideEffectWorkspaceWrite, SideEffectExternalWrite, ""} {
 		t.Run(string(sideEffect), func(t *testing.T) {
 			session := workflowTestSession(t)

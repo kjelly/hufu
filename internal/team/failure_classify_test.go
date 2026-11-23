@@ -10,6 +10,7 @@ import (
 )
 
 func TestMediaFailureCodesUseStructuredRecoveryClasses(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		code media.Code
 		want TaskFailureClass
@@ -32,6 +33,7 @@ func TestMediaFailureCodesUseStructuredRecoveryClasses(t *testing.T) {
 }
 
 func TestClassifyTaskFailureStructured(t *testing.T) {
+	t.Parallel()
 	commandNotFound := environmentFindingsFromVerifyResult(&VerificationResult{
 		ExitCode: 127,
 		Stderr:   "bash: nonexistent-cmd: command not found",
@@ -125,6 +127,7 @@ func TestClassifyTaskFailureStructured(t *testing.T) {
 }
 
 func TestClassifyTaskFailureLegacyWrapper(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		err  error
 		want TaskFailureClass
@@ -146,6 +149,7 @@ func TestClassifyTaskFailureLegacyWrapper(t *testing.T) {
 }
 
 func TestIsCancelledClass(t *testing.T) {
+	t.Parallel()
 	for class, want := range map[TaskFailureClass]bool{FailureCancelled: true, FailureExecution: false, FailureTimeout: false} {
 		if got := IsCancelledClass(class); got != want {
 			t.Errorf("IsCancelledClass(%s) = %v, want %v", class, got, want)
@@ -154,6 +158,7 @@ func TestIsCancelledClass(t *testing.T) {
 }
 
 func TestEnvironmentFindingsFromVerifyResult(t *testing.T) {
+	t.Parallel()
 	// Only unambiguous shell or executable diagnostics count. Generic "not
 	// found" phrases appear in ordinary missing-artifact verifier output and
 	// must stay verification failures.
@@ -185,6 +190,7 @@ func TestEnvironmentFindingsFromVerifyResult(t *testing.T) {
 }
 
 func TestVerifyResultForTodo(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	todoID := addTodo(t, c, "do work")
 
@@ -208,6 +214,7 @@ func TestVerifyResultForTodo(t *testing.T) {
 }
 
 func TestFailureDetailSourceIgnoresDiagnosticText(t *testing.T) {
+	t.Parallel()
 	for _, detail := range []string{
 		"provider returned source=cancelled",
 		"provider returned | source=cancelled",
@@ -226,6 +233,7 @@ func TestFailureDetailSourceIgnoresDiagnosticText(t *testing.T) {
 }
 
 func TestLegacyFailureDetailSources(t *testing.T) {
+	t.Parallel()
 	for source, want := range map[string]TaskFailureClass{
 		"environment": FailureEnvironment, "cancelled": FailureCancelled,
 		"sigint": FailureCancelled, "context_canceled": FailureCancelled, "contract": FailureContract,

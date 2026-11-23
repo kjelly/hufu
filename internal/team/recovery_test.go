@@ -12,6 +12,7 @@ import (
 )
 
 func TestReconcileInterruptedTaskDoesNotTrustHighRiskOutput(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	for _, sideEffect := range []SideEffectClass{SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential, SideEffectUnknown} {
 		result := c.reconcileInterruptedTask(t.Context(), &TodoItem{SideEffect: sideEffect, Output: "secret worker output"})
@@ -26,6 +27,7 @@ func TestReconcileInterruptedTaskDoesNotTrustHighRiskOutput(t *testing.T) {
 }
 
 func TestRecoveryStateFromVerification(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		result *VerificationResult
@@ -55,6 +57,7 @@ func TestRecoveryStateFromVerification(t *testing.T) {
 }
 
 func TestResumeInterruptedTaskRecordsBoundedReconciliationEvidence(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	es, err := NewEventStore(workspace, "run-reconcile", "session-reconcile")
 	if err != nil {
@@ -114,6 +117,7 @@ func assertRecoveryFailureEvent(t *testing.T, item *TodoItem, class TaskFailureC
 }
 
 func TestDefaultRecoveryPolicy(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		class      SideEffectClass
 		unattended bool
@@ -142,6 +146,7 @@ func TestDefaultRecoveryPolicy(t *testing.T) {
 }
 
 func TestResolveRecoveryPolicy(t *testing.T) {
+	t.Parallel()
 	// Explicit policy should override class-based inference
 	if got := ResolveRecoveryPolicy(RecoveryRetry, SideEffectInfraMutation, false); got != RecoveryRetry {
 		t.Errorf("expected explicit Retry to override InfraMutation, got %q", got)
@@ -156,6 +161,7 @@ func TestResolveRecoveryPolicy(t *testing.T) {
 }
 
 func TestResumeInterruptedTasks_InfraMutationBlocked(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.taskTracker.TodoList().Restore([]*TodoItem{
 		{
@@ -186,6 +192,7 @@ func TestResumeInterruptedTasks_InfraMutationBlocked(t *testing.T) {
 }
 
 func TestResumeInterruptedTasks_AllowsReplayFalseBlocked(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	allowsReplay := false
 	c.taskTracker.TodoList().Restore([]*TodoItem{{
@@ -207,6 +214,7 @@ func TestResumeInterruptedTasks_AllowsReplayFalseBlocked(t *testing.T) {
 }
 
 func TestResumeInterruptedTasks_PolicyOnlyRecoveryDoesNotResolveAgent(t *testing.T) {
+	t.Parallel()
 	allowsReplay := false
 	tests := []struct {
 		name          string
@@ -300,6 +308,7 @@ func TestResumeInterruptedTasks_PolicyOnlyRecoveryDoesNotResolveAgent(t *testing
 }
 
 func TestResumeInterruptedTasks_MissingAgentReplayFailsClosed(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	pool := &mockAgentPool{}
 	c.SetAgentPool(pool)
@@ -332,6 +341,7 @@ func TestResumeInterruptedTasks_MissingAgentReplayFailsClosed(t *testing.T) {
 }
 
 func TestResumeInterruptedTasks_ProtocolCheckpointFinalizesWithoutAgent(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	pool := &mockAgentPool{}
 	c.SetAgentPool(pool)
@@ -367,6 +377,7 @@ func TestResumeInterruptedTasks_ProtocolCheckpointFinalizesWithoutAgent(t *testi
 }
 
 func TestResumeInterruptedTasks_UnattendedExternalWriteBlocked(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.unattended = true
 	c.taskTracker.TodoList().Restore([]*TodoItem{
@@ -394,6 +405,7 @@ func TestResumeInterruptedTasks_UnattendedExternalWriteBlocked(t *testing.T) {
 }
 
 func TestResumeInterruptedTasks_ReconciliationFlow(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "hufu-recovery-test-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
@@ -491,6 +503,7 @@ func TestResumeInterruptedTasks_ReconciliationFlow(t *testing.T) {
 }
 
 func TestResumeInterruptedTasks_FailOnUnknownState(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "hufu-recovery-unknown-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
@@ -543,6 +556,7 @@ func TestResumeInterruptedTasks_FailOnUnknownState(t *testing.T) {
 }
 
 func TestResumeInterruptedTasks_RecoveryEventStore(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "hufu-recovery-es-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
@@ -586,6 +600,7 @@ func TestResumeInterruptedTasks_RecoveryEventStore(t *testing.T) {
 }
 
 func TestReconcileTaskDoesNotReplayWhenOperationWasNotStarted(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
 	contract := ExecutionContract{Steps: []ExecutionStep{{
 		ID: "retry-step", Tool: "test-runner", Effect: ExecutionEffectRead,
@@ -623,6 +638,7 @@ func TestReconcileTaskDoesNotReplayWhenOperationWasNotStarted(t *testing.T) {
 }
 
 func TestRetryTaskUsesCanonicalResetBeforeWorkerExecution(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})
 	contract := ExecutionContract{Steps: []ExecutionStep{{
 		ID: "retry-step", Tool: "test-runner", Effect: ExecutionEffectRead,
@@ -654,6 +670,7 @@ func TestRetryTaskUsesCanonicalResetBeforeWorkerExecution(t *testing.T) {
 }
 
 func TestTargetedRetryHonorsTerminalRecoveryDisposition(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name        string
 		disposition RetryDisposition
@@ -679,6 +696,7 @@ func TestTargetedRetryHonorsTerminalRecoveryDisposition(t *testing.T) {
 }
 
 func TestResumeInterruptedTasks_RecoveryNeverSkipped(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.taskTracker.TodoList().Restore([]*TodoItem{
 		{
@@ -715,6 +733,7 @@ func TestResumeInterruptedTasks_RecoveryNeverSkipped(t *testing.T) {
 }
 
 func TestResolveTaskRecovery_Precedence(t *testing.T) {
+	t.Parallel()
 	// Tier 3: tool-inferred (no explicit, agent has no side_effect frontmatter).
 	sshAgent := &agent.AgentDef{Name: "deployer", Tools: "view,ssh"}
 	se, rec, rt := resolveTaskRecovery(sshAgent, TaskDef{Agent: "deployer", Goal: "deploy"})

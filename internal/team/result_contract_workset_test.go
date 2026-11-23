@@ -27,6 +27,7 @@ func worksetResultFixture(t *testing.T, ids string) (*Coordinator, *TodoItem, *C
 }
 
 func TestWorksetInputExtensionPreflight(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{`null`, `{}`, `{"items_pointer":"/rows","item_id_pointer":"/id","binding":""}`, `{"items_pointer":"rows","item_id_pointer":"/id","binding":"ids"}`, `{"items_pointer":"/rows","item_id_pointer":"/id","binding":"ids","unknown":true}`} {
 		var v any
 		if err := json.Unmarshal([]byte(raw), &v); err != nil {
@@ -43,6 +44,7 @@ func TestWorksetInputExtensionPreflight(t *testing.T) {
 }
 
 func TestWorksetInputOrderedCoverage(t *testing.T) {
+	t.Parallel()
 	spec := &resultWorksetInputsSpec{ItemsPointer: "/rows", ItemIDPointer: "/id", Binding: "target_ids"}
 	for _, tc := range []struct {
 		name, ids, value string
@@ -86,6 +88,7 @@ func TestWorksetInputOrderedCoverage(t *testing.T) {
 }
 
 func TestWorksetSubmissionRejectsBeforePublicationAndAllowsCorrection(t *testing.T) {
+	t.Parallel()
 	for _, route := range []string{"local", "external"} {
 		t.Run(route, func(t *testing.T) {
 			c, item, compiled := worksetResultFixture(t, `[]`)
@@ -122,6 +125,7 @@ func TestWorksetSubmissionRejectsBeforePublicationAndAllowsCorrection(t *testing
 }
 
 func TestWorksetResultReplayAndDependenciesUseDurableBinding(t *testing.T) {
+	t.Parallel()
 	c, item, compiled := worksetResultFixture(t, `["asset-a"]`)
 	payload, err := validateStructuredResultPayload(compiled, *item.ResultContract, []byte(`{"rows":[{"id":"asset-a"}]}`))
 	if err != nil {
@@ -150,6 +154,7 @@ func TestWorksetResultReplayAndDependenciesUseDurableBinding(t *testing.T) {
 }
 
 func TestWorksetBindingIsCheckedAgainAtOccurrenceCommit(t *testing.T) {
+	t.Parallel()
 	c, item, compiled := worksetResultFixture(t, `[]`)
 	ctx := occurrenceTestContext(c, item.ID, 1)
 	for _, valid := range []bool{false, true} {

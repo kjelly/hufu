@@ -49,6 +49,7 @@ func evidenceCoordinator(t *testing.T, runID string) *Coordinator {
 }
 
 func TestAmbiguousSuccessfulExecutionReceiptsPreservesOccurrenceEvidence(t *testing.T) {
+	t.Parallel()
 	prior := ExecutionReceipt{RunID: "run", TaskID: "task", Attempt: 1, OccurrenceAttempt: 1, ModelExecutionID: "prior", TranscriptRef: "prior-transcript", ExitCode: new(0)}
 	current := ExecutionReceipt{RunID: "run", TaskID: "task", Attempt: 1, OccurrenceAttempt: 2, ModelExecutionID: "current", TranscriptRef: "current-transcript", ExitCode: new(0)}
 	for _, tc := range []struct {
@@ -88,6 +89,7 @@ func TestAmbiguousSuccessfulExecutionReceiptsPreservesOccurrenceEvidence(t *test
 }
 
 func TestArtifactStoreAndManifestFailClosedOnTamper(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	source := filepath.Join(dir, "report.md")
 	if err := os.WriteFile(source, []byte("report"), 0o644); err != nil {
@@ -117,6 +119,7 @@ func TestArtifactStoreAndManifestFailClosedOnTamper(t *testing.T) {
 }
 
 func TestArtifactStoreRejectsSourcesAndIDsOutsideRoot(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	outside := t.TempDir()
 	inside := filepath.Join(root, "inside.txt")
@@ -155,6 +158,7 @@ func TestArtifactStoreRejectsSourcesAndIDsOutsideRoot(t *testing.T) {
 }
 
 func TestEvidenceManifestFromExecutionReceipts(t *testing.T) {
+	t.Parallel()
 	const runID = "run-evidence"
 	tests := []struct {
 		name string
@@ -228,6 +232,7 @@ func TestEvidenceManifestFromExecutionReceipts(t *testing.T) {
 }
 
 func TestEvidenceManifestResolvesOpaqueTranscriptArtifact(t *testing.T) {
+	t.Parallel()
 	const runID = "run-opaque-transcript"
 	c := evidenceCoordinator(t, runID)
 	dir := c.session.Workspace
@@ -266,6 +271,7 @@ func TestEvidenceManifestResolvesOpaqueTranscriptArtifact(t *testing.T) {
 }
 
 func TestFinalEvidenceManifestPersistsForAdvisoryAndPartialRuns(t *testing.T) {
+	t.Parallel()
 	c := evidenceCoordinator(t, "run-advisory")
 	dir := c.session.Workspace
 	done := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "verified"}})[0]
@@ -292,6 +298,7 @@ func TestFinalEvidenceManifestPersistsForAdvisoryAndPartialRuns(t *testing.T) {
 }
 
 func TestEvidenceManifestBindsAcceptanceOutcome(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t, withTeamConfig(func(cfg *agent.TeamConfig) { cfg.Shell = "sh" }))
 	c.executionRunID = "run-acceptance"
 	c.acceptanceSpec = &AcceptanceSpec{Commands: []string{"false"}}
@@ -323,6 +330,7 @@ func TestEvidenceManifestBindsAcceptanceOutcome(t *testing.T) {
 }
 
 func TestNoProgressFinishPersistsFinalManifest(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t, withTeamConfig(func(cfg *agent.TeamConfig) { cfg.GoalMode = "exploratory" }))
 	dir := c.session.Workspace
 	c.sessionData = NewSession()
@@ -346,6 +354,7 @@ func TestNoProgressFinishPersistsFinalManifest(t *testing.T) {
 }
 
 func TestRunFinishedAlwaysCarriesManifestForTerminalResult(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t, withTeamConfig(func(cfg *agent.TeamConfig) { cfg.GoalMode = "exploratory" }))
 	dir := c.session.Workspace
 	c.sessionData = NewSession()

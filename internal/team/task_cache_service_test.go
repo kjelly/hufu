@@ -39,6 +39,7 @@ func BenchmarkTaskCacheLookupAtCapacity(b *testing.B) {
 }
 
 func TestTaskCacheServiceStableGetterAndRuntimeInjection(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	first := c.TaskCache()
 	if first != c.TaskCache() {
@@ -56,6 +57,7 @@ func TestTaskCacheServiceStableGetterAndRuntimeInjection(t *testing.T) {
 }
 
 func TestTaskCacheServiceForkIsDeepAndIsolated(t *testing.T) {
+	t.Parallel()
 	var parentJournalWrites atomic.Int64
 	parent := newDefaultTaskCache(taskCacheDependencies{
 		Identity: func(TaskCacheLookupRequest) CacheIdentity {
@@ -111,6 +113,7 @@ func TestTaskCacheServiceForkIsDeepAndIsolated(t *testing.T) {
 }
 
 func TestTaskCacheServiceRestorePreservesOrderAndDeduplicatesJournalSeeds(t *testing.T) {
+	t.Parallel()
 	cache := newDefaultTaskCache(taskCacheDependencies{})
 	cache.Restore([]TaskCacheSeed{
 		{AgentKey: "worker", Task: "one", Output: "first", Pinned: true},
@@ -136,6 +139,7 @@ func TestTaskCacheServiceRestorePreservesOrderAndDeduplicatesJournalSeeds(t *tes
 }
 
 func TestTaskCacheServiceConcurrentOperations(t *testing.T) {
+	t.Parallel()
 	cache := newDefaultTaskCache(taskCacheDependencies{})
 	ctx := t.Context()
 	var wg sync.WaitGroup

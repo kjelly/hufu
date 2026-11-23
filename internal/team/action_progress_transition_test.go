@@ -86,6 +86,7 @@ func assertActionProgressTransitionReplay(t *testing.T, c *Coordinator, events *
 }
 
 func TestActionProgressWaitsForTaskTransition(t *testing.T) {
+	t.Parallel()
 	for _, transition := range actionProgressTestTransitions(t) {
 		t.Run(transition.name, func(t *testing.T) {
 			c, task, item, events := newActionProgressTransitionCoordinator(t)
@@ -124,6 +125,7 @@ func TestActionProgressWaitsForTaskTransition(t *testing.T) {
 }
 
 func TestTaskTransitionWaitsForActionProgress(t *testing.T) {
+	t.Parallel()
 	for _, change := range actionProgressTestTransitions(t) {
 		t.Run(change.name, func(t *testing.T) {
 			c, task, item, events := newActionProgressTransitionCoordinator(t)

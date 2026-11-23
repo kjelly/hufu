@@ -772,13 +772,22 @@ func TestCodexCancellationPreservesBindingAndTranscript(t *testing.T) {
 		{Result: rawJSON(t, map[string]any{"turn": map[string]any{"id": "turn-cancel"}})}, // acked, but turn/completed never arrives
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(200 * time.Millisecond)
-		cancel()
-	}()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	turnAccepted := make(chan struct{})
+	c.reportStatus = func(event StatusEvent) {
+		if event.Type == "codex_activity" && event.Message == "Codex turn accepted" {
+			close(turnAccepted)
+			cancel()
+		}
+	}
 
 	result, err := provider.RunAttempt(ctx, codexAttemptRequest(item, "do the work"))
+	select {
+	case <-turnAccepted:
+	default:
+		t.Fatal("cancellation did not reach an accepted turn")
+	}
 	if err == nil {
 		t.Fatal("expected RunAttempt to fail once the context was cancelled")
 	}
@@ -826,29 +835,39 @@ func TestCodexCrashPreservesWorkspaceDelta(t *testing.T) {
 	}
 }
 
-// TestCodexTimeoutDoesNotReportSuccess proves §16: an attempt that exceeds
-// its own timeout must never be reported as a success — no CanonicalResult,
-// no ResultProposal, and a classified provider_timeout error.
+// TestCodexTimeoutDoesNotReportSuccess covers a stalled thread request and a
+// turn that never completes. Both must return before the caller's deadline.
 func TestCodexTimeoutDoesNotReportSuccess(t *testing.T) {
-	workspace := newCodexWorkspace(t)
-	_, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{
-		codexInitializeStep(t),
-		codexThreadStartStep(t, "thread-timeout", workspace),
-		{Result: rawJSON(t, map[string]any{"turn": map[string]any{"id": "turn-timeout"}})}, // acked, turn/completed never arrives
-	})
-
-	request := codexAttemptRequest(item, "do the work")
-	request.Timeout = 200 * time.Millisecond
-	result, err := provider.RunAttempt(context.Background(), request)
-	if err == nil {
-		t.Fatal("expected RunAttempt to fail once its own timeout elapsed")
-	}
-	var provErr *CodexProviderError
-	if !errors.As(err, &provErr) || provErr.Class != CodexFailureTimeout {
-		t.Fatalf("err = %v, want a classified %q failure", err, CodexFailureTimeout)
-	}
-	if result.CanonicalResult != nil || result.ResultProposal != nil {
-		t.Fatalf("result = %#v, want no proposal/canonical result reported on timeout", result)
+	for _, tc := range []struct {
+		name string
+		want CodexProviderFailureClass
+	}{
+		{name: "thread", want: CodexFailureCancelled},
+		{name: "turn", want: CodexFailureTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := newCodexWorkspace(t)
+			steps := []fakeCodexStep{codexInitializeStep(t), {NoResponse: true}}
+			if tc.name == "turn" {
+				steps[1] = codexThreadStartStep(t, "thread-timeout", workspace)
+				steps = append(steps, fakeCodexStep{Result: rawJSON(t, map[string]any{"turn": map[string]any{"id": "turn-timeout"}})})
+			}
+			_, provider, item, _ := newCodexHarness(t, workspace, steps)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			request := codexAttemptRequest(item, "do the work")
+			request.Timeout = time.Second
+			result, err := provider.RunAttempt(ctx, request)
+			if ctx.Err() != nil {
+				t.Fatal("attempt depended on the caller deadline")
+			}
+			if provErr, ok := errors.AsType[*CodexProviderError](err); !ok || provErr.Class != tc.want {
+				t.Fatalf("err = %v, want a classified %q failure", err, tc.want)
+			}
+			if result.CanonicalResult != nil || result.ResultProposal != nil {
+				t.Fatalf("result = %#v, want no proposal/canonical result reported on timeout", result)
+			}
+		})
 	}
 }
 

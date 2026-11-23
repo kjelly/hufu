@@ -8,6 +8,7 @@ import (
 )
 
 func TestObjectiveVerificationCreatesContextLifecycleObservations(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	item := &TodoItem{
 		ID:           "task-1",
@@ -32,6 +33,7 @@ func TestObjectiveVerificationCreatesContextLifecycleObservations(t *testing.T) 
 }
 
 func TestAcceptanceObservationOnlyIncludesInjectedItems(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	c.sessionData = NewSession()
 	c.sessionData.CoordinatorContextManifests = []ContextInjectionManifest{{
@@ -52,6 +54,7 @@ func TestAcceptanceObservationOnlyIncludesInjectedItems(t *testing.T) {
 }
 
 func TestJudgeAndSkepticSignalsOnlyUseIncludedContext(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	c.sessionData = NewSession()
 	c.sessionData.CoordinatorContextManifests = []ContextInjectionManifest{

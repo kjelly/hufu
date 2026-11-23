@@ -24,6 +24,7 @@ func filesReadAssertionTask() TaskDef {
 }
 
 func TestSubmitResultRequiresFilesReadBeforeCommit(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker(), executionRunID: "run-contract"}
 	task := filesReadAssertionTask()
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{
@@ -44,6 +45,7 @@ func TestSubmitResultRequiresFilesReadBeforeCommit(t *testing.T) {
 }
 
 func TestSubmitResultAcceptsValidFilesReadPathEntry(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker(), executionRunID: "run-contract-valid"}
 	task := filesReadAssertionTask()
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{
@@ -63,6 +65,7 @@ func TestSubmitResultAcceptsValidFilesReadPathEntry(t *testing.T) {
 }
 
 func TestSubmitResultAssertionsEvaluateCanonicalHydratedResult(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	artifactPath := filepath.Join(workspace, "review.md")
 	if err := os.WriteFile(artifactPath, []byte("review complete\n"), 0o644); err != nil {
@@ -111,6 +114,7 @@ func (s *assertionRecordingSink) Submit(_ context.Context, _ string, result Task
 }
 
 func TestSubmitResultAssertionFailureRollsBackAfterArtifactMaterialization(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "review.md"), []byte("review complete\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -147,6 +151,7 @@ func TestSubmitResultAssertionFailureRollsBackAfterArtifactMaterialization(t *te
 }
 
 func TestVerbatimTranscriptAssertionsRemainForLateFinalization(t *testing.T) {
+	t.Parallel()
 	task := TaskDef{
 		OutputMode: TaskOutputModeVerbatim,
 		VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{
@@ -179,6 +184,7 @@ func TestVerbatimTranscriptAssertionsRemainForLateFinalization(t *testing.T) {
 }
 
 func TestSubmitResultRejectsReviewerEvidencePathBeforeCommit(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker(), executionRunID: "run-contract-evidence"}
 	task := filesReadAssertionTask()
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{
@@ -197,6 +203,7 @@ func TestSubmitResultRejectsReviewerEvidencePathBeforeCommit(t *testing.T) {
 }
 
 func TestTaskResultPromptToolDecoderParity(t *testing.T) {
+	t.Parallel()
 	task := filesReadAssertionTask()
 	contract := taskResultSubmissionContractForTask(task)
 	info := submitResultToolInfo(contract)
@@ -238,6 +245,7 @@ func TestTaskResultPromptToolDecoderParity(t *testing.T) {
 }
 
 func TestInvariantResultProtocolStatesConditionalFieldContract(t *testing.T) {
+	t.Parallel()
 	task := TaskDef{
 		InvariantVerification: "blocking",
 		Execution:             ExecutionContract{RequiresResult: true},
@@ -269,6 +277,7 @@ func TestInvariantResultProtocolStatesConditionalFieldContract(t *testing.T) {
 }
 
 func TestTaskResultContractAdmissionEnforcesAllAssertions(t *testing.T) {
+	t.Parallel()
 	task := TaskDef{
 		Execution: ExecutionContract{RequiresResult: true},
 		VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{
@@ -306,6 +315,7 @@ func TestTaskResultContractAdmissionEnforcesAllAssertions(t *testing.T) {
 }
 
 func TestReviewerPromptDefersToEffectiveWorksetResultContract(t *testing.T) {
+	t.Parallel()
 	_, sourceFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
@@ -354,6 +364,7 @@ func TestReviewerPromptDefersToEffectiveWorksetResultContract(t *testing.T) {
 }
 
 func TestSubmitResultRejectedThenCorrectedSameAttemptUnderFailFast(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session:        &TeamSession{Config: agent.TeamConfig{Policies: agent.WorkflowPolicies{FailFast: true}}},
 		taskTracker:    NewTaskTracker(),
@@ -387,6 +398,7 @@ func TestSubmitResultRejectedThenCorrectedSameAttemptUnderFailFast(t *testing.T)
 }
 
 func TestWorksetResultCanCorrectWithinSameAttemptAndComplete(t *testing.T) {
+	t.Parallel()
 	c, producer, child, ref, receipt := newWorksetAuthorizationFixture(t)
 	store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
 	if err != nil {

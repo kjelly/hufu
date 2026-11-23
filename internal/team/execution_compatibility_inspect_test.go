@@ -35,6 +35,7 @@ func compatibilityPayload(t *testing.T, value any) json.RawMessage {
 }
 
 func TestCompatibilityScannerCountsPhysicalEventsOnce(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -94,6 +95,7 @@ func TestCompatibilityScannerCountsPhysicalEventsOnce(t *testing.T) {
 }
 
 func TestCompatibilityScannerIsByteAndMtimeReadOnly(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	putRuntimeDocument(t, workspace, runtimestore.DocumentSession, []byte(`{"tasks":[{"id":"legacy","model":"qwen3:8b","subagent_provider":"hufu-local"}]}`))
 	path := runtimestore.Path(workspace)
@@ -127,6 +129,7 @@ func TestCompatibilityScannerIsByteAndMtimeReadOnly(t *testing.T) {
 }
 
 func TestCompatibilityScannerDoesNotUseSessionRuntimeShadowsAsEvidence(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	canonical := &SessionData{Tasks: []*TodoItem{{
 		ID: "canonical", Status: TaskPending,
@@ -147,6 +150,7 @@ func TestCompatibilityScannerDoesNotUseSessionRuntimeShadowsAsEvidence(t *testin
 }
 
 func TestCompatibilityScannerDoesNotUseHistoricalProfileToRetargetTypedTask(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -173,6 +177,7 @@ func TestCompatibilityScannerDoesNotUseHistoricalProfileToRetargetTypedTask(t *t
 }
 
 func TestCompatibilityScannerRejectsCorruptHashChain(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -191,6 +196,7 @@ func TestCompatibilityScannerRejectsCorruptHashChain(t *testing.T) {
 }
 
 func TestCompatibilityScannerClassifiesBranchTaskOccurrences(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {

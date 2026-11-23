@@ -13,6 +13,7 @@ import (
 // model, selected team, compaction) into the active session branch so branch
 // state survives process restarts (R3).
 func TestCoordinatorSaveCheckpoint_UpdatesBranchState(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	st := NewSessionTree()
 	exp, err := st.CreateBranch("exp", "", nil)
@@ -69,6 +70,7 @@ func TestCoordinatorSaveCheckpoint_UpdatesBranchState(t *testing.T) {
 }
 
 func TestRebuildSessionForBranchRestoresCriterionProgressTimestamp(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	es, err := NewEventStore(tempDir, "run-1", "session-1")
 	if err != nil {
@@ -100,6 +102,7 @@ func TestRebuildSessionForBranchRestoresCriterionProgressTimestamp(t *testing.T)
 // Checkout-time travel: rebuilding a branch must rewrite the session checkpoint from the
 // branch's event lineage so the next run resumes that branch's state (R3).
 func TestRebuildSessionForBranch(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	es, err := NewEventStore(tempDir, "run-1", "session-1")
 	if err != nil {
@@ -167,6 +170,7 @@ func TestRebuildSessionForBranch(t *testing.T) {
 // A branch with no lineage owns no session state: switching to it must not
 // keep the previous branch's conversation, only workspace-level state.
 func TestRebuildSessionForBranch_EmptyBranchStartsFresh(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	st := NewSessionTree()
 	b, err := st.CreateBranch("empty", "", nil)
@@ -197,6 +201,7 @@ func TestRebuildSessionForBranch_EmptyBranchStartsFresh(t *testing.T) {
 // Refreshing the active branch's projection with nothing to project leaves
 // the branch's live session as it is.
 func TestRefreshActiveBranchProjection_NoDataNoop(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	st := NewSessionTree()
 

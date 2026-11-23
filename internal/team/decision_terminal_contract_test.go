@@ -6,6 +6,7 @@ import (
 )
 
 func TestTerminalEntryPointInventoryIsClosedAndComplete(t *testing.T) {
+	t.Parallel()
 	points := TerminalEntryPoints()
 	if len(points) != 19 {
 		t.Fatalf("entry points = %d, want 19", len(points))
@@ -34,6 +35,7 @@ func TestTerminalEntryPointInventoryIsClosedAndComplete(t *testing.T) {
 }
 
 func TestTerminalEntryPointPrimaryModes(t *testing.T) {
+	t.Parallel()
 	for _, point := range []TerminalEntryPoint{
 		TerminalEntryFinishTool,
 		TerminalEntryCoordinatorEOF,
@@ -55,6 +57,7 @@ func TestTerminalEntryPointPrimaryModes(t *testing.T) {
 }
 
 func TestTerminalPreparationProofKeepsNullableFields(t *testing.T) {
+	t.Parallel()
 	proof := TerminalPreparationProof{
 		SchemaVersion:  1,
 		Kind:           "terminal_preparation_proof",

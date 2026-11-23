@@ -16,6 +16,7 @@ import (
 // by contract_enforcement_test.go.
 
 func TestValidateExecutionContractFullLintModes(t *testing.T) {
+	t.Parallel()
 	// `|| echo FAIL` is structurally non-asserting: the fallback always exits 0.
 	const nonAsserting = "test -f artifact || echo FAIL"
 	tests := []struct {
@@ -64,6 +65,7 @@ func TestValidateExecutionContractFullLintModes(t *testing.T) {
 }
 
 func TestValidateExecutionContractFullRejectsMalformedTypedVerifierForAllKinds(t *testing.T) {
+	t.Parallel()
 	// A malformed typed verifier must be caught before dispatch for every
 	// kind, not only interactive and external.
 	for _, kind := range []ExecutionKind{ExecutionKindInline, ExecutionKindProcess, ExecutionKindInteractive, ExecutionKindExternal} {
@@ -87,6 +89,7 @@ func TestValidateExecutionContractFullRejectsMalformedTypedVerifierForAllKinds(t
 }
 
 func TestValidateExecutionContractFullRejectsPrinterLastStage(t *testing.T) {
+	t.Parallel()
 	// A verifier whose last pipeline stage only prints cannot assert anything.
 	for _, verify := range []string{"go test ./... | cat", "echo done", "grep -q foo file | printf found"} {
 		t.Run(verify, func(t *testing.T) {
@@ -99,6 +102,7 @@ func TestValidateExecutionContractFullRejectsPrinterLastStage(t *testing.T) {
 }
 
 func TestValidateExecutionContractFullStructuralErrorsIgnoreLintMode(t *testing.T) {
+	t.Parallel()
 	// The lint mode only governs verifier assertiveness; structural errors
 	// block dispatch in every mode.
 	tests := []struct {
@@ -120,6 +124,7 @@ func TestValidateExecutionContractFullStructuralErrorsIgnoreLintMode(t *testing.
 }
 
 func TestValidateExecutionContractFullObservationModeExemptFromLint(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{agent.VerifierLintError, agent.VerifierLintWarn, agent.VerifierLintOff} {
 		t.Run("mode="+mode, func(t *testing.T) {
 			task := TaskDef{
@@ -137,6 +142,7 @@ func TestValidateExecutionContractFullObservationModeExemptFromLint(t *testing.T
 }
 
 func TestNormalizeVerifierLintMode(t *testing.T) {
+	t.Parallel()
 	tests := map[string]string{
 		"":      agent.VerifierLintError,
 		"error": agent.VerifierLintError,
@@ -153,6 +159,7 @@ func TestNormalizeVerifierLintMode(t *testing.T) {
 }
 
 func TestParseTeamYMLVerifierLintMode(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		yaml string

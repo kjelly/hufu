@@ -7,6 +7,7 @@ import (
 )
 
 func TestEvidenceManifestBuildFailurePreservesPublishedManifest(t *testing.T) {
+	t.Parallel()
 	published := &EvidenceManifest{RunID: "published", Status: "accepted"}
 	c := &Coordinator{lastEvidenceManifest: published}
 
@@ -19,6 +20,7 @@ func TestEvidenceManifestBuildFailurePreservesPublishedManifest(t *testing.T) {
 }
 
 func TestEvidenceManifestFinalizeFailureRetainsInPlaceMutation(t *testing.T) {
+	t.Parallel()
 	workspaceFile := filepath.Join(t.TempDir(), "not-a-directory")
 	if err := os.WriteFile(workspaceFile, []byte("workspace blocker"), 0o644); err != nil {
 		t.Fatal(err)

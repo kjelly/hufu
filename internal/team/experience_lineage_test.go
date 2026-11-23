@@ -11,6 +11,7 @@ import (
 )
 
 func TestInheritExperience(t *testing.T) {
+	t.Parallel()
 	source := contextstore.ExperienceObservation{IdempotencyKey: "use-1", ContextItemID: "session-a", TaskID: "run-1/1", AppliedDelta: 1}
 	other := contextstore.ExperienceObservation{IdempotencyKey: "use-2", ContextItemID: "session-b", TaskID: "run-1/2", ConsultedDelta: 1}
 	cases := []struct {
@@ -66,6 +67,7 @@ func TestInheritExperience(t *testing.T) {
 // still reaches the promoted record, and a rebuild from the event log
 // reproduces the same aggregate.
 func TestPromotedRecordInheritsSessionEvidence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)

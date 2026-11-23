@@ -18,6 +18,7 @@ const (
 )
 
 func TestLogicalDecisionReducerCrashPrefixes(t *testing.T) {
+	t.Parallel()
 	events := universalDecisionLifecycleEvents(t)
 	wantPhases := []LogicalDecisionPhase{
 		LogicalDecisionSupporting,
@@ -52,6 +53,7 @@ func TestLogicalDecisionReducerCrashPrefixes(t *testing.T) {
 }
 
 func TestLogicalDecisionReducerRejectsStaleOwnerAndPartialMutation(t *testing.T) {
+	t.Parallel()
 	events := universalDecisionLifecycleEvents(t)
 	reducer := NewLogicalDecisionReducer()
 	if err := reducer.Apply(events[0]); err != nil {
@@ -70,6 +72,7 @@ func TestLogicalDecisionReducerRejectsStaleOwnerAndPartialMutation(t *testing.T)
 }
 
 func TestLogicalDecisionReducerAttachAdvancesOwnerEpoch(t *testing.T) {
+	t.Parallel()
 	open := universalDecisionLifecycleEvents(t)[0]
 	reducer := NewLogicalDecisionReducer()
 	if err := reducer.Apply(open); err != nil {
@@ -94,6 +97,7 @@ func TestLogicalDecisionReducerAttachAdvancesOwnerEpoch(t *testing.T) {
 }
 
 func TestDecisionEventStrictPayloadValidation(t *testing.T) {
+	t.Parallel()
 	open := universalDecisionLifecycleEvents(t)[0]
 	unknown := replaceJSONField(t, open.Payload, "unexpected", true)
 	open.Payload = unknown
@@ -109,6 +113,7 @@ func TestDecisionEventStrictPayloadValidation(t *testing.T) {
 }
 
 func TestEventStoreDecisionIdempotencyUsesBusinessPayload(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "run-1", "session-1")
 	if err != nil {
 		t.Fatal(err)
@@ -140,6 +145,7 @@ func TestEventStoreDecisionIdempotencyUsesBusinessPayload(t *testing.T) {
 }
 
 func TestDecisionWriterLeaseExcludesConcurrentOwners(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	first, err := AcquireDecisionWriterLease(context.Background(), workspace, "main")
 	if err != nil {
@@ -248,6 +254,7 @@ func replaceJSONField(t *testing.T, raw json.RawMessage, field string, value any
 }
 
 func TestMissingDecisionRunHasTypedIdentity(t *testing.T) {
+	t.Parallel()
 	_, err := ReplayLogicalDecisionRun(nil, "missing", "main")
 	if !errors.Is(fmt.Errorf("replay: %w", err), errLogicalDecisionRunNotFound) {
 		t.Fatalf("missing run: %v", err)

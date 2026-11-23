@@ -24,6 +24,7 @@ func catalogTestInputSchema() RunInputSchema {
 }
 
 func TestCanonicalizeCatalogArguments(t *testing.T) {
+	t.Parallel()
 	schema := catalogTestInputSchema()
 	tests := []struct {
 		name    string
@@ -65,6 +66,7 @@ func TestCanonicalizeCatalogArguments(t *testing.T) {
 }
 
 func TestCanonicalizeCatalogArgumentsRejectsRedactionUnstableValues(t *testing.T) {
+	t.Parallel()
 	closed := false
 	schema := RunInputSchema{Type: "object", AdditionalProperties: &closed, Properties: map[string]RunInputSchema{"note": {Type: "string"}}}
 	_, _, err := canonicalizeCatalogArguments(schema, []byte(`{"note":"api_key=sk-abcdefghijklmnopqrstuvwxyz0123456789"}`))
@@ -74,6 +76,7 @@ func TestCanonicalizeCatalogArgumentsRejectsRedactionUnstableValues(t *testing.T
 }
 
 func TestValidateCatalogOutputs(t *testing.T) {
+	t.Parallel()
 	schema := RunInputSchema{Type: "object", RequiredProperties: []string{"summary"}, Properties: map[string]RunInputSchema{
 		"summary": {Type: "string"}, "score": {Type: "number"},
 	}}
@@ -98,6 +101,7 @@ func TestValidateCatalogOutputs(t *testing.T) {
 }
 
 func TestMigrateTeamManifestKeepsActionCatalog(t *testing.T) {
+	t.Parallel()
 	dir := writeActionCatalogTeam(t, actionCatalogTestManifest("", actionCatalogTestEntry))
 	original, err := LoadTeam(dir, nil, nil, DefaultProviderRegistry)
 	if err != nil {

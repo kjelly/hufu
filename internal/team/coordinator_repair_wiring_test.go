@@ -36,6 +36,7 @@ func (a *repairWiringCaptureAgent) Stream(ctx context.Context, call fantasy.Agen
 // calls' JSON deltas would bypass the local rejection boundary with no
 // compiler or test signal — this test is that signal.
 func TestCoordinatorWiresRepairToolCallOntoStreamingCall(t *testing.T) {
+	t.Parallel()
 	worker := &repairWiringCaptureAgent{}
 	c := newTestCoordinator(t, withWorker(worker), withMaxRetries(0))
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "repair wiring task"}})

@@ -179,6 +179,9 @@ func TestCollectionModelSchemaFailureProtectsRuntimeOwnedValues(t *testing.T) {
 }
 
 func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	valid := `{"status":"success","summary":"review complete","findings":[{"summary":"observed finding"}],"structured_payload":{"findings":[{"summary":"observed finding"}]}}`
 	conditionalValid := strings.Replace(valid, `"structured_payload":{"findings":[{"summary":"observed finding"}]}`, `"structured_payload":{"findings":[{"summary":"observed finding","status":"unknown"}]}`, 1)
 	conditionalInvalid := strings.Replace(conditionalValid, `"status":"unknown"`, `"status":"unknown","finding_index":0`, 1)

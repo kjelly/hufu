@@ -7,6 +7,7 @@ import (
 )
 
 func TestResolveAgentModelKeepsCoordinatorSeparateFromWorker(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{
 		WorkerModel:      "codex/gpt-5.6-luna",
 		CoordinatorModel: "ollama/minimax-m2.7:cloud",

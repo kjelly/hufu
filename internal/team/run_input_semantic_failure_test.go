@@ -37,6 +37,7 @@ func (r *scriptedSemanticRunInputResolver) Resolve(ctx context.Context, request 
 }
 
 func TestSemanticRunInputFailureDefaultsVisibly(t *testing.T) {
+	t.Parallel()
 	transportErr := errors.New("semantic input translation: stream transport error: unexpected EOF")
 	malformedErr := errors.New("semantic input response is not one JSON value: unexpected EOF")
 	lastN := json.RawMessage(`{"kind":"last_n","count":22,"history":"first_parent","head":"HEAD"}`)
@@ -112,6 +113,7 @@ func TestSemanticRunInputFailureDefaultsVisibly(t *testing.T) {
 }
 
 func TestRunInputResolutionNoticeNamesTheDefault(t *testing.T) {
+	t.Parallel()
 	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
 	if got := coordinator.runInputResolutionNotice(); got != "" {
 		t.Fatalf("notice without a failure = %q, want none", got)
@@ -148,6 +150,7 @@ func TestRunInputResolutionNoticeNamesTheDefault(t *testing.T) {
 }
 
 func TestCanonicalRunInputsPromptDisclosesDefaults(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		source RunInputSource

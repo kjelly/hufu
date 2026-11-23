@@ -7,6 +7,7 @@ import (
 )
 
 func TestWorkflowRetryCountersSurviveSecretLikeFailureDetails(t *testing.T) {
+	t.Parallel()
 	for _, legacy := range []bool{false, true} {
 		t.Run(map[bool]string{false: "new", true: "legacy"}[legacy], func(t *testing.T) {
 			c := newTestCoordinator(t)
@@ -80,6 +81,7 @@ func sameJSON(t *testing.T, got, want any) bool {
 }
 
 func TestCheckpointedWorkflowStateReplaysFromEvents(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	workflow, err := newRuntimeWorkflow(session)
 	if err != nil {
@@ -122,6 +124,7 @@ func TestCheckpointedWorkflowStateReplaysFromEvents(t *testing.T) {
 }
 
 func TestWorkflowReplayKeepsTheLastSnapshot(t *testing.T) {
+	t.Parallel()
 	event := func(state Phase) RunEvent {
 		payload, err := json.Marshal(WorkflowStateChangedPayload{State: state})
 		if err != nil {
@@ -138,6 +141,7 @@ func TestWorkflowReplayKeepsTheLastSnapshot(t *testing.T) {
 }
 
 func TestAcceptanceRevisionsReplayFromEvents(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Workspace: t.TempDir()}
 	c := &Coordinator{session: session, taskTracker: NewTaskTracker()}
 	// The configured contract is set while the coordinator is built, before
@@ -170,6 +174,7 @@ func TestAcceptanceRevisionsReplayFromEvents(t *testing.T) {
 }
 
 func TestContinuationCheckpointReplaysFromEvents(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Workspace: t.TempDir()}
 	c := newSessionStateTestCoordinator(t, session)
 	tests := []struct {

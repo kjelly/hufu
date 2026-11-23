@@ -13,6 +13,7 @@ import (
 )
 
 func TestProviderBoundaryFailureDoesNotPoisonNextInvocation(t *testing.T) {
+	t.Parallel()
 	firstErr := errors.New("synthetic proxy startup failure")
 	startCalls := 0
 	c := &Coordinator{
@@ -47,6 +48,7 @@ func TestProviderBoundaryFailureDoesNotPoisonNextInvocation(t *testing.T) {
 }
 
 func TestInvocationParentCancellationAbortsBoundaryExactlyOnce(t *testing.T) {
+	t.Parallel()
 	started := make(chan struct{})
 	aborted := make(chan struct{})
 	var abortCalls atomic.Int32
@@ -86,6 +88,7 @@ func TestInvocationParentCancellationAbortsBoundaryExactlyOnce(t *testing.T) {
 }
 
 func TestInvocationAbortGateJoinsConcurrentAbortRequests(t *testing.T) {
+	t.Parallel()
 	abortStarted := make(chan struct{})
 	releaseAbort := make(chan struct{})
 	var abortCalls atomic.Int32
@@ -142,6 +145,7 @@ func TestInvocationAbortGateJoinsConcurrentAbortRequests(t *testing.T) {
 }
 
 func TestPublicInvocationLeaseSerializesProviderBoundaryOwnership(t *testing.T) {
+	t.Parallel()
 	var startCalls atomic.Int32
 	var abortCalls atomic.Int32
 	abortStarted := make(chan struct{})
@@ -213,6 +217,7 @@ func TestPublicInvocationLeaseSerializesProviderBoundaryOwnership(t *testing.T) 
 }
 
 func TestPreCancelledInvocationDoesNotStartProviderBoundary(t *testing.T) {
+	t.Parallel()
 	var startCalls atomic.Int32
 	c := &Coordinator{
 		providerManager: &agent.ProviderManager{},
@@ -238,6 +243,7 @@ func TestPreCancelledInvocationDoesNotStartProviderBoundary(t *testing.T) {
 }
 
 func TestSidecarFailsClosedBeforeProviderBoundary(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{providerManager: &agent.ProviderManager{}, sidecarModel: "model"}
 	if got := c.Sidecar(); got != nil {
 		t.Fatal("sidecar was constructed before the provider boundary was admitted")
@@ -245,6 +251,7 @@ func TestSidecarFailsClosedBeforeProviderBoundary(t *testing.T) {
 }
 
 func TestContextPreflightAdmitsSidecarAfterProviderBoundary(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	c, err := NewCoordinator(&TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "preflight-sidecar"}}, "", "", nil, nil, RoleModels{Sidecar: "gpt-4o"}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
@@ -267,6 +274,7 @@ func TestContextPreflightAdmitsSidecarAfterProviderBoundary(t *testing.T) {
 }
 
 func TestContextPreflightCancellationAbortsOwnedBoundaryBeforeClose(t *testing.T) {
+	t.Parallel()
 	c, err := NewCoordinator(&TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "preflight-cancel"}}, "", "", nil, nil, RoleModels{Sidecar: "model"}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -306,6 +314,7 @@ func TestContextPreflightCancellationAbortsOwnedBoundaryBeforeClose(t *testing.T
 }
 
 func TestProviderBoundaryStartupFailurePublishesCanonicalRunResult(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		providerManager: &agent.ProviderManager{},
@@ -359,6 +368,7 @@ func TestProviderBoundaryStartupFailurePublishesCanonicalRunResult(t *testing.T)
 }
 
 func TestPublicAdmissionFailuresFinalizeExactlyOnce(t *testing.T) {
+	t.Parallel()
 	startupErr := errors.New("synthetic provider admission failure")
 	tests := []struct {
 		name string
@@ -454,6 +464,7 @@ func TestPublicAdmissionFailuresFinalizeExactlyOnce(t *testing.T) {
 }
 
 func TestRecoveryAdmissionUsesCanonicalTerminalLifecycle(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		call func(*Coordinator) error

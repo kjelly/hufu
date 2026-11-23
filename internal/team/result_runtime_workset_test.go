@@ -49,6 +49,7 @@ func runtimeWorksetFixture(t *testing.T) (*Coordinator, *TodoItem, *CompiledResu
 }
 
 func TestRuntimeResultInputsBindFrozenWorksetValues(t *testing.T) {
+	t.Parallel()
 	c, item, compiled := runtimeWorksetFixture(t)
 	info := (&submitResultTool{coordinator: c, todoID: item.ID}).Info()
 	shape := info.Parameters["structured_payload"].(map[string]any)
@@ -132,6 +133,7 @@ func TestRuntimeResultInputsBindFrozenWorksetValues(t *testing.T) {
 }
 
 func TestRuntimeResultInputsResolveWorksetOncePerSubmission(t *testing.T) {
+	t.Parallel()
 	c := newRecoveredArtifactCoordinator(t)
 	child := c.todoItemByID("2")
 	single, err := CompileResultContractDocument("single-binding.json", []byte(runtimeWorksetSchema))
@@ -173,6 +175,7 @@ func TestRuntimeResultInputsResolveWorksetOncePerSubmission(t *testing.T) {
 }
 
 func TestRuntimeResultInputsRecoveredWorksetValues(t *testing.T) {
+	t.Parallel()
 	c := newRecoveredArtifactCoordinator(t)
 	compiled, err := CompileResultContractDocument("workset-result.json", []byte(runtimeWorksetSchema))
 	if err != nil {
@@ -189,6 +192,7 @@ func TestRuntimeResultInputsRecoveredWorksetValues(t *testing.T) {
 }
 
 func TestRuntimeResultInputsModelLeafUsesCanonicalWorksetOwner(t *testing.T) {
+	t.Parallel()
 	parent, item, compiled := runtimeWorksetFixture(t)
 	leaf := newTestCoordinator(t)
 	leaf.modelFanout = &modelFanoutBinding{parent: parent, taskID: item.ID}
@@ -204,6 +208,7 @@ func TestRuntimeResultInputsModelLeafUsesCanonicalWorksetOwner(t *testing.T) {
 }
 
 func TestRuntimeResultInputsWorksetSchemaBoundaries(t *testing.T) {
+	t.Parallel()
 	for _, change := range []struct{ name, from, to string }{
 		{"source_task", `"source_kind":"workset_binding"`, `"source_kind":"workset_binding","source_task":"another-task"`},
 		{"missing_binding", `"output":"label"`, `"output":""`},
@@ -238,6 +243,7 @@ func TestRuntimeResultInputsWorksetSchemaBoundaries(t *testing.T) {
 }
 
 func TestContractRecoveryRejectsUnavailableWorksetRuntimeInput(t *testing.T) {
+	t.Parallel()
 	c, source, id := contractCollectionFixture(t, researchCollectionResponse(t, 14), SideEffectNone)
 	compiled := c.session.ResultContracts["research.json"]
 	value, err := decodeResultContractJSON(compiled.CanonicalSchema)
@@ -268,6 +274,7 @@ func TestContractRecoveryRejectsUnavailableWorksetRuntimeInput(t *testing.T) {
 }
 
 func TestResultCollectionRecoveryMissingRuntimePayload(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name, body       string
 		allowed, corrupt bool

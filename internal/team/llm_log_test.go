@@ -12,6 +12,7 @@ import (
 // (LLM request dump, stream events, audit previews), hiding permission
 // denials and command failures from all diagnostics.
 func TestToolResultOutputText(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		output  fantasy.ToolResultOutputContent
@@ -36,6 +37,7 @@ func TestToolResultOutputText(t *testing.T) {
 }
 
 func TestFormatToolResultContent_RendersErrors(t *testing.T) {
+	t.Parallel()
 	got := formatToolResultContent(fantasy.ToolResultContent{
 		ToolCallID: "call_1",
 		ToolName:   "bash",
@@ -50,6 +52,7 @@ func TestFormatToolResultContent_RendersErrors(t *testing.T) {
 }
 
 func TestLLMLogStreamFinish(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		usage    fantasy.Usage
@@ -97,6 +100,7 @@ func TestLLMLogStreamFinish(t *testing.T) {
 }
 
 func TestFlattenStatusEntry(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		in       string
@@ -118,6 +122,7 @@ func TestFlattenStatusEntry(t *testing.T) {
 }
 
 func TestToolUsageNotes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		granted  map[string]bool
@@ -158,6 +163,7 @@ func TestToolUsageNotes(t *testing.T) {
 }
 
 func TestTotalRoundsSurvivesReset(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.round = 15
 	if got := c.totalRounds(); got != 15 {

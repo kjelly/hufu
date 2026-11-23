@@ -17,6 +17,7 @@ func projectionAssertion() TaskResultAssertion {
 }
 
 func TestTaskResultProjectionSemantics(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, source string
 		valid        bool
@@ -50,6 +51,7 @@ func TestTaskResultProjectionSemantics(t *testing.T) {
 }
 
 func TestTaskResultProjectionOptionalFields(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, left, right string
 		valid             bool
@@ -87,6 +89,7 @@ func TestTaskResultProjectionOptionalFields(t *testing.T) {
 }
 
 func TestTaskResultProjectionPolicyValidation(t *testing.T) {
+	t.Parallel()
 	for _, value := range []any{
 		map[string]any{"pointer": "/facts/rows", "fields": []string{"summary"}, "optional_fields": []string{"summary"}},
 		map[string]any{"pointer": "/facts/rows", "fields": []string{"summary"}, "optional_fields": []string{"index", "index"}},
@@ -121,6 +124,7 @@ func TestTaskResultProjectionPolicyValidation(t *testing.T) {
 }
 
 func TestTaskResultProjectionExplicitOptionalFieldDefaults(t *testing.T) {
+	t.Parallel()
 	policy := map[string]any{"pointer": "/right", "fields": []string{"id", "position", "missing"}, "field_defaults": map[string]any{"position": nil, "missing": []any{}}}
 	assertion := TaskResultAssertion{Pointer: "/left", Op: "equals_projection", Value: policy}
 	for _, tc := range []struct {
@@ -167,6 +171,7 @@ func TestTaskResultProjectionExplicitOptionalFieldDefaults(t *testing.T) {
 }
 
 func TestSubmitResultProjectionRejectsBeforeCommitAndAllowsCorrection(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker(), executionRunID: "run-projection"}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "produce matched rows",
 		VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{projectionAssertion()}},
@@ -188,6 +193,7 @@ func TestSubmitResultProjectionRejectsBeforeCommitAndAllowsCorrection(t *testing
 }
 
 func TestTaskResultProjectionContractAndPersistence(t *testing.T) {
+	t.Parallel()
 	const source = `type: task_result_assert
 task-result-assertions:
   - pointer: /findings
@@ -247,6 +253,7 @@ task-result-assertions:
 }
 
 func TestSubmitResultOptionalProjectionCanBeCorrected(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker(), executionRunID: "run-optional-projection"}
 	assertion := TaskResultAssertion{Pointer: "/facts/first", Op: "equals_projection", Value: map[string]any{
 		"pointer": "/facts/second", "fields": []string{"label"}, "optional_fields": []string{"link", "notes"},

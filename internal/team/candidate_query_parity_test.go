@@ -9,6 +9,7 @@ import (
 )
 
 func TestCandidateSettlementTypedQueriesPreserveCallerResults(t *testing.T) {
+	t.Parallel()
 	repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

@@ -9,6 +9,7 @@ import (
 )
 
 func TestValidateWorkspaceSeparation(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := ValidateWorkspaceSeparation(filepath.Join(root, "control"), filepath.Join(root, "subject")); err != nil {
 		t.Fatal(err)
@@ -26,6 +27,7 @@ func TestValidateWorkspaceSeparation(t *testing.T) {
 }
 
 func TestSetCompatibilityWorkspaceScopePreservesLegacyPaths(t *testing.T) {
+	t.Parallel()
 	control := filepath.Join(t.TempDir(), "workspace", "review")
 	subject := t.TempDir()
 	session := &TeamSession{Workspace: control}
@@ -45,6 +47,7 @@ func TestSetCompatibilityWorkspaceScopePreservesLegacyPaths(t *testing.T) {
 }
 
 func TestSetWorkspaceScopeRequiresManagedIdentityAndSeparation(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	session := &TeamSession{}
 	if err := session.SetWorkspaceScope(WorkspaceScope{
@@ -67,6 +70,7 @@ func TestSetWorkspaceScopeRequiresManagedIdentityAndSeparation(t *testing.T) {
 }
 
 func TestSetWorkspacePreviewScopeValidatesPathsWithoutPersistedIdentity(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	session := &TeamSession{}
 	scope := WorkspaceScope{
@@ -89,6 +93,7 @@ func TestSetWorkspacePreviewScopeValidatesPathsWithoutPersistedIdentity(t *testi
 }
 
 func TestContextScopeUsesCompatibilityIdentityInsteadOfSubjectRoot(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{
 		Workspace: "/control",
 		Config:    agent.TeamConfig{Name: "review"},
@@ -106,6 +111,7 @@ func TestContextScopeUsesCompatibilityIdentityInsteadOfSubjectRoot(t *testing.T)
 }
 
 func TestNewCoordinatorUsesSessionSubjectRoot(t *testing.T) {
+	t.Parallel()
 	control := t.TempDir()
 	subject := t.TempDir()
 	session := &TeamSession{Workspace: control, Config: agent.TeamConfig{Name: "review"}}
@@ -124,6 +130,7 @@ func TestNewCoordinatorUsesSessionSubjectRoot(t *testing.T) {
 }
 
 func TestValidateSharedContextFilesRejectsMemoryAndRequiresRealHandoff(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	shared := filepath.Join(workspace, sharedDir)
 	if err := os.MkdirAll(shared, 0o755); err != nil {

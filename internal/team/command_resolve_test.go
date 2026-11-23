@@ -10,6 +10,7 @@ import (
 )
 
 func TestResolveStageExecutables(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 
 	// Create a dummy executable file under tempDir for project-local testing.
@@ -232,6 +233,7 @@ func (m mockFileInfo) IsDir() bool        { return m.isDir }
 func (m mockFileInfo) Sys() any           { return nil }
 
 func TestIsExecutableFile(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		info     os.FileInfo

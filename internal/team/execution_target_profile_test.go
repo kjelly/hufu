@@ -9,6 +9,7 @@ import (
 )
 
 func TestExecutionTargetHasLanguageModelCapabilityRejectsAgentBackends(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{
 		SubagentProviders: map[string]agent.SubagentProviderConfig{"review-bot": {Type: "codex-app-server"}},
 	}}}
@@ -23,6 +24,7 @@ func TestExecutionTargetHasLanguageModelCapabilityRejectsAgentBackends(t *testin
 }
 
 func TestFilterWorkerToolsSkipsProfileLookupForAgentBackend(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{}}, modelProfileRuntime: &ModelProfileRuntime{}}
 	tool := fantasy.NewAgentTool("read", "read", func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
 		return fantasy.NewTextResponse("ok"), nil

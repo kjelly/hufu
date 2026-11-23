@@ -89,6 +89,7 @@ func semanticScopeDefinition(mode string) RunInputDefinition {
 }
 
 func TestSemanticRunInputUsesTypedJSONAndCoreProvenance(t *testing.T) {
+	t.Parallel()
 	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
 	coordinator.session.RunInputDefinitions = []RunInputDefinition{semanticScopeDefinition(runInputResolverModeSemanticJSON)}
 	semantic := &recordingSemanticRunInputResolver{value: json.RawMessage(`{"head":"HEAD","count":5,"history":"first_parent","kind":"last_n"}`)}
@@ -118,6 +119,7 @@ func TestSemanticRunInputUsesTypedJSONAndCoreProvenance(t *testing.T) {
 }
 
 func TestSemanticRunInputRepairsTeamInvalidCandidateBeforeSnapshot(t *testing.T) {
+	t.Parallel()
 	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
 	coordinator.session.RunInputDefinitions = []RunInputDefinition{semanticScopeDefinition(runInputResolverModeSemanticJSON)}
 	semantic := &recordingSemanticRunInputResolver{values: []json.RawMessage{
@@ -155,6 +157,7 @@ func TestSemanticRunInputRepairsTeamInvalidCandidateBeforeSnapshot(t *testing.T)
 }
 
 func TestSemanticRunInputCandidateValidatorCannotRewriteOrClaimEvidence(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		response RunInputResolverResponse
@@ -198,6 +201,7 @@ func TestSemanticRunInputCandidateValidatorCannotRewriteOrClaimEvidence(t *testi
 }
 
 func TestSemanticRunInputRejectsInvalidOutputAfterOneRepair(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		value json.RawMessage
@@ -228,6 +232,7 @@ func TestSemanticRunInputRejectsInvalidOutputAfterOneRepair(t *testing.T) {
 }
 
 func TestSemanticRunInputUnavailableFallsBackDeterministically(t *testing.T) {
+	t.Parallel()
 	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
 	coordinator.session.RunInputDefinitions = []RunInputDefinition{semanticScopeDefinition(runInputResolverModeSemanticJSON)}
 	semantic := &recordingSemanticRunInputResolver{err: errors.New("timeout")}
@@ -251,6 +256,7 @@ func TestSemanticRunInputUnavailableFallsBackDeterministically(t *testing.T) {
 }
 
 func TestSemanticRunInputRejectsCommandShapedRevisionValues(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name  string
 		value string
@@ -289,6 +295,7 @@ func TestSemanticRunInputRejectsCommandShapedRevisionValues(t *testing.T) {
 }
 
 func TestSemanticRunInputAppliesResolverTimeoutBeforeFallback(t *testing.T) {
+	t.Parallel()
 	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
 	coordinator.session.RunInputDefinitions = []RunInputDefinition{semanticScopeDefinition(runInputResolverModeSemanticJSON)}
 	semantic := &deadlineSemanticRunInputResolver{}
@@ -309,6 +316,7 @@ func TestSemanticRunInputAppliesResolverTimeoutBeforeFallback(t *testing.T) {
 }
 
 func TestSemanticRunInputOutputRejectsProseAndMultipleDocuments(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{
 		"Here is the JSON: {}",
 		"```json\n{}\n```",
@@ -321,6 +329,7 @@ func TestSemanticRunInputOutputRejectsProseAndMultipleDocuments(t *testing.T) {
 }
 
 func TestDryRunNeverInvokesSemanticRunInputResolver(t *testing.T) {
+	t.Parallel()
 	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
 	definition := semanticScopeDefinition(runInputResolverModeSemanticJSON)
 	definition.Default = json.RawMessage(`{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}`)
@@ -343,6 +352,7 @@ func TestDryRunNeverInvokesSemanticRunInputResolver(t *testing.T) {
 }
 
 func TestPreCancelledDirectAgentSkipsSemanticResolverAndProviderBoundary(t *testing.T) {
+	t.Parallel()
 	coordinator := newDirectTerminationCoordinator(t, directTerminationAgent{})
 	coordinator.sidecarModel = "test-sidecar"
 	coordinator.session.RunInputDefinitions = []RunInputDefinition{semanticScopeDefinition(runInputResolverModeSemanticJSON)}
@@ -368,6 +378,7 @@ func TestPreCancelledDirectAgentSkipsSemanticResolverAndProviderBoundary(t *test
 }
 
 func TestSemanticRunInputPersistsTypedSnapshotProvenanceAndHash(t *testing.T) {
+	t.Parallel()
 	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
 	coordinator.SetSessionData(NewSession())
 	coordinator.session.RunInputDefinitions = []RunInputDefinition{semanticScopeDefinition(runInputResolverModeSemanticJSON)}
@@ -417,6 +428,7 @@ func TestSemanticRunInputPersistsTypedSnapshotProvenanceAndHash(t *testing.T) {
 }
 
 func TestSemanticRunInputResumeReusesFrozenSnapshotWithoutCallingLLM(t *testing.T) {
+	t.Parallel()
 	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
 	coordinator.SetSessionData(NewSession())
 	definition := semanticScopeDefinition(runInputResolverModeSemanticJSON)

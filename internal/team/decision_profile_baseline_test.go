@@ -18,6 +18,7 @@ import (
 // canonical policy encoder: Phase 0 records the input that later phases must
 // preserve, including omitted semantic defaults.
 func TestDecisionProfileGeneralizationBaseline(t *testing.T) {
+	t.Parallel()
 	if decisionAdmissionLegacySchemaVersion != 1 || decisionRunEnvelopeLegacySchemaVersion != 1 {
 		t.Fatalf("legacy schemas = admission %d, envelope %d; want 1/1",
 			decisionAdmissionLegacySchemaVersion, decisionRunEnvelopeLegacySchemaVersion)
@@ -70,6 +71,7 @@ func TestDecisionProfileGeneralizationBaseline(t *testing.T) {
 }
 
 func TestBuiltInDecisionProfilesEqualStrategicBaseline(t *testing.T) {
+	t.Parallel()
 	teamDir := filepath.Join("..", "..", ".agent-teams", "strategic-decision")
 	cfg, err := parseTeamYML(teamDir, nil)
 	if err != nil {
@@ -93,6 +95,7 @@ func TestBuiltInDecisionProfilesEqualStrategicBaseline(t *testing.T) {
 }
 
 func TestStrategicDecisionRuntimeContractBaseline(t *testing.T) {
+	t.Parallel()
 	teamDir := filepath.Join("..", "..", ".agent-teams", "strategic-decision")
 	cfg, err := parseTeamYML(teamDir, nil)
 	if err != nil {
@@ -153,6 +156,7 @@ func TestStrategicDecisionRuntimeContractBaseline(t *testing.T) {
 }
 
 func TestDecisionProfileGeneralizationBaselineRejectsCoordinatorDegradation(t *testing.T) {
+	t.Parallel()
 	admission := admissionForTest(t, true)
 	req := engineRequest(*admission.Policy)
 	req.DecisionID = admission.DecisionID

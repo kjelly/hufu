@@ -52,6 +52,7 @@ func sidecarPrimitiveCoordinator(t *testing.T, entry catalog.Entry, calls *atomi
 // language-model backend: the decision is published without confidence,
 // replays from the journal, and still drives block-on.
 func TestDecisionPrimitiveSidecarBackend(t *testing.T) {
+	t.Parallel()
 	entry := primitiveTestEntry("")
 	entry.Backend, entry.Endpoint, entry.Model = "sidecar", "", ""
 	entry.BlockOn = []string{"b"}
@@ -73,6 +74,7 @@ func TestDecisionPrimitiveSidecarBackend(t *testing.T) {
 }
 
 func TestDecisionSidecarResolver(t *testing.T) {
+	t.Parallel()
 	withDefault := &decisionSidecarResolver{defaultModel: "team-sidecar"}
 	generator, err := withDefault.generator("")
 	if err != nil || generator.ModelID() != "team-sidecar" {
@@ -93,6 +95,7 @@ func TestDecisionSidecarResolver(t *testing.T) {
 // for backend sidecar: the coordinator's prompt preparer must hand the
 // decision prompt to the model unchanged, never wrapped in run context.
 func TestDecisionPromptBypassesAuxiliaryContext(t *testing.T) {
+	t.Parallel()
 	raw := "Choose exactly one candidate token from this JSON input.\nInput:\n{\"candidates\":[{\"token\":\"A0\"}]}"
 	got, err := (&Coordinator{}).prepareAuxiliaryPrompt(t.Context(), decisionPrimitivePurpose, raw)
 	if err != nil || got != raw {
@@ -104,6 +107,7 @@ func TestDecisionPromptBypassesAuxiliaryContext(t *testing.T) {
 // the language model's answer has no confidence, so active mode applies it
 // without a threshold, and every observation names the backend.
 func TestControlPointOnSidecarBackend(t *testing.T) {
+	t.Parallel()
 	c, generator := newControlTestCoordinator(t, control.PathReviewer, control.ModeOff, "", `{"token":"A1"}`)
 	access, err := c.reviewPathAccess(t.Context(), "sed 's|/a|/b|' file", "/a")
 	if err != nil || access || generator.calls.Load() != 1 {

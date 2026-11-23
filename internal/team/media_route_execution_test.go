@@ -37,6 +37,9 @@ func (i routedImageIntrospector) InspectModel(_ context.Context, _ providerintro
 }
 
 func TestNativeMediaRouteFallbackPreservesCASAndChecksEachCandidate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, test := range []struct {
 		name        string
 		firstStatus int

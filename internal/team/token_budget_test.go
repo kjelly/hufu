@@ -12,6 +12,7 @@ import (
 )
 
 func TestTokenBudgetChargesRawUsageOnceAcrossAttempts(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.SetBudget(0, 100)
 
@@ -35,6 +36,7 @@ func TestTokenBudgetChargesRawUsageOnceAcrossAttempts(t *testing.T) {
 }
 
 func TestTokenBudgetConcurrentStepReservationsBoundOvershoot(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.SetBudget(0, 80)
 	const workers = 4
@@ -82,6 +84,7 @@ func TestTokenBudgetConcurrentStepReservationsBoundOvershoot(t *testing.T) {
 }
 
 func TestTokenBudgetWorksetCapacityAndLowBudgetFailure(t *testing.T) {
+	t.Parallel()
 	const items = 52
 	const perItem = int64(30)
 
@@ -203,6 +206,7 @@ func newTokenBudgetRunCoordinator(t *testing.T, budget int64) *Coordinator {
 }
 
 func TestRunAgentNoFinishUsesResultFallbackOnce(t *testing.T) {
+	t.Parallel()
 	c := newTokenBudgetRunCoordinator(t, 10000)
 	calls := 0
 	if _, _, err := c.runAgentWithStatusAndHistory(context.Background(), tokenBudgetLifecycleAgent{mode: "no-finish", calls: &calls}, "worker", "prompt", nil, &taskTiming{}); err != nil {
@@ -230,6 +234,7 @@ func (tokenBudgetResultOnlyMultiStepAgent) Stream(context.Context, fantasy.Agent
 }
 
 func TestRunAgentResultOnlyMultiStepSettlesEachStepOnce(t *testing.T) {
+	t.Parallel()
 	c := newTokenBudgetRunCoordinator(t, 10000)
 	if _, _, err := c.runAgentWithStatusAndHistory(context.Background(), tokenBudgetResultOnlyMultiStepAgent{}, "worker", "prompt", nil, &taskTiming{}); err != nil {
 		t.Fatal(err)
@@ -243,6 +248,7 @@ func TestRunAgentResultOnlyMultiStepSettlesEachStepOnce(t *testing.T) {
 }
 
 func TestRunAgentDuplicateFinishDoesNotDoubleCharge(t *testing.T) {
+	t.Parallel()
 	c := newTokenBudgetRunCoordinator(t, 10000)
 	calls := 0
 	if _, _, err := c.runAgentWithStatusAndHistory(context.Background(), tokenBudgetLifecycleAgent{mode: "duplicate", calls: &calls}, "worker", "prompt", nil, &taskTiming{}); err != nil {
@@ -254,6 +260,7 @@ func TestRunAgentDuplicateFinishDoesNotDoubleCharge(t *testing.T) {
 }
 
 func TestRunAgentMixedFinishAndFallbackStreamsSettleEachStep(t *testing.T) {
+	t.Parallel()
 	c := newTokenBudgetRunCoordinator(t, 10000)
 	calls := 0
 	if _, _, err := c.runAgentWithStatusAndHistory(context.Background(), tokenBudgetLifecycleAgent{mode: "mixed", calls: &calls}, "worker", "prompt", nil, &taskTiming{}); err != nil {
@@ -265,6 +272,7 @@ func TestRunAgentMixedFinishAndFallbackStreamsSettleEachStep(t *testing.T) {
 }
 
 func TestRunAgentProviderErrorReleasesOutstandingAdmission(t *testing.T) {
+	t.Parallel()
 	c := newTokenBudgetRunCoordinator(t, 10000)
 	calls := 0
 	if _, _, err := c.runAgentWithStatusAndHistory(context.Background(), tokenBudgetLifecycleAgent{mode: "error", calls: &calls}, "worker", "prompt", nil, &taskTiming{}); err == nil {
@@ -276,6 +284,7 @@ func TestRunAgentProviderErrorReleasesOutstandingAdmission(t *testing.T) {
 }
 
 func TestRunAgentContextOverflowDoesNotReplayAndReleasesReservation(t *testing.T) {
+	t.Parallel()
 	c := newTokenBudgetRunCoordinator(t, 10000)
 	calls := 0
 	if _, _, err := c.runAgentWithStatusAndHistory(context.Background(), tokenBudgetLifecycleAgent{mode: "overflow", calls: &calls}, "worker", "prompt", nil, &taskTiming{}); err == nil || !strings.Contains(err.Error(), "context length exceeded") {
@@ -316,6 +325,7 @@ func (tokenBudgetStreamingAgent) Stream(_ context.Context, call fantasy.AgentStr
 }
 
 func TestTokenBudgetSettlementIsIdempotent(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.SetBudget(0, 100)
 	reservation, err := c.reserveTokenStep(40)
@@ -337,6 +347,7 @@ func TestTokenBudgetSettlementIsIdempotent(t *testing.T) {
 }
 
 func TestTokenBudgetProviderErrorReleasesReservation(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.SetBudget(0, 100)
 	reservation, err := c.reserveTokenStep(80)
@@ -353,6 +364,7 @@ func TestTokenBudgetProviderErrorReleasesReservation(t *testing.T) {
 }
 
 func TestTokenBudgetFallbackSettlementAndAdmissionAreAtomic(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.SetBudget(0, 100)
 	c.tokensUsed.Store(95)
@@ -442,6 +454,7 @@ func assertLowBudgetSettlement(t *testing.T, c *Coordinator, wantNoProgress int6
 }
 
 func TestRunAgentCallbacklessAuxiliarySettlesObservedUsagePastBudget(t *testing.T) {
+	t.Parallel()
 	c := newLowTokenBudgetCoordinator(t)
 	ctx := context.WithValue(context.Background(), llmUsageReceiptExpectedKey{}, false)
 	if _, _, err := c.runAgentWithStatusAndHistory(ctx, tokenBudgetObservedUsageAgent{
@@ -454,6 +467,7 @@ func TestRunAgentCallbacklessAuxiliarySettlesObservedUsagePastBudget(t *testing.
 }
 
 func TestRunAgentCallbacklessWorkerResponseOnlyProjectsReceiptUsageOnce(t *testing.T) {
+	t.Parallel()
 	c := newLowTokenBudgetCoordinator(t)
 	const todoID = "worker-response-only"
 	ctx := context.WithValue(context.Background(), llmUsageReceiptExpectedKey{}, true)
@@ -481,6 +495,7 @@ func TestRunAgentCallbacklessWorkerResponseOnlyProjectsReceiptUsageOnce(t *testi
 }
 
 func TestRunAgentCallbackBackedWorkerResponseOnlyProjectsReceiptUsageOnce(t *testing.T) {
+	t.Parallel()
 	c := newLowTokenBudgetCoordinator(t)
 	const todoID = "worker-callback-response-only"
 	ctx := context.WithValue(context.Background(), llmUsageReceiptExpectedKey{}, true)
@@ -507,6 +522,7 @@ func TestRunAgentCallbackBackedWorkerResponseOnlyProjectsReceiptUsageOnce(t *tes
 }
 
 func TestRunAgentCallbackBackedWorkerResponseOnlyUsesImplicitDirectAttempt(t *testing.T) {
+	t.Parallel()
 	c := newLowTokenBudgetCoordinator(t)
 	const todoID = "direct-callback-response-only"
 	ctx := context.WithValue(context.Background(), llmUsageReceiptExpectedKey{}, true)
@@ -540,6 +556,7 @@ func (tokenBudgetCallbackErrorAgent) Stream(_ context.Context, call fantasy.Agen
 }
 
 func TestRunAgentCallbackBackedNilResultErrorProjectsReceiptUsageOnce(t *testing.T) {
+	t.Parallel()
 	c := newLowTokenBudgetCoordinator(t)
 	const todoID = "worker-callback-nil-result-error"
 	ctx := context.WithValue(context.Background(), llmUsageReceiptExpectedKey{}, true)
@@ -563,6 +580,7 @@ func TestRunAgentCallbackBackedNilResultErrorProjectsReceiptUsageOnce(t *testing
 }
 
 func TestRunAgentPrepareStepCallbackBackedWorkerResponseOnlyProjectsReceiptUsage(t *testing.T) {
+	t.Parallel()
 	c := newLowTokenBudgetCoordinator(t)
 	c.session.Config.Generation.MaxTokens = "1"
 	const todoID = "worker-prepare-callback-response-only"
@@ -584,6 +602,7 @@ func TestRunAgentPrepareStepCallbackBackedWorkerResponseOnlyProjectsReceiptUsage
 }
 
 func TestRunAgentResponseOnlyUsageWithPrepareStepSettlesPastBudget(t *testing.T) {
+	t.Parallel()
 	c := newLowTokenBudgetCoordinator(t)
 	c.session.Config.Generation.MaxTokens = "1"
 	ctx := context.WithValue(context.Background(), llmUsageReceiptExpectedKey{}, false)
@@ -598,6 +617,7 @@ func TestRunAgentResponseOnlyUsageWithPrepareStepSettlesPastBudget(t *testing.T)
 }
 
 func TestRunAgentTotalUsageOnlySettlesPastBudget(t *testing.T) {
+	t.Parallel()
 	c := newLowTokenBudgetCoordinator(t)
 	ctx := context.WithValue(context.Background(), llmUsageReceiptExpectedKey{}, false)
 	if _, _, err := c.runAgentWithStatusAndHistory(ctx, tokenBudgetObservedUsageAgent{
@@ -610,6 +630,7 @@ func TestRunAgentTotalUsageOnlySettlesPastBudget(t *testing.T) {
 }
 
 func TestRunAgentFinishWithoutPrepareSettlesObservedUsagePastBudget(t *testing.T) {
+	t.Parallel()
 	c := newLowTokenBudgetCoordinator(t)
 	ctx := context.WithValue(context.Background(), llmUsageReceiptExpectedKey{}, false)
 	if _, _, err := c.runAgentWithStatusAndHistory(ctx, tokenBudgetObservedUsageAgent{
@@ -622,6 +643,7 @@ func TestRunAgentFinishWithoutPrepareSettlesObservedUsagePastBudget(t *testing.T
 }
 
 func TestRunAgentCallbackBackedLowBudgetSettlesAndReleasesAdmission(t *testing.T) {
+	t.Parallel()
 	c := newLowTokenBudgetCoordinator(t)
 	// Leave room for the pre-call admission so this test exercises settlement
 	// after a provider call, rather than the intended admission gate.
@@ -642,6 +664,7 @@ func TestRunAgentCallbackBackedLowBudgetSettlesAndReleasesAdmission(t *testing.T
 }
 
 func TestTokenBudgetSharedRootAdmissionAcrossExtraModels(t *testing.T) {
+	t.Parallel()
 	root := &Coordinator{}
 	root.SetBudget(0, 100)
 	extra := &Coordinator{tokenBudgetOwner: root}
@@ -664,6 +687,7 @@ func TestTokenBudgetSharedRootAdmissionAcrossExtraModels(t *testing.T) {
 }
 
 func TestTokenBudgetContextOverflowRetryUsesIndependentReservation(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.SetBudget(0, 100)
 	first, err := c.reserveTokenStep(60)
@@ -682,6 +706,7 @@ func TestTokenBudgetContextOverflowRetryUsesIndependentReservation(t *testing.T)
 }
 
 func TestTokenBudgetCancellationDoesNotStrandReservation(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.SetBudget(0, 50)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -700,6 +725,7 @@ func TestTokenBudgetCancellationDoesNotStrandReservation(t *testing.T) {
 }
 
 func TestRunAgentChargesStreamingStepOnceAcrossAttempts(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session:      &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "usage-accounting"}},
 		taskTracker:  NewTaskTracker(),

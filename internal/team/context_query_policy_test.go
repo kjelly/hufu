@@ -12,6 +12,7 @@ import (
 )
 
 func TestContextQueryPolicyStrictManifests(t *testing.T) {
+	t.Parallel()
 	for _, versioned := range []bool{false, true} {
 		for _, mode := range []string{"", "legacy", "active", "shadow", "ACTIVE", "typo"} {
 			t.Run(fmt.Sprintf("%t/%s", versioned, mode), func(t *testing.T) {
@@ -47,6 +48,7 @@ func TestContextQueryPolicyStrictManifests(t *testing.T) {
 }
 
 func TestContextQueryPolicyFreezesModeAndPreservesLegacyHash(t *testing.T) {
+	t.Parallel()
 	c := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 3)
 	legacy := c.ExecutionPolicySnapshot()
 	if legacy.ContextQuery != nil {
@@ -88,6 +90,7 @@ func TestContextQueryPolicyFreezesModeAndPreservesLegacyHash(t *testing.T) {
 }
 
 func TestContextQueryPolicyResumeRequiresIdenticalMode(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"legacy", "active"} {
 		t.Run(mode, func(t *testing.T) {
 			workspace := t.TempDir()

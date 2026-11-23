@@ -142,6 +142,7 @@ func materializedCompactionBranchFixture(t *testing.T) (string, string, *Session
 }
 
 func TestConversationCompactionStatePersistsLineageAndToolPairs(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	state := testCompactionState(t, workspace)
 	first := state.Generations["g-1"]
@@ -180,6 +181,7 @@ func TestConversationCompactionStatePersistsLineageAndToolPairs(t *testing.T) {
 }
 
 func TestConversationCompactionStateRejectsCrossGenerationOverlap(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	state := testCompactionState(t, workspace)
 	first := state.Generations["g-1"]
@@ -208,6 +210,7 @@ func TestConversationCompactionStateRejectsCrossGenerationOverlap(t *testing.T) 
 }
 
 func TestConversationCompactionStateRejectsNonAdjacentAncestorOverlap(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	state := testCompactionState(t, workspace)
 	first := state.Generations["g-1"]
@@ -244,6 +247,7 @@ func TestConversationCompactionStateRejectsNonAdjacentAncestorOverlap(t *testing
 }
 
 func TestAppendHistorySequentialCompactionsPreserveProvenanceAcrossRestart(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	session := &TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}
 	c := &Coordinator{session: session}
@@ -284,6 +288,7 @@ func TestRealPredecessorCompactionsUseIncrementalLineageValidation(t *testing.T)
 	if testing.Short() {
 		t.Skip("integration: mise run test-integration")
 	}
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-lineage", "session-lineage")
 	if err != nil {
@@ -326,6 +331,7 @@ func TestRealPredecessorCompactionsUseIncrementalLineageValidation(t *testing.T)
 }
 
 func TestAppendHistoryCompactsSecretBearingHistory(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	session := &TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}
 	c := &Coordinator{session: session}
@@ -357,6 +363,7 @@ func TestAppendHistoryCompactsSecretBearingHistory(t *testing.T) {
 }
 
 func TestAppendHistoryCapacityFailureStillTrimsHistory(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	session := &TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}
 	c := &Coordinator{session: session}
@@ -388,6 +395,7 @@ func TestAppendHistoryCapacityFailureStillTrimsHistory(t *testing.T) {
 }
 
 func TestAppendHistoryBoundaryFallbackUsesResolvedHistoryCap(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	policy := agent.DefaultCompactionPolicy()
 	policy.MaxHistoryMessages = 40
@@ -464,6 +472,7 @@ func appendLegacyAttestationForTest(t *testing.T, workspace, branchID string, re
 }
 
 func TestConversationCompactionStateCorruptionIsRecoveryRequired(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	testCompactionState(t, workspace)
 	data, _ := getRuntimeDocument(t, workspace, runtimestore.DocumentConversationCompactionState)
@@ -478,6 +487,7 @@ func TestConversationCompactionStateCorruptionIsRecoveryRequired(t *testing.T) {
 }
 
 func TestEmptyCanonicalCompactionStateIsRecoveryRequired(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	state := newCompactionState()
 	data, err := json.Marshal(state)
@@ -491,6 +501,7 @@ func TestEmptyCanonicalCompactionStateIsRecoveryRequired(t *testing.T) {
 }
 
 func TestCompactionAttestationMissingIsRepairedIdempotently(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	state := testSnapshotCompactionState(t, workspace)
 	es, err := NewEventStore(workspace, "run-test", "session-test")
@@ -546,6 +557,7 @@ func TestCompactionAttestationMissingIsRepairedIdempotently(t *testing.T) {
 }
 
 func TestCompactionAttestationEffectiveEventBranch(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		eventBranch string
@@ -571,6 +583,7 @@ func TestCompactionAttestationEffectiveEventBranch(t *testing.T) {
 }
 
 func TestChildCompactionRejectsInheritedUntaggedMainAttestation(t *testing.T) {
+	t.Parallel()
 	workspace, branchID, tree := materializedCompactionBranchFixture(t)
 	state, _, err := LoadConversationCompactionState(workspace)
 	if err != nil {
@@ -634,6 +647,7 @@ func TestChildCompactionRejectsInheritedUntaggedMainAttestation(t *testing.T) {
 }
 
 func TestCompactionAttestationUnknownGenerationBlocksRecovery(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	testCompactionState(t, workspace)
 	es, err := NewEventStore(workspace, "run-test", "session-test")
@@ -652,6 +666,7 @@ func TestCompactionAttestationUnknownGenerationBlocksRecovery(t *testing.T) {
 }
 
 func TestCurrentSnapshotWithEmptyModeAndGenerationEventIsRejected(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	state := testSnapshotCompactionState(t, workspace)
 	checkpoint := state.Branches["main"]
@@ -670,6 +685,7 @@ func TestCurrentSnapshotWithEmptyModeAndGenerationEventIsRejected(t *testing.T) 
 }
 
 func TestCurrentSnapshotDowngradeToLegacyGenerationFailsClosed(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	state := testSnapshotCompactionState(t, workspace)
 	checkpoint := state.Branches["main"]
@@ -719,6 +735,7 @@ func TestCurrentSnapshotDowngradeToLegacyGenerationFailsClosed(t *testing.T) {
 }
 
 func TestSnapshotCheckpointReferenceMismatchIsRejected(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	state := testSnapshotCompactionState(t, workspace)
 	checkpoint := state.Branches["main"]
@@ -744,6 +761,7 @@ func TestSnapshotCheckpointReferenceMismatchIsRejected(t *testing.T) {
 }
 
 func TestLegacyCompactionMigratesToCanonicalState(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	history := []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + "legacy replacement"), fantasy.NewUserMessage("retained tail")}
 	if err := SaveConversationHistory(workspace, history); err != nil {
@@ -799,6 +817,7 @@ func TestLegacyCompactionMigratesToCanonicalState(t *testing.T) {
 }
 
 func TestLegacyMigrationMultipleRecordsUsesLatest(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	history := []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + "legacy replacement"), fantasy.NewUserMessage("retained tail")}
 	if err := SaveConversationHistory(workspace, history); err != nil {
@@ -827,6 +846,7 @@ func TestLegacyMigrationMultipleRecordsUsesLatest(t *testing.T) {
 }
 
 func TestLegacyMigrationMultipleRecordsWithoutAttestationStaysCompatible(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	history := []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + "legacy replacement"), fantasy.NewUserMessage("retained tail")}
 	if err := SaveConversationHistory(workspace, history); err != nil {
@@ -846,6 +866,7 @@ func TestLegacyMigrationMultipleRecordsWithoutAttestationStaysCompatible(t *test
 }
 
 func TestLegacyMigrationWithoutAttestationDoesNotCreateCanonicalState(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	history := []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + "legacy replacement"), fantasy.NewUserMessage("retained tail")}
 	if err := SaveConversationHistory(workspace, history); err != nil {
@@ -865,6 +886,7 @@ func TestLegacyMigrationWithoutAttestationDoesNotCreateCanonicalState(t *testing
 }
 
 func TestLegacyMigrationRejectsUntaggedChildAttestation(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	history := []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + "legacy replacement"), fantasy.NewUserMessage("retained tail")}
 	if err := SaveConversationHistory(workspace, history); err != nil {
@@ -905,6 +927,7 @@ func TestLegacyMigrationRejectsUntaggedChildAttestation(t *testing.T) {
 }
 
 func TestLegacyMigrationPreservesCompactedReplacementProvenance(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	history := []fantasy.Message{
 		fantasy.NewUserMessage(verifiedHistoryPrefix + "legacy replacement"),
@@ -935,6 +958,7 @@ func TestLegacyMigrationPreservesCompactedReplacementProvenance(t *testing.T) {
 }
 
 func TestLegacyMigrationRestartAppendPreservesSequentialProvenance(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	history := make([]fantasy.Message, 85)
 	history[0] = fantasy.NewUserMessage(verifiedHistoryPrefix + "legacy replacement")
@@ -998,6 +1022,7 @@ func TestLegacyMigrationRestartAppendPreservesSequentialProvenance(t *testing.T)
 }
 
 func TestLegacyMigrationAttestationExactForkPreservesTail(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	history := []fantasy.Message{
 		fantasy.NewUserMessage(verifiedHistoryPrefix + "legacy replacement"),
@@ -1039,6 +1064,7 @@ func TestLegacyMigrationAttestationExactForkPreservesTail(t *testing.T) {
 }
 
 func TestLegacyMigrationFailsClosedForProvenanceMismatch(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	history := []fantasy.Message{fantasy.NewUserMessage(verifiedHistoryPrefix + "replacement"), fantasy.NewUserMessage("retained tail")}
 	if err := SaveConversationHistory(workspace, history); err != nil {
@@ -1064,6 +1090,7 @@ func TestLegacyMigrationFailsClosedForProvenanceMismatch(t *testing.T) {
 }
 
 func TestConversationCompactionStateRejectsScalarOnlyCheckpoint(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	state := testCompactionState(t, workspace)
 	checkpoint := state.Branches["main"]
@@ -1083,6 +1110,7 @@ func TestConversationCompactionStateRejectsScalarOnlyCheckpoint(t *testing.T) {
 }
 
 func TestMaterializeCompactionBranchDoesNotShareHistory(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	testCompactionState(t, workspace)
 	if err := MaterializeCompactionBranch(workspace, "main", "feature"); err != nil {
@@ -1107,6 +1135,7 @@ func TestMaterializeCompactionBranchDoesNotShareHistory(t *testing.T) {
 }
 
 func TestMaterializeCompactionBranchUsesForkEventState(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	state := testCompactionState(t, workspace)
 	first := state.Generations["g-1"]
@@ -1196,6 +1225,7 @@ func TestMaterializeCompactionBranchUsesForkEventState(t *testing.T) {
 }
 
 func TestMaterializeCompactionBranchUsesLaterFullCheckpoint(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	state := testCompactionState(t, workspace)
 	generation := state.Generations["g-1"]
@@ -1261,6 +1291,10 @@ func TestMaterializeCompactionBranchUsesLaterFullCheckpoint(t *testing.T) {
 }
 
 func TestCompactionCheckpointRetentionBoundsStateAndValidationWork(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	workspace := t.TempDir()
 	state := testCompactionState(t, workspace)
 	generation := state.Generations["g-1"]
@@ -1317,6 +1351,7 @@ func TestCompactionCheckpointRetentionBoundsStateAndValidationWork(t *testing.T)
 }
 
 func TestMaterializedChildCheckpointAttestationBindsChildIdentityAcrossRestart(t *testing.T) {
+	t.Parallel()
 	workspace, branchID, _ := materializedCompactionBranchFixture(t)
 	state, exists, err := LoadConversationCompactionState(workspace)
 	if err != nil || !exists {
@@ -1392,6 +1427,7 @@ func TestMaterializedChildCheckpointAttestationBindsChildIdentityAcrossRestart(t
 }
 
 func TestMalformedMaterializedChildCheckpointRetainedParentEventRequiresRecovery(t *testing.T) {
+	t.Parallel()
 	workspace, branchID, tree := materializedCompactionBranchFixture(t)
 	state, _, err := LoadConversationCompactionState(workspace)
 	if err != nil {
@@ -1425,6 +1461,7 @@ func TestMalformedMaterializedChildCheckpointRetainedParentEventRequiresRecovery
 }
 
 func TestMaterializeCompactionBranchRejectsAttestationAfterRequestedFork(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	state := testCompactionState(t, workspace)
 	checkpoint := state.Branches["main"]
@@ -1474,6 +1511,7 @@ func mustReadEvents(t *testing.T, es *EventStore) []RunEvent {
 }
 
 func TestMaterializeCompactionBranchBeforeFirstCompactionClearsProjection(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	state := testCompactionState(t, workspace)
 	generation := state.Generations["g-1"]
@@ -1533,6 +1571,7 @@ func compactionJSON(value any) json.RawMessage {
 }
 
 func TestCompactionCanonicalCommitWinsPostCanonicalFailures(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name       string
 		fail       func(t *testing.T, workspace string, c *Coordinator)
@@ -1630,6 +1669,7 @@ func TestCompactionCanonicalCommitWinsPostCanonicalFailures(t *testing.T) {
 }
 
 func TestCompactionTelemetryFollowsProjectionAndAttestations(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-success", "session-success")
 	if err != nil {
@@ -1667,6 +1707,7 @@ func TestCompactionTelemetryFollowsProjectionAndAttestations(t *testing.T) {
 }
 
 func TestCompactionReferenceReducerDoesNotStoreTranscript(t *testing.T) {
+	t.Parallel()
 	payload, _ := json.Marshal(CompactionReference{GenerationID: "g-1", BranchID: "main", Checksum: "abc"})
 	session := ReduceToSessionData([]RunEvent{{Type: compactionGenerationEventType, Payload: payload}})
 	if len(session.CompactionReferences) != 1 || session.CompactionReferences[0].GenerationID != "g-1" {
@@ -1678,6 +1719,7 @@ func TestCompactionReferenceReducerDoesNotStoreTranscript(t *testing.T) {
 }
 
 func TestCannotFitErrorIsPreProviderOnly(t *testing.T) {
+	t.Parallel()
 	err := &CannotFitError{ModelID: "m", RequestTokens: 98437, Available: 93232, ProvenNoSend: true}
 	got, ok := isProvenPreProviderCannotFit(err)
 	if !ok || got.RequestTokens != 98437 || !got.ProvenNoSend {

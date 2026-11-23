@@ -20,6 +20,7 @@ import (
 // run killed inside that window makes the transient contradiction durable, which
 // is exactly what happened. Detail therefore has to move with the evidence.
 func TestFailureEventAttachmentClearsStaleSuccessDetail(t *testing.T) {
+	t.Parallel()
 	list := NewTaskTracker().TodoList()
 	item := list.AddBatch([]TodoSpec{{Agent: "helper", Desc: "write and run the deploy drive script"}})[0]
 	if err := list.TryUpdateStatusAndOutput(item.ID, TaskInProgress, "Task completed successfully. Both deliverables exist and are verified.", ""); err != nil {
@@ -72,6 +73,7 @@ func TestFailureEventAttachmentClearsStaleSuccessDetail(t *testing.T) {
 // event that carries no account of its own must not blank out the detail that
 // does.
 func TestFailureEventWithoutSummaryKeepsExistingDetail(t *testing.T) {
+	t.Parallel()
 	list := NewTaskTracker().TodoList()
 	item := list.AddBatch([]TodoSpec{{Agent: "helper", Desc: "verify the deploy"}})[0]
 	if err := list.TryUpdateStatusAndOutput(item.ID, TaskError, "verification failed", ""); err != nil {

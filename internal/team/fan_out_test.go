@@ -34,6 +34,7 @@ func writeCharacterizationWorkset(t *testing.T, workspace string, items []string
 }
 
 func TestCharacterizationFanOutExpandsGenericWorkset(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	writeCharacterizationWorkset(t, workspace, characterizationWorksetItems)
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
@@ -59,6 +60,7 @@ func TestCharacterizationFanOutExpandsGenericWorkset(t *testing.T) {
 // identity nor a completeness receipt. A missing row is expanded as supplied
 // instead of being diagnosed by the runtime.
 func TestCharacterizationFanOutPermitsMissingItem(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	writeCharacterizationWorkset(t, workspace, []string{"alpha", "beta"})
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
@@ -86,6 +88,7 @@ func TestCharacterizationFanOutPermitsMissingItem(t *testing.T) {
 }
 
 func TestCharacterizationFanOutPermitsDuplicateItem(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	writeCharacterizationWorkset(t, workspace, []string{"alpha", "beta", "beta"})
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
@@ -108,6 +111,7 @@ func TestCharacterizationFanOutPermitsDuplicateItem(t *testing.T) {
 // every expansion. There is no durable manifest digest or receipt to bind a
 // resumed/retried child set to the first observed source generation.
 func TestCharacterizationFanOutReReadsChangedSource(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	path := writeCharacterizationWorkset(t, workspace, characterizationWorksetItems)
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
@@ -135,6 +139,7 @@ func TestCharacterizationFanOutReReadsChangedSource(t *testing.T) {
 // row, so there is nothing for a long, repetitive generation to drop or
 // merge a character in.
 func TestExpandFanOutTasks_SubstitutesEachRow(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	writeFanOutTSV(t, workspace, "inputs/records.tsv", []string{
 		"#record_id\tinput_path",
@@ -183,6 +188,7 @@ func TestExpandFanOutTasks_SubstitutesEachRow(t *testing.T) {
 }
 
 func TestExpandFanOutTasks_NoFanOutTasksPassThroughUnchanged(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir()}}
 	tasks := []TaskDef{{Agent: "a", Goal: "g1"}, {Agent: "b", Goal: "g2"}}
 	expanded, err := c.expandFanOutTasks(tasks)
@@ -195,6 +201,7 @@ func TestExpandFanOutTasks_NoFanOutTasksPassThroughUnchanged(t *testing.T) {
 }
 
 func TestExpandFanOutTasks_UnmatchedPlaceholderFailsWholeDispatch(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	writeFanOutTSV(t, workspace, "inputs/records.tsv", []string{"record_id", "row-alpha"})
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
@@ -209,6 +216,7 @@ func TestExpandFanOutTasks_UnmatchedPlaceholderFailsWholeDispatch(t *testing.T) 
 }
 
 func TestExpandFanOutTasks_SourceEscapingWorkspaceIsRejected(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir()}}
 	for _, source := range []string{"../outside.tsv", "/etc/passwd", "..", "sub/../../escape.tsv"} {
 		tasks := []TaskDef{{Agent: "a", Goal: "g", FanOut: &FanOutSpec{Source: source, GoalTemplate: "{x}"}}}
@@ -219,6 +227,7 @@ func TestExpandFanOutTasks_SourceEscapingWorkspaceIsRejected(t *testing.T) {
 }
 
 func TestExpandFanOutTasks_MissingSourceFileFailsClosed(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir()}}
 	tasks := []TaskDef{{Agent: "a", Goal: "g", FanOut: &FanOutSpec{Source: "does-not-exist.tsv", GoalTemplate: "{x}"}}}
 	if _, err := c.expandFanOutTasks(tasks); err == nil {
@@ -227,6 +236,7 @@ func TestExpandFanOutTasks_MissingSourceFileFailsClosed(t *testing.T) {
 }
 
 func TestExpandFanOutTasks_RowFieldCountMismatchFailsClosed(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	writeFanOutTSV(t, workspace, "inputs/records.tsv", []string{
 		"record_id\tinput_path",
@@ -240,6 +250,7 @@ func TestExpandFanOutTasks_RowFieldCountMismatchFailsClosed(t *testing.T) {
 }
 
 func TestExpandFanOutTasks_EmptySourceOrTemplateFailsClosed(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir()}}
 	if _, err := c.expandFanOutTasks([]TaskDef{{Agent: "a", Goal: "g", FanOut: &FanOutSpec{GoalTemplate: "{x}"}}}); err == nil {
 		t.Fatal("expected an error for an empty source")
@@ -251,6 +262,7 @@ func TestExpandFanOutTasks_EmptySourceOrTemplateFailsClosed(t *testing.T) {
 }
 
 func TestExpandFanOutTasks_RowCountAboveLimitFailsClosed(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	lines := make([]string, 0, maxFanOutRows+2)
 	lines = append(lines, "id")
@@ -270,6 +282,7 @@ func TestExpandFanOutTasks_RowCountAboveLimitFailsClosed(t *testing.T) {
 // the call, so one broken fan_out spec never leaves a partial TODO list
 // behind from the rest of an otherwise-valid batch.
 func TestExecuteTasks_RejectsMalformedFanOutBeforeAnyTodoCreation(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{})
 	c.session.Workspace = t.TempDir()
 
@@ -286,6 +299,7 @@ func TestExecuteTasks_RejectsMalformedFanOutBeforeAnyTodoCreation(t *testing.T) 
 }
 
 func TestExpandFanOutTasks_BlankLinesSkippedAndHeaderHashStripped(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	writeFanOutTSV(t, workspace, "inputs/records.tsv", []string{
 		"#record_id\tstate",

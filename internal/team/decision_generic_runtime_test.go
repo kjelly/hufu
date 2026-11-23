@@ -10,6 +10,7 @@ import (
 )
 
 func TestDecisionEngineRunsBuiltInAndResumesWithoutTeamConfig(t *testing.T) {
+	t.Parallel()
 	policy, metadata, err := agent.BuiltInDecisionProfileCatalog().Resolve(agent.DecisionProfileRef{Name: agent.DecisionProfileBuiltinStandardV1})
 	if err != nil {
 		t.Fatal(err)
@@ -77,6 +78,7 @@ func TestDecisionEngineRunsBuiltInAndResumesWithoutTeamConfig(t *testing.T) {
 }
 
 func TestDecisionEngineMetadataFreeDirectInlineCompatibility(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	runner := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
 		return scoredOpinion(8, 4, "migrate", 0.8), nil

@@ -133,6 +133,7 @@ func (f finalizationIndexFixture) assertReadsFail(t *testing.T, want string) {
 }
 
 func TestFinalizationRunReplaysCanonicalFinalizedState(t *testing.T) {
+	t.Parallel()
 	journal, store, record := stage4FinalizedReplayFixture(t)
 	req := engineRequest(enginePolicy(1))
 	req.DecisionID = record.ID
@@ -146,6 +147,7 @@ func TestFinalizationRunReplaysCanonicalFinalizedState(t *testing.T) {
 }
 
 func TestFinalizationReplayRejectsEveryReferenceMutation(t *testing.T) {
+	t.Parallel()
 	locations := []struct {
 		name      string
 		eventType string
@@ -174,6 +176,7 @@ func TestFinalizationReplayRejectsEveryReferenceMutation(t *testing.T) {
 }
 
 func TestFinalizationReplayRejectsArtifactIntegrityFailures(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		corrupt func(store *FileArtifactStore, result, record ArtifactRef) error
@@ -216,6 +219,7 @@ func TestFinalizationReplayRejectsArtifactIntegrityFailures(t *testing.T) {
 // A result artifact that decodes to a valid but different result must not be
 // accepted just because its reference is internally consistent.
 func TestFinalizationReplayRejectsAlternateDecodedResultContent(t *testing.T) {
+	t.Parallel()
 	journal, store, record := stage4FinalizedReplayFixture(t)
 	data, err := os.ReadFile(filepath.Join(store.root, "data", record.FinalizationResultRef.ID))
 	if err != nil {
@@ -264,6 +268,7 @@ func TestFinalizationReplayRejectsAlternateDecodedResultContent(t *testing.T) {
 }
 
 func TestFinalizationReplayRejectsConflictingDuplicateResultEvent(t *testing.T) {
+	t.Parallel()
 	journal, store, record := stage4FinalizedReplayFixture(t)
 	journal.mu.Lock()
 	var original RunEvent
@@ -331,6 +336,7 @@ func (s finalizationDelegatingStore) ListByTask(ctx context.Context, taskID stri
 var _ ArtifactStore = finalizationDelegatingStore{}
 
 func TestFinalizationReplayRequiresFullyResolvedReferenceFromAnyStore(t *testing.T) {
+	t.Parallel()
 	journal, store, record := stage4FinalizedReplayFixture(t)
 	if _, err := finalizationResume(journal, finalizationDelegatingStore{inner: store}, record.ID); err != nil {
 		t.Fatalf("alternate full artifact store replay: %v", err)
@@ -343,6 +349,7 @@ func TestFinalizationReplayRequiresFullyResolvedReferenceFromAnyStore(t *testing
 // The record schema version is discriminated on its own: the outer event
 // store schema neither upgrades a schema-zero record nor downgrades a v2 one.
 func TestFinalizationReplayIsIndependentOfOuterEventSchema(t *testing.T) {
+	t.Parallel()
 	for _, outerSchema := range []int{eventStoreLegacySchemaVersion, eventStoreSchemaVersion} {
 		t.Run(fmt.Sprintf("outer-v%d", outerSchema), func(t *testing.T) {
 			journal := &memoryJournal{}
@@ -376,6 +383,7 @@ func TestFinalizationReplayIsIndependentOfOuterEventSchema(t *testing.T) {
 }
 
 func TestSameArtifactRefRejectsEveryFieldMutation(t *testing.T) {
+	t.Parallel()
 	base := finalizationFullArtifactRef()
 	for _, mutation := range append(finalizationRefMutations(), finalizationSparseRef) {
 		t.Run(mutation.name, func(t *testing.T) {
@@ -402,6 +410,7 @@ func TestSameArtifactRefRejectsEveryFieldMutation(t *testing.T) {
 }
 
 func TestFinalizationIndexValidatesEntriesAndKeepsStaleStateOnRebuild(t *testing.T) {
+	t.Parallel()
 	f := newFinalizationIndexFixture(t)
 	if entries, err := f.index.List(); err != nil || len(entries) != 1 {
 		t.Fatalf("valid index list = %#v, %v", entries, err)
@@ -426,6 +435,7 @@ func TestFinalizationIndexValidatesEntriesAndKeepsStaleStateOnRebuild(t *testing
 }
 
 func TestFinalizationIndexRejectsForgedRecordIdentity(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		forge   func(entry *DecisionIndexEntry)
@@ -460,6 +470,7 @@ func TestFinalizationIndexRejectsForgedRecordIdentity(t *testing.T) {
 }
 
 func TestFinalizationIndexRejectsForgedResultReference(t *testing.T) {
+	t.Parallel()
 	for _, mutation := range finalizationRefMutations() {
 		t.Run(mutation.name, func(t *testing.T) {
 			f := newFinalizationIndexFixture(t)
@@ -486,6 +497,7 @@ func TestFinalizationIndexRejectsForgedResultReference(t *testing.T) {
 // A rebuild that fails validation, whether the journal or the artifact store
 // is at fault, must leave the previous index untouched.
 func TestFinalizationIndexRebuildIsAtomic(t *testing.T) {
+	t.Parallel()
 	type corruption struct {
 		name    string
 		corrupt func(t *testing.T, f finalizationIndexFixture)
@@ -582,6 +594,7 @@ func (f finalizationAssumptionFixture) projections(t *testing.T) [3]string {
 }
 
 func TestAssumptionMutationFailsClosedOnFinalizationIntegrity(t *testing.T) {
+	t.Parallel()
 	f := newFinalizationAssumptionFixture(t)
 	before := f.projections(t)
 	if err := os.Remove(filepath.Join(f.store.root, "data", f.record.FinalizationResultRef.ID)); err != nil {
@@ -610,6 +623,7 @@ func TestAssumptionMutationFailsClosedOnFinalizationIntegrity(t *testing.T) {
 }
 
 func TestAssumptionMutationProjectsSupportedStatus(t *testing.T) {
+	t.Parallel()
 	f := newFinalizationAssumptionFixture(t)
 	entry, assumption, err := f.index.CheckAssumption(f.record.ID, "A1", AssumptionSupported, "verified")
 	if err != nil {

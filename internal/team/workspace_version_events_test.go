@@ -34,6 +34,7 @@ func captureForTest(t *testing.T, store *versionstore.Store, root, branch string
 // the payload survives redaction, retries are idempotent, and the commit
 // lookup finds the durable event that recovery publishes from.
 func TestWorkspaceSnapshotCommitEventRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	workspace := t.TempDir()
 	root := t.TempDir()
@@ -90,6 +91,7 @@ func TestWorkspaceSnapshotCommitEventRoundTrip(t *testing.T) {
 // TestWorkspaceSnapshotRecoveryNeverAppends covers the crash before the event
 // append: the pending snapshot is orphaned and the event log is unchanged.
 func TestWorkspaceSnapshotRecoveryNeverAppends(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	workspace := t.TempDir()
 	store := openVersionTestStore(t)
@@ -113,6 +115,7 @@ func TestWorkspaceSnapshotRecoveryNeverAppends(t *testing.T) {
 // TestWorkspaceSnapshotAtEvent covers §23 (IT3): a fork at event E uses the
 // last snapshot committed at or before E in E's lineage, never a later one.
 func TestWorkspaceSnapshotAtEvent(t *testing.T) {
+	t.Parallel()
 	events := []RunEvent{
 		{ID: "e1", BranchID: "main", Type: string(EventWorkspaceSnapshotCommitted), Payload: []byte(`{"snapshot_id":"wsv_s1"}`)},
 		{ID: "e2", BranchID: "main", Type: "task_started"},

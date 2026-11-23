@@ -22,6 +22,7 @@ func recoveryTestReceipt(attempt int, model string) ExecutionReceipt {
 }
 
 func TestCompareRecoverySignatures(t *testing.T) {
+	t.Parallel()
 	item := &TodoItem{ID: "1", DependsOn: []string{"a", "b"}}
 	base := recoveryTestReceipt(1, "minimax")
 	cases := []struct {
@@ -106,6 +107,7 @@ func TestCompareRecoverySignatures(t *testing.T) {
 // observer relies on (Step 0): a retry adds a receipt, a repair of the same
 // attempt replaces it.
 func TestSetExecutionReceiptKeepsOneReceiptPerAttempt(t *testing.T) {
+	t.Parallel()
 	list := NewTaskTracker().TodoList()
 	item := list.AddBatch([]TodoSpec{{Agent: "worker", Desc: "task"}})[0]
 	first, second := recoveryTestReceipt(1, "minimax"), recoveryTestReceipt(2, "minimax")
@@ -128,6 +130,7 @@ func TestSetExecutionReceiptKeepsOneReceiptPerAttempt(t *testing.T) {
 // repeated write, and a resumed coordinator still compares with the attempt
 // before it.
 func TestRecoveryChangeObservedPerFinishedAttempt(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := OpenEventStore(workspace)
 	if err != nil {

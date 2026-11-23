@@ -17,6 +17,7 @@ func controlObservationEvent(t *testing.T, payload controlDecisionPayload) RunEv
 }
 
 func TestSummarizeControlDecisionsAggregatesPerPointAndMode(t *testing.T) {
+	t.Parallel()
 	yes, no := true, false
 	events := []RunEvent{
 		controlObservationEvent(t, controlDecisionPayload{Point: "path-reviewer", Mode: "shadow", Applied: "legacy", Status: "decided", Value: "false", Confidence: 0.98, Accepted: true, Threshold: 0.9, Legacy: "false", Agree: &yes, DurationMS: 100}),

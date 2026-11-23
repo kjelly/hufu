@@ -10,6 +10,7 @@ import (
 // result contract". Both land in failures_by_class as protocol failures, so
 // without this counter the run report points at the wrong fix.
 func TestAccumulateStepBudgetMetricsCountsExhaustedAttempts(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		receipts []ExecutionReceipt
@@ -61,6 +62,7 @@ func TestAccumulateStepBudgetMetricsCountsExhaustedAttempts(t *testing.T) {
 // showing failure:protocol=15 on its own blames the model; the same chain with
 // budget_exhausted=9 blames the budget.
 func TestDecisionChainReportsStepBudgetExhaustion(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{}}
 
 	withExhaustion := c.buildRunTelemetry(&RunResult{
@@ -91,6 +93,7 @@ func TestDecisionChainReportsStepBudgetExhaustion(t *testing.T) {
 }
 
 func TestToolDispositionMetricsUseOnlyActiveRun(t *testing.T) {
+	t.Parallel()
 	items := []*TodoItem{{ExecutionReceipts: []ExecutionReceipt{
 		{RunID: "old", TaskID: "1", Attempt: 1, ToolDispositions: []ToolExecutionDisposition{{Kind: ToolExecutionPolicyDenied, RetrySafety: RetrySafetySafeFreshAttempt}}},
 		{RunID: "active", TaskID: "1", Attempt: 1, ToolDispositions: []ToolExecutionDisposition{

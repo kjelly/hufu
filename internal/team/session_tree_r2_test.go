@@ -6,6 +6,7 @@ import (
 )
 
 func TestTypedVerification_EventStoreBranchReplayAndCheckpointDedup(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	es, err := NewEventStore(workspace, "run-typed", "session-typed")
 	if err != nil {
@@ -99,6 +100,7 @@ func TestTypedVerification_EventStoreBranchReplayAndCheckpointDedup(t *testing.T
 // verification outcomes, and completed tasks with typed artifacts must emit
 // artifact_created events exactly once (R2).
 func TestEmitTaskEvents_IncludesVerifyAndArtifacts(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	es, err := NewEventStore(tempDir, "run-1", "session-1")
 	if err != nil {
@@ -178,6 +180,7 @@ func TestEmitTaskEvents_IncludesVerifyAndArtifacts(t *testing.T) {
 // ReduceToTodoList must reconstruct Verify/VerifyResult from task events so
 // downstream consumers (e.g. DiffBranches) can evaluate verification state (R2).
 func TestReduceToTodoList_ReconstructsVerify(t *testing.T) {
+	t.Parallel()
 	payload, _ := json.Marshal(map[string]interface{}{
 		"id":          "1",
 		"desc":        "build report",
@@ -214,6 +217,7 @@ func TestReduceToTodoList_ReconstructsVerify(t *testing.T) {
 // End-to-end: with verify data present in events, DiffBranches must surface
 // verification and artifact differences between branches (R2).
 func TestSessionTree_DiffBranches_VerificationAndArtifacts(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	st := NewSessionTree()
 	es, err := NewEventStore(tempDir, "run-1", "session-1")

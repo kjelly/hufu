@@ -10,6 +10,7 @@ import (
 var benchmarkEventQueryMatches int
 
 func TestEventStoreQueryEventsMatchesRunAndTypesInDurableOrder(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "run-default", "session-query")
 	if err != nil {
 		t.Fatal(err)
@@ -57,6 +58,7 @@ func TestEventStoreQueryEventsMatchesRunAndTypesInDurableOrder(t *testing.T) {
 }
 
 func TestEventStoreQueryEventsReturnsDefensiveCopiesWithoutRescan(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "run-query-copy", "session-query-copy")
 	if err != nil {
 		t.Fatal(err)
@@ -93,6 +95,7 @@ func TestEventStoreQueryEventsReturnsDefensiveCopiesWithoutRescan(t *testing.T) 
 }
 
 func TestEventStoreQueryEventsEmptyAndUnknownResults(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "run-query-empty", "session-query-empty")
 	if err != nil {
 		t.Fatal(err)
@@ -129,6 +132,7 @@ func TestEventStoreQueryEventsEmptyAndUnknownResults(t *testing.T) {
 }
 
 func TestEventStoreQueryEventsFailsClosedWithInvalidState(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "run-query-invalid", "session-query-invalid")
 	if err != nil {
 		t.Fatal(err)
@@ -157,6 +161,7 @@ func TestEventStoreQueryEventsFailsClosedWithInvalidState(t *testing.T) {
 }
 
 func TestEventStoreQueryEventsWildcardMatchesReadEvents(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "run-query-equal", "session-query-equal")
 	if err != nil {
 		t.Fatal(err)

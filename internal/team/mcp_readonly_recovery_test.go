@@ -32,6 +32,7 @@ func gatewayCallInput(target string) string {
 }
 
 func TestCoordinatorReadOnlyToolCallClassifiesDeclaredMCPObservations(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{mcpManager: readOnlyRecoveryManager(t)}
 	cases := []struct {
 		name     string
@@ -67,6 +68,7 @@ func TestCoordinatorReadOnlyToolCallClassifiesDeclaredMCPObservations(t *testing
 }
 
 func TestProtocolRecoveryTreatsDeclaredGatewayObservationsAsReadOnly(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{mcpManager: readOnlyRecoveryManager(t)}
 	cases := []struct {
 		name     string
@@ -109,6 +111,7 @@ func TestProtocolRecoveryTreatsDeclaredGatewayObservationsAsReadOnly(t *testing.
 // The static taxonomy rejected use_dynamic_tool, so the side_effect:none task
 // was blocked for reconciliation instead of receiving its one fresh attempt.
 func TestProtocolRepairFailureAfterDeclaredGatewayObservationRetriesOnce(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		target      string

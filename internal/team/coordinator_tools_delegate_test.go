@@ -27,6 +27,7 @@ func newDelegateTestCoordinator(agents map[string]*agent.AgentDef) *Coordinator 
 // away from names that were never valid, and reject them outright when they
 // enforce the enum.
 func TestRequestAgentToolInfoListsValidAgentsAsEnum(t *testing.T) {
+	t.Parallel()
 	c := newDelegateTestCoordinator(map[string]*agent.AgentDef{
 		"coordinator": {Name: "coordinator", Role: "coordinator"},
 		"deployer":    {Name: "deployer", Role: "worker"},
@@ -63,6 +64,7 @@ func TestRequestAgentToolInfoListsValidAgentsAsEnum(t *testing.T) {
 }
 
 func TestRequestAgentToolInfoOmitsEnumWithNoWorkers(t *testing.T) {
+	t.Parallel()
 	c := newDelegateTestCoordinator(map[string]*agent.AgentDef{
 		"coordinator": {Name: "coordinator", Role: "coordinator"},
 	})
@@ -145,6 +147,7 @@ func TestRequestAgentToolUsesTypedResultWorkerSurface(t *testing.T) {
 }
 
 func TestExecuteSubAgentFailsClosedWithoutCanonicalTodo(t *testing.T) {
+	t.Parallel()
 	c := newDelegateTestCoordinator(map[string]*agent.AgentDef{
 		"worker": {Name: "worker", Role: "worker"},
 	})

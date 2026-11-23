@@ -43,6 +43,7 @@ func blockedRecoveryFixture(t *testing.T, body string, prepared bool, reason Rep
 }
 
 func TestResultCollectionRecoveryGrantsTurnsForLostExhaustedResponse(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		used    int
@@ -134,6 +135,7 @@ func TestResultCollectionRecoveryGrantsTurnsForLostExhaustedResponse(t *testing.
 }
 
 func TestResultCollectionRecoveryResumesCancelledCollection(t *testing.T) {
+	t.Parallel()
 	for _, state := range []ResultCollectionState{ResultCollectionPending, ResultCollectionReceived, ResultCollectionPrepared} {
 		t.Run(string(state), func(t *testing.T) {
 			c, item, ctx, cp := beginCollectionFixture(t)
@@ -185,6 +187,7 @@ func TestResultCollectionRecoveryResumesCancelledCollection(t *testing.T) {
 }
 
 func TestResultCollectionRecoveryRejectsUnsafeCancelledTargets(t *testing.T) {
+	t.Parallel()
 	c, item, _, _ := beginCollectionFixture(t)
 	c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "cancelled", NeedsHuman, FailureCancelled, TaskError, "")
 	base := c.todoItemByID(item.ID)
@@ -219,6 +222,7 @@ func TestResultCollectionRecoveryRejectsUnsafeCancelledTargets(t *testing.T) {
 }
 
 func TestResultCollectionRecoveryNormalizesOnlyVerifiedJSONFrames(t *testing.T) {
+	t.Parallel()
 	const schema = `{"type":"object","additionalProperties":false,"required":["findings"],"properties":{"findings":{"type":"array","items":{"type":"object","properties":{"summary":{"type":"string"}}}},"evidence":{"type":"array","items":{"type":"string"}}},"x-hufu-evidence-keys":{"pointers":["/evidence/*"]}}`
 	// Exercise key-aware JSON decoding while keeping the prose marker inert.
 	valid := `{"status":"success","summary":"saved ev_ marker","structured_payload":{"findings":[]}}`
@@ -283,6 +287,7 @@ func TestResultCollectionRecoveryNormalizesOnlyVerifiedJSONFrames(t *testing.T) 
 }
 
 func TestResultCollectionRecoveryRepairsHistoricalCanonicalSchemaFailure(t *testing.T) {
+	t.Parallel()
 	for _, originalReason := range []RepairFailureReason{RepairFailureSource, RepairFailureInvalidSchema} {
 		t.Run(string(originalReason), func(t *testing.T) {
 			invalid := `{"status":"success","summary":"original uncertainty retained","structured_payload":{"findings":[{"summary":"observed","status":"unknown","finding_index":0}]}}`
@@ -354,6 +359,7 @@ func TestResultCollectionRecoveryRepairsHistoricalCanonicalSchemaFailure(t *test
 }
 
 func TestResultCollectionRecoverySchemaFailureCannotHideInvalidSources(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"receipt", "policy", "contract", "work"} {
 		t.Run(scenario, func(t *testing.T) {
 			body := `{"status":"success","summary":"review complete","structured_payload":{"findings":[{"summary":"observed","status":"unknown","finding_index":0}]}}`
@@ -393,6 +399,7 @@ func TestResultCollectionRecoverySchemaFailureCannotHideInvalidSources(t *testin
 }
 
 func TestResultCollectionRecoveryAssessmentPreservesEvidence(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, body string
 		prepared   bool
@@ -444,6 +451,7 @@ func TestResultCollectionRecoveryAssessmentPreservesEvidence(t *testing.T) {
 }
 
 func TestResultCollectionRecoveryRefusesHistoricalInputRebinding(t *testing.T) {
+	t.Parallel()
 	c, id, cp := blockedRecoveryFixture(t, `{"status":"success","summary":"original limitations"}`, true, RepairFailureSource)
 	snapshot := setTaskInputSnapshot(t, c, true)
 	body, err := json.Marshal(snapshot)
@@ -476,6 +484,7 @@ func TestResultCollectionRecoveryRefusesHistoricalInputRebinding(t *testing.T) {
 }
 
 func TestResultCollectionRecoveryGrantReplaysAndCommitsLocally(t *testing.T) {
+	t.Parallel()
 	c, id, cp := blockedRecoveryFixture(t, `{"status":"success","summary":"original limitations remain recorded"}`, true, RepairFailureSource)
 	events, err := c.EventJournal().ReadEvents(t.Context())
 	if err != nil {
@@ -527,6 +536,7 @@ func TestResultCollectionRecoveryGrantReplaysAndCommitsLocally(t *testing.T) {
 }
 
 func TestResultCollectionRecoveryRejectsStaleOrForgedGrant(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"fingerprint", "scope", "budget", "prior_checkpoint", "policy"} {
 		t.Run(kind, func(t *testing.T) {
 			c, id, _ := blockedRecoveryFixture(t, `{"status":"success","summary":"complete"}`, true, RepairFailureSource)
@@ -559,6 +569,7 @@ func TestResultCollectionRecoveryRejectsStaleOrForgedGrant(t *testing.T) {
 }
 
 func TestResultCollectionRecoveryConcurrentAuthorization(t *testing.T) {
+	t.Parallel()
 	c, id, _ := blockedRecoveryFixture(t, `{"status":"success","summary":"complete"}`, true, RepairFailureSource)
 	c.executionRunID = "concurrent-recovery"
 	results := make(chan error, 2)
@@ -580,6 +591,7 @@ func TestResultCollectionRecoveryConcurrentAuthorization(t *testing.T) {
 }
 
 func TestResultCollectionRecoveryPreviewUsesReadOnlySource(t *testing.T) {
+	t.Parallel()
 	c, id, _ := blockedRecoveryFixture(t, `{"status":"success","summary":"complete"}`, true, RepairFailureSource)
 	events, err := c.EventJournal().ReadEvents(t.Context())
 	if err != nil {
@@ -613,6 +625,7 @@ func TestResultCollectionRecoveryPreviewUsesReadOnlySource(t *testing.T) {
 }
 
 func TestResultCollectionRecoveryKeepsReservedTurnsAfterInterruption(t *testing.T) {
+	t.Parallel()
 	c, id, cp := blockedRecoveryFixture(t, `{"status":`, false, RepairFailureSource)
 	c.executionRunID = "first-recovery"
 	if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), id)); err != nil {
@@ -653,6 +666,7 @@ func TestResultCollectionRecoveryKeepsReservedTurnsAfterInterruption(t *testing.
 }
 
 func TestResultCollectionRecoveryHeadFenceRejectsAnotherWriter(t *testing.T) {
+	t.Parallel()
 	c, id, _ := blockedRecoveryFixture(t, `{"status":"success","summary":"complete"}`, true, RepairFailureSource)
 	a, err := c.AssessResultCollectionRecovery(t.Context(), id)
 	if err != nil {
@@ -679,6 +693,7 @@ func (j recoveryAppendFailureJournal) AppendAtHead(context.Context, RunEvent, st
 }
 
 func TestResultCollectionRecoveryFailedAuthorizationIsAtomic(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"cancelled", "storage_failure"} {
 		t.Run(kind, func(t *testing.T) {
 			c, id, _ := blockedRecoveryFixture(t, `{"status":"success","summary":"complete"}`, true, RepairFailureSource)
@@ -711,6 +726,7 @@ func TestResultCollectionRecoveryFailedAuthorizationIsAtomic(t *testing.T) {
 }
 
 func TestResultCollectionRecoveryReplayRejectsChangedAssessment(t *testing.T) {
+	t.Parallel()
 	c, id, _ := blockedRecoveryFixture(t, `{"status":"success","summary":"complete"}`, true, RepairFailureSource)
 	c.executionRunID = "grant-before-crash"
 	if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), id)); err != nil {

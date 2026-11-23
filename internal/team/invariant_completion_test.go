@@ -50,6 +50,7 @@ func completionAssessment(id string, severity InvariantSeverity, status Invarian
 }
 
 func TestEvaluateSemanticRegressionModesAndSeverities(t *testing.T) {
+	t.Parallel()
 	runID := "run-current"
 	tests := []struct {
 		name       string
@@ -76,6 +77,7 @@ func TestEvaluateSemanticRegressionModesAndSeverities(t *testing.T) {
 }
 
 func TestValidateInvariantVerificationResultRejectsStructuralMismatch(t *testing.T) {
+	t.Parallel()
 	base := invariantCompletionTodo("run-current", "gate", InvariantVerificationGate, TaskDone, []InvariantAssessment{completionAssessment("safe", InvariantSeverityError, InvariantPreserved)})
 	tests := []struct {
 		name string
@@ -114,6 +116,7 @@ func TestValidateInvariantVerificationResultRejectsStructuralMismatch(t *testing
 }
 
 func TestEvaluateSemanticRegressionRequiresDoneWithoutSemanticBlocker(t *testing.T) {
+	t.Parallel()
 	item := invariantCompletionTodo("run-current", "gate", InvariantVerificationGate, TaskError, []InvariantAssessment{completionAssessment("safe", InvariantSeverityInfo, InvariantPreserved)})
 	decision := EvaluateSemanticRegression("run-current", []*TodoItem{item})
 	if decision.Clear || decision.BlockingCount != 1 || len(decision.Reasons) != 1 || !strings.Contains(decision.Reasons[0], "task_not_done") {
@@ -122,6 +125,7 @@ func TestEvaluateSemanticRegressionRequiresDoneWithoutSemanticBlocker(t *testing
 }
 
 func TestEvaluateSemanticRegressionAcceptsOnlyVerifiedClearReplacement(t *testing.T) {
+	t.Parallel()
 	const runID = "run-invariant-resolution"
 	original := invariantCompletionTodo(runID, "1", InvariantVerificationGate, TaskBlocked, []InvariantAssessment{completionAssessment("safe", InvariantSeverityError, InvariantViolated)})
 	replacement := invariantCompletionTodo(runID, "2", InvariantVerificationGate, TaskDone, []InvariantAssessment{completionAssessment("safe", InvariantSeverityError, InvariantPreserved)})
@@ -139,6 +143,7 @@ func TestEvaluateSemanticRegressionAcceptsOnlyVerifiedClearReplacement(t *testin
 }
 
 func TestEvaluateSemanticRegressionBoundsReasons(t *testing.T) {
+	t.Parallel()
 	assessments := make([]InvariantAssessment, 55)
 	for i := range assessments {
 		assessments[i] = completionAssessment(fmt.Sprintf("inv-%02d", i), InvariantSeverityError, InvariantViolated)
@@ -151,6 +156,7 @@ func TestEvaluateSemanticRegressionBoundsReasons(t *testing.T) {
 }
 
 func TestCurrentGateResultResolvesPriorAttempt(t *testing.T) {
+	t.Parallel()
 	old := invariantCompletionTodo("old-run", "gate", InvariantVerificationGate, TaskError, []InvariantAssessment{completionAssessment("safe", InvariantSeverityError, InvariantViolated)})
 	current := invariantCompletionTodo("run-current", "gate", InvariantVerificationGate, TaskDone, []InvariantAssessment{completionAssessment("safe", InvariantSeverityError, InvariantPreserved)})
 	current.ContextManifests = append(old.ContextManifests, current.ContextManifests...)

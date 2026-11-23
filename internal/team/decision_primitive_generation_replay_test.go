@@ -36,6 +36,7 @@ func TestPrimaryPrimitiveReplayDoesNotRegenerate(t *testing.T) {
 }
 
 func TestPrimaryPrimitiveFailureDoesNotEnterLegacyRepair(t *testing.T) {
+	t.Parallel()
 	runner := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
 		return DecisionOpinion{}, &runtimeDecisionFailure{fmt.Errorf("decision_timeout")}
 	})

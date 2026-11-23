@@ -7,6 +7,7 @@ import (
 )
 
 func TestResolveAgentNameExactMatch(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Agents: map[string]*agent.AgentDef{
@@ -40,6 +41,7 @@ func TestResolveAgentNameExactMatch(t *testing.T) {
 }
 
 func TestResolveAgentNameWordMatch(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Agents: map[string]*agent.AgentDef{
@@ -69,6 +71,7 @@ func TestResolveAgentNameWordMatch(t *testing.T) {
 }
 
 func TestResolveAgentNameSegmentMatch(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Agents: map[string]*agent.AgentDef{
@@ -88,6 +91,7 @@ func TestResolveAgentNameSegmentMatch(t *testing.T) {
 }
 
 func TestResolveAgentNameAmbiguous(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Agents: map[string]*agent.AgentDef{
@@ -106,6 +110,7 @@ func TestResolveAgentNameAmbiguous(t *testing.T) {
 }
 
 func TestResolveAgentNameNotFound(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Agents: map[string]*agent.AgentDef{
@@ -121,6 +126,7 @@ func TestResolveAgentNameNotFound(t *testing.T) {
 }
 
 func TestResolveAgentNameCoordinatorBlocked(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Agents: map[string]*agent.AgentDef{
@@ -136,6 +142,7 @@ func TestResolveAgentNameCoordinatorBlocked(t *testing.T) {
 }
 
 func TestResolveAgentNameEmptyInput(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Agents: map[string]*agent.AgentDef{
@@ -152,6 +159,7 @@ func TestResolveAgentNameEmptyInput(t *testing.T) {
 }
 
 func TestResolveAgentName_ByDisplayName(t *testing.T) {
+	t.Parallel()
 	// Built-in Helper is registered under the "helper" map key (FileAlias),
 	// not under its display name "Helper". LLM coordinators may dispatch
 	// using the display name, so resolveAgentName must fall back to a

@@ -17,6 +17,7 @@ import (
 // 497k for 35 tool calls whose outputs totalled under 7k tokens, so any task
 // that had to poll a long-running job could not finish at all.
 func TestAttemptBudgetDoesNotChargeResentHistory(t *testing.T) {
+	t.Parallel()
 	budget := newAttemptBudget(1000)
 	for step := 0; step < 200; step++ {
 		if err := budget.reserveContext(400); err != nil {
@@ -29,6 +30,7 @@ func TestAttemptBudgetDoesNotChargeResentHistory(t *testing.T) {
 }
 
 func TestAttemptBudgetChargesContextGrowth(t *testing.T) {
+	t.Parallel()
 	budget := newAttemptBudget(100)
 	if err := budget.reserveContext(40); err != nil {
 		t.Fatalf("first request within budget: %v", err)
@@ -48,6 +50,7 @@ func TestAttemptBudgetChargesContextGrowth(t *testing.T) {
 // defeated by a grow/compact/regrow loop: tracking a high-water mark instead of
 // the last request size would make every cycle after the first one free.
 func TestAttemptBudgetRechargesGrowthAfterCompaction(t *testing.T) {
+	t.Parallel()
 	budget := newAttemptBudget(100)
 	if err := budget.reserveContext(60); err != nil {
 		t.Fatalf("first request: %v", err)
@@ -64,6 +67,7 @@ func TestAttemptBudgetRechargesGrowthAfterCompaction(t *testing.T) {
 // charged. Input tokens are the resent conversation, already accounted for as
 // growth; charging them again is what made the guard a step ceiling.
 func TestAttemptBudgetChargesOutputOnly(t *testing.T) {
+	t.Parallel()
 	budget := newAttemptBudget(10)
 	if err := budget.chargeOutput(6); err != nil {
 		t.Fatalf("output within budget: %v", err)
@@ -74,6 +78,7 @@ func TestAttemptBudgetChargesOutputOnly(t *testing.T) {
 }
 
 func TestAttemptBudgetDoesNotDoubleChargeOutputReflectedInContext(t *testing.T) {
+	t.Parallel()
 	budget := newAttemptBudget(100)
 	if err := budget.reserveContext(20); err != nil {
 		t.Fatalf("initial context: %v", err)
@@ -92,6 +97,7 @@ func TestAttemptBudgetDoesNotDoubleChargeOutputReflectedInContext(t *testing.T) 
 }
 
 func TestAttemptBudgetOutputCreditExpiresAfterNextRequest(t *testing.T) {
+	t.Parallel()
 	budget := newAttemptBudget(100)
 	if err := budget.reserveContext(20); err != nil {
 		t.Fatalf("initial context: %v", err)
@@ -114,12 +120,14 @@ func TestAttemptBudgetOutputCreditExpiresAfterNextRequest(t *testing.T) {
 }
 
 func TestAttemptBudgetZeroDisablesGuard(t *testing.T) {
+	t.Parallel()
 	if got := newAttemptBudget(0); got != nil {
 		t.Fatalf("newAttemptBudget(0) = %#v, want nil", got)
 	}
 }
 
 func TestAttemptBudgetYAMLExplicitZeroIsHonored(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := writeFile(dir, "team.yaml", "name: attempt-budget-zero\nacceptance: 'true'\nreliability:\n  max-tokens-per-attempt: 0\n"); err != nil {
 		t.Fatal(err)
@@ -184,6 +192,7 @@ func (a *attemptBudgetStreamAgent) Stream(ctx context.Context, call fantasy.Agen
 }
 
 func TestWorkerStepBudgetInjectsCheckpointAndTerminalOnlyTools(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "step-budget"}}, taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "worker", Goal: "review unit-a", WorksetBinding: &WorksetBinding{WorksetID: "review", ItemKey: "unit-a"}},
@@ -213,6 +222,7 @@ func TestWorkerStepBudgetInjectsCheckpointAndTerminalOnlyTools(t *testing.T) {
 }
 
 func TestWorkerStepBudgetFreeTextFinalizationDisablesTools(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "step-budget"}}, taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Goal: "review unit-a"}})[0]
 	stream := &attemptBudgetStreamAgent{messages: []fantasy.Message{fantasy.NewUserMessage("inspect")}, usages: make([]fantasy.Usage, 10)}
@@ -240,6 +250,7 @@ func TestWorkerStepBudgetFreeTextFinalizationDisablesTools(t *testing.T) {
 }
 
 func TestFreeTextFinalSummaryEvidenceIsBounded(t *testing.T) {
+	t.Parallel()
 	evidence := freeTextFinalSummaryEvidence([]fantasy.StepResult{{Response: fantasy.Response{Content: fantasy.ResponseContent{
 		fantasy.ToolCallContent{ToolName: "bash", Input: `{"command":"git diff --very-large-output"}`},
 	}}}})
@@ -252,6 +263,7 @@ func TestFreeTextFinalSummaryEvidenceIsBounded(t *testing.T) {
 }
 
 func TestBuildRescueFinalSummaryInstructionPreservesTaskContract(t *testing.T) {
+	t.Parallel()
 	task := TaskDef{
 		Goal:        "Review batch-0042 using range abcdef0123456789abcdef0123456789abcdef01..fedcba9876543210fedcba9876543210fedcba98.",
 		Constraints: "Use /workspace/coverage/batches/batch-0042 and its matching .diff; include ### Findings and ### Coverage gaps.",
@@ -308,6 +320,7 @@ func (a *attemptBudgetStreamAgent) result() *fantasy.AgentResult {
 }
 
 func TestRunAgentAttemptBudgetStopsBeforeNextModelStep(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session:      &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "attempt-budget"}},
 		taskTracker:  NewTaskTracker(),
@@ -333,6 +346,7 @@ func TestRunAgentAttemptBudgetStopsBeforeNextModelStep(t *testing.T) {
 }
 
 func TestRunAgentAttemptBudgetChargesProviderUsage(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session:      &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "attempt-budget"}},
 		taskTracker:  NewTaskTracker(),
@@ -358,6 +372,7 @@ func TestRunAgentAttemptBudgetChargesProviderUsage(t *testing.T) {
 // shape of the real failure: many steps, a large but unchanging conversation,
 // and only small provider-reported output. This must complete.
 func TestRunAgentAttemptBudgetSurvivesLongResentConversation(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session:      &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "attempt-budget"}},
 		taskTracker:  NewTaskTracker(),

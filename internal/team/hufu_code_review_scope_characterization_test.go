@@ -28,6 +28,7 @@ func loadHufuCodeReviewTeam(t *testing.T) *TeamSession {
 }
 
 func TestHufuCodeReviewChecksStatusAndGapsBeforeHandoff(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodeReviewTeam(t)
 	checked := 0
 	for _, task := range session.ContractTasks {
@@ -58,6 +59,7 @@ func TestHufuCodeReviewChecksStatusAndGapsBeforeHandoff(t *testing.T) {
 }
 
 func TestHufuCodeReviewChecksSourceFindingsBeforeHandoff(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodeReviewTeam(t)
 	checked := 0
 	for _, task := range session.ContractTasks {
@@ -106,6 +108,7 @@ func TestHufuCodeReviewChecksSourceFindingsBeforeHandoff(t *testing.T) {
 // no longer be redispatched, so a reworded summary must be rejected here
 // while submit_result can still be corrected.
 func TestHufuCodeReviewChecksInvariantCopiesBeforeHandoff(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodeReviewTeam(t)
 	var task *TaskDef
 	for i := range session.ContractTasks {
@@ -168,6 +171,7 @@ func hufuCodeReviewLegacySchema(t *testing.T, session *TeamSession, name string)
 }
 
 func TestHufuCodeReviewRepairExampleSatisfiesResultSchema(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodeReviewTeam(t)
 	compiled := session.ResultContracts["schemas/review-v2.json"]
 	if compiled == nil {
@@ -215,6 +219,7 @@ func TestHufuCodeReviewRepairExampleSatisfiesResultSchema(t *testing.T) {
 }
 
 func TestHufuCodeReviewDeclaresTypedScopeAndBindsProducer(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodeReviewTeam(t)
 	if len(session.RunInputDefinitions) != 1 {
 		t.Fatalf("run input definitions = %#v", session.RunInputDefinitions)
@@ -286,6 +291,7 @@ func TestHufuCodeReviewDeclaresTypedScopeAndBindsProducer(t *testing.T) {
 }
 
 func TestHufuCodeReviewDeterministicResolverDoesNotInferNaturalLanguage(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodeReviewTeam(t)
 	for _, capability := range []string{"resolve-review-scope", "produce-workset", "verify-review-tests"} {
 		config := session.Config.ActionProviders[capability]
@@ -341,6 +347,7 @@ func TestHufuCodeReviewDeterministicResolverDoesNotInferNaturalLanguage(t *testi
 // route (ordered Ollama cloud candidates with provider fallback), so none
 // sets its own model or an agent backend, which a route cannot use.
 func TestHufuCodeReviewWorkersShareTheReviewRoute(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodeReviewTeam(t)
 	if session.Config.ExecutionRoute != "review" {
 		t.Fatalf("team execution route = %q, want review", session.Config.ExecutionRoute)
@@ -373,6 +380,7 @@ func TestHufuCodeReviewWorkersShareTheReviewRoute(t *testing.T) {
 }
 
 func TestHufuCodeReviewCharacterizesPromptCannotRewriteStaticScope(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodeReviewTeam(t)
 	requested := []TaskDef{{
 		Agent:      "reviewer",
@@ -409,6 +417,7 @@ func TestHufuCodeReviewCharacterizesPromptCannotRewriteStaticScope(t *testing.T)
 }
 
 func TestHufuCodeReviewCompatibilityVarNoLongerControlsScope(t *testing.T) {
+	t.Parallel()
 	session, err := LoadTeam(hufuCodeReviewTeamDir(t), map[string]string{"review.scope.max_commits": "3"}, nil, DefaultProviderRegistry)
 	if err != nil {
 		t.Fatalf("LoadTeam(hufu-code-review): %v", err)
@@ -435,6 +444,7 @@ func TestHufuCodeReviewCompatibilityVarNoLongerControlsScope(t *testing.T) {
 }
 
 func TestHufuCodeReviewGatesRecurringRuntimeInvariants(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodeReviewTeam(t)
 
 	var reviewTask *TaskDef
@@ -510,6 +520,7 @@ func TestHufuCodeReviewGatesRecurringRuntimeInvariants(t *testing.T) {
 }
 
 func TestHufuCodeReviewReferenceScopeReachesWorkerPromptAndSubmission(t *testing.T) {
+	t.Parallel()
 	for _, contractID := range []string{"review-primary-workset", "review-documentation-workset", "review-documentation-escalation"} {
 		t.Run(contractID, func(t *testing.T) {
 			session := loadHufuCodeReviewTeam(t)
@@ -577,6 +588,7 @@ func TestHufuCodeReviewReferenceScopeReachesWorkerPromptAndSubmission(t *testing
 }
 
 func TestDocumentationReviewContractsRejectInvariantClaims(t *testing.T) {
+	t.Parallel()
 	session := loadHufuCodeReviewTeam(t)
 	for _, id := range []string{"review-documentation-workset", "review-documentation-escalation"} {
 		t.Run(id, func(t *testing.T) {

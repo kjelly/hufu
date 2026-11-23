@@ -9,6 +9,7 @@ import (
 )
 
 func TestTerminalRunInputsRequireCurrentSelection(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"current", "stale", "recovery"} {
 		t.Run(mode, func(t *testing.T) {
 			c := newTestCoordinator(t)
@@ -75,6 +76,7 @@ func TestTerminalRunInputsRequireCurrentSelection(t *testing.T) {
 }
 
 func TestTerminalInputOriginsAcceptLegacyEvents(t *testing.T) {
+	t.Parallel()
 	for _, payload := range [][]byte{nil, []byte(`{}`), []byte(`{"outcome":"failed"}`)} {
 		if err := validateTerminalInputOrigins([]RunEvent{{Type: "run_finished", Payload: payload}}); err != nil {
 			t.Fatalf("legacy terminal event rejected: %v", err)
@@ -83,6 +85,7 @@ func TestTerminalInputOriginsAcceptLegacyEvents(t *testing.T) {
 }
 
 func TestTerminalInputOriginsPreserveAcceptanceDurationEncoding(t *testing.T) {
+	t.Parallel()
 	payload, err := json.Marshal(RunFinishedEventPayload{Outcome: RunOutcomeCompleted,
 		Acceptance: &AcceptanceResult{VerificationEvidence: []*VerificationResult{{Command: "true", Duration: time.Second}}}}, jsonv1.DefaultOptionsV1())
 	if err != nil {

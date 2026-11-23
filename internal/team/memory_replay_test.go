@@ -100,6 +100,7 @@ func replayInput(queries ...string) RankingReplayInput {
 }
 
 func TestReplayPersistentRankingOnL3Fixture(t *testing.T) {
+	t.Parallel()
 	_, repo := replayL3Fixture(t)
 	before, err := repo.Revision(context.Background())
 	if err != nil {
@@ -163,6 +164,7 @@ func TestReplayPersistentRankingOnL3Fixture(t *testing.T) {
 }
 
 func TestReplayPersistentRankingWithoutAggregates(t *testing.T) {
+	t.Parallel()
 	_, repo := fusionRankingCoordinator(t, agent.MemoryLearningOff, "")
 	report, err := ReplayPersistentRanking(context.Background(), repo, replayInput("sqlite schema"))
 	if err != nil {
@@ -174,6 +176,7 @@ func TestReplayPersistentRankingWithoutAggregates(t *testing.T) {
 }
 
 func TestReplayPersistentRankingValidatesInput(t *testing.T) {
+	t.Parallel()
 	_, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	for name, in := range map[string]RankingReplayInput{
 		"no queries":      replayInput(),
@@ -190,6 +193,7 @@ func TestReplayPersistentRankingValidatesInput(t *testing.T) {
 }
 
 func TestSessionReplayQueriesUseTaskGoals(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	session := NewSession()
 	session.Tasks = []*TodoItem{
@@ -214,6 +218,7 @@ func TestSessionReplayQueriesUseTaskGoals(t *testing.T) {
 // evidence for the fusion candidates: whether each ranker selects the weakly
 // matching high-utility memory, on a large and a small corpus.
 func TestScoreNormalizedFusionOnL3IrrelevantHighUtility(t *testing.T) {
+	t.Parallel()
 	_, large := replayL3Fixture(t)
 	small := replaySmallL3Fixture(t)
 	type picks struct{ relevance, reinforced bool }

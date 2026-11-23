@@ -124,6 +124,7 @@ func hufuCodingAdvance(t *testing.T, ctx context.Context, s *dagScheduler, items
 // TestHufuCodingWorkflowCleanPath is matrix item A: every stage succeeds in
 // order and no on_failure edge ever fires.
 func TestHufuCodingWorkflowCleanPath(t *testing.T) {
+	t.Parallel()
 	s, items := hufuCodingWorkflowFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -155,6 +156,7 @@ func TestHufuCodingWorkflowCleanPath(t *testing.T) {
 // isGenuineWorkerReportedFailure). Both paths must reset the coder and every
 // downstream task in its wave, carrying durable remediation evidence.
 func TestHufuCodingWorkflowVerifierSemanticFailureResetsCoderAndDownstream(t *testing.T) {
+	t.Parallel()
 	s, items := hufuCodingWorkflowFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -208,6 +210,7 @@ func TestHufuCodingWorkflowVerifierSemanticFailureResetsCoderAndDownstream(t *te
 // self-report to FailureSemanticRejection — which team.yaml's
 // on-failure-classes names explicitly — before checking the allowlist.
 func TestHufuCodingWorkflowVerifierGenuineFailedReportResetsCoderAndDownstream(t *testing.T) {
+	t.Parallel()
 	s, items := hufuCodingWorkflowFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -239,6 +242,7 @@ func TestHufuCodingWorkflowVerifierGenuineFailedReportResetsCoderAndDownstream(t
 // resetting the coder — the class alone is identical to the test above, so
 // only isGenuineWorkerReportedFailure's TypedResult check tells them apart.
 func TestHufuCodingWorkflowVerifierInfraFailureWithNoStoredResultDoesNotReset(t *testing.T) {
+	t.Parallel()
 	s, items := hufuCodingWorkflowFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -265,6 +269,7 @@ func TestHufuCodingWorkflowVerifierInfraFailureWithNoStoredResultDoesNotReset(t 
 // resets the coder, carries the finding forward, and the verifier reruns
 // even though it was previously green.
 func TestHufuCodingWorkflowReviewerMustFixFindingResetsCoder(t *testing.T) {
+	t.Parallel()
 	s, items := hufuCodingWorkflowFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -305,6 +310,7 @@ func TestHufuCodingWorkflowReviewerMustFixFindingResetsCoder(t *testing.T) {
 // must not reset the coder, must not touch the workspace/verifier's prior
 // green state, and must not be treated as a code-review finding.
 func TestHufuCodingWorkflowReviewerInfraFailureDoesNotResetCoder(t *testing.T) {
+	t.Parallel()
 	s, items := hufuCodingWorkflowFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -337,6 +343,7 @@ func TestHufuCodingWorkflowReviewerInfraFailureDoesNotResetCoder(t *testing.T) {
 // on repeated infrastructure failures, the run must leave the reviewer
 // blocked/errored rather than ever falling through to a coder reset.
 func TestHufuCodingWorkflowReviewerInfraFailureBudgetExhaustedBlocksNotRejects(t *testing.T) {
+	t.Parallel()
 	s, items := hufuCodingWorkflowFixture(t)
 	s.tasks[3].MaxRetries = 1 // exhaust after a single infra retry, to keep the test short
 	ctx, cancel := context.WithCancel(context.Background())
@@ -363,6 +370,7 @@ func TestHufuCodingWorkflowReviewerInfraFailureBudgetExhaustedBlocksNotRejects(t
 // and the entire downstream wave (verifier, reviewer, final-SA) reruns —
 // the prior green review is not treated as permanent proof.
 func TestHufuCodingWorkflowFinalSAFinalRejectionResetsFullWave(t *testing.T) {
+	t.Parallel()
 	s, items := hufuCodingWorkflowFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -391,6 +399,7 @@ func TestHufuCodingWorkflowFinalSAFinalRejectionResetsFullWave(t *testing.T) {
 // F: a final-SA provider/infrastructure failure retries final-SA itself and
 // must not reset the coder or any already-green upstream task.
 func TestHufuCodingWorkflowFinalSAInfraFailureDoesNotResetCoder(t *testing.T) {
+	t.Parallel()
 	s, items := hufuCodingWorkflowFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -425,6 +434,7 @@ func TestHufuCodingWorkflowFinalSAInfraFailureDoesNotResetCoder(t *testing.T) {
 // what actually happens for a request SA could not confidently confirm; the
 // coder must simply never launch.
 func TestHufuCodingWorkflowSAFailureNeverLetsCoderStart(t *testing.T) {
+	t.Parallel()
 	s, items := hufuCodingWorkflowFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -9,6 +9,7 @@ import (
 // docs/reference/action-providers.md loadable: the same team lives in
 // testdata/docs-action-provider-example.
 func TestActionProvidersDocExampleLoads(t *testing.T) {
+	t.Parallel()
 	session, err := LoadTeam(filepath.Join("testdata", "docs-action-provider-example"), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("LoadTeam(doc example): %v", err)
@@ -30,6 +31,7 @@ func TestActionProvidersDocExampleLoads(t *testing.T) {
 // TestActionCatalogDocExamplesLoad keeps the action catalog examples in
 // docs/reference/action-providers.md loadable.
 func TestActionCatalogDocExamplesLoad(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		dir     string
 		entries []string
@@ -56,6 +58,7 @@ func TestActionCatalogDocExamplesLoad(t *testing.T) {
 // docs/reference/action-providers.md loadable and lint-clean without starting
 // their MCP servers.
 func TestMCPActionProviderDocExamplesLoad(t *testing.T) {
+	t.Parallel()
 	for _, dir := range []string{"docs-mcp-action-catalog", "docs-mcp-action-workflow"} {
 		t.Run(dir, func(t *testing.T) {
 			path := filepath.Join("testdata", dir)

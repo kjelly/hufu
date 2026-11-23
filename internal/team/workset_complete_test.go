@@ -64,6 +64,7 @@ func worksetCompleteSpec() VerificationSpec {
 }
 
 func TestWorksetCompleteVerificationPassesAllVerifiedChildren(t *testing.T) {
+	t.Parallel()
 	c, _ := newWorksetCompleteCoordinator(t)
 	spec := VerificationSpec{
 		Type: VerifyWorksetComplete, WorksetSourceTask: " PREPARE ", WorksetRequireTerminal: true,
@@ -90,6 +91,7 @@ func TestWorksetCompleteVerificationPassesAllVerifiedChildren(t *testing.T) {
 // gate with a spec that names no accepted statuses: the verifier has to fill
 // in the defaults, which admit the completed_with_gaps child.
 func TestWorksetCompleteAcceptanceDefaultsAcceptedStatuses(t *testing.T) {
+	t.Parallel()
 	c, _ := newWorksetCompleteCoordinator(t)
 	c.acceptanceSpec = &AcceptanceSpec{Verifications: []VerificationSpec{{
 		Type: VerifyWorksetComplete, WorksetSourceTask: "prepare", WorksetRequireTerminal: true, WorksetRequireVerified: true,
@@ -101,6 +103,7 @@ func TestWorksetCompleteAcceptanceDefaultsAcceptedStatuses(t *testing.T) {
 }
 
 func TestWorksetGroupStatesDistinguishesUnfinishedAndFailedChildren(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		statuses  []TaskStatus
@@ -149,6 +152,7 @@ func TestWorksetGroupStatesDistinguishesUnfinishedAndFailedChildren(t *testing.T
 }
 
 func TestFindWorksetReceiptMatchesNormalizedParentAndFailsClosed(t *testing.T) {
+	t.Parallel()
 	// withSecondReceipt attaches a derived receipt to child b and returns the
 	// lookup error for the (case-insensitive) parent.
 	withSecondReceipt := func(t *testing.T, mutate func(*WorksetExpansionReceipt)) (*Coordinator, error) {
@@ -227,6 +231,7 @@ func TestFindWorksetReceiptMatchesNormalizedParentAndFailsClosed(t *testing.T) {
 }
 
 func TestWorksetReceiptConflictsFailClosedInProjectionPaths(t *testing.T) {
+	t.Parallel()
 	c, receipt := newWorksetCompleteCoordinator(t)
 	second := cloneWorksetReceipt(receipt)
 	second.ParentTaskID = "OTHER"
@@ -272,6 +277,7 @@ func TestWorksetReceiptConflictsFailClosedInProjectionPaths(t *testing.T) {
 // workset_complete verifier. A non-empty wantStderr means the verifier must
 // fail with that diagnostic; an empty one means it must pass.
 func TestWorksetCompleteVerificationSourceAndReceiptIntegrity(t *testing.T) {
+	t.Parallel()
 	strict := func() VerificationSpec {
 		return NormalizeVerificationSpec(VerificationSpec{Type: VerifyWorksetComplete, WorksetSourceTask: "prepare", WorksetRequireTerminal: true, WorksetRequireVerified: true}, "", "")
 	}

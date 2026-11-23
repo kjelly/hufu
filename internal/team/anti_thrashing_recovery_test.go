@@ -24,6 +24,7 @@ func defaultReliabilityLimits() ReliabilityConfig {
 }
 
 func TestRebuildCountsOnlyTasksThatAreStillFailing(t *testing.T) {
+	t.Parallel()
 	limits := defaultReliabilityLimits()
 	digest := reviewerTimeoutFingerprint().Digest
 	candidate := reviewerItem("9", TaskPending, false)
@@ -62,6 +63,7 @@ func TestRebuildCountsOnlyTasksThatAreStillFailing(t *testing.T) {
 }
 
 func TestVerifiedWorksetOutcomeDoesNotSpendSiblingRetryBudget(t *testing.T) {
+	t.Parallel()
 	limits := defaultReliabilityLimits()
 	fp := NewFailureFingerprint("reviewed", "reviewer", "verify:task_result_assert", FailureExecution, ErrDegenerateRepetitionLoop.Error())
 	verified := &TodoItem{
@@ -96,6 +98,7 @@ func TestVerifiedWorksetOutcomeDoesNotSpendSiblingRetryBudget(t *testing.T) {
 // three reviewer workset items each time out once and succeed on retry. The
 // escalation their first attempts caused must not keep blocking a sibling.
 func TestRecoveredFailuresReleaseTheirScope(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{Reliability: defaultReliabilityLimits()}}, taskTracker: NewTaskTracker()}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "reviewer", Desc: "unit-0001", VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert}},
@@ -127,6 +130,7 @@ func TestRecoveredFailuresReleaseTheirScope(t *testing.T) {
 }
 
 func TestRecoveredBlockedTaskReleasesOnlyItsWrapUp(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"recovered", "in_progress", "other_blocked", "explicit_before", "explicit_after", "reliability_scope"} {
 		t.Run(mode, func(t *testing.T) {
 			c := &Coordinator{
@@ -188,6 +192,7 @@ func TestRecoveredBlockedTaskReleasesOnlyItsWrapUp(t *testing.T) {
 }
 
 func TestTaskDerivedWrapUpIsConsumedByRoundReset(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.wrapUp.Store(wrapUpFromBlockedTask)
 	c.blockedWrapUpTasks = map[string]struct{}{"1": {}}
@@ -197,6 +202,7 @@ func TestTaskDerivedWrapUpIsConsumedByRoundReset(t *testing.T) {
 }
 
 func TestSystemicDispatchBlockUsesTheScopeDisposition(t *testing.T) {
+	t.Parallel()
 	limits := defaultReliabilityLimits()
 	limits.MaxSameFailureFingerprint = 0 // isolate the systemic scope
 	candidate := reviewerItem("9", TaskPending, false)
@@ -231,6 +237,7 @@ func TestSystemicDispatchBlockUsesTheScopeDisposition(t *testing.T) {
 }
 
 func TestSchedulerReplanBlockDoesNotEndTheRun(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name        string
 		disposition RetryDisposition
@@ -268,6 +275,7 @@ func TestSchedulerReplanBlockDoesNotEndTheRun(t *testing.T) {
 }
 
 func TestCompletedTasksKeepCriterionBoundFailures(t *testing.T) {
+	t.Parallel()
 	criterionFailure := NewFailureFingerprint("tests", "repairer", "verify", FailureVerify, "tests failed")
 	taskFailure := reviewerTimeoutFingerprint()
 	for _, tt := range []struct {

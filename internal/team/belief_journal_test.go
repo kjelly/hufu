@@ -93,6 +93,7 @@ func (f beliefFixture) state(t *testing.T) BeliefEpochState {
 }
 
 func TestBeliefJournalDurableReplayAndIdempotency(t *testing.T) {
+	t.Parallel()
 	f := newBeliefFixture(t)
 	f.bind(t)
 	f.admit(t)
@@ -139,6 +140,7 @@ func TestBeliefJournalDurableReplayAndIdempotency(t *testing.T) {
 	}
 }
 func TestBeliefRetractionTombstoneAndPrior(t *testing.T) {
+	t.Parallel()
 	f := newBeliefFixture(t)
 	f.bind(t)
 	expected, _, err := beliefVerificationObservation(f.epoch, f.source, f.model, "comparison", "")
@@ -162,6 +164,7 @@ func TestBeliefRetractionTombstoneAndPrior(t *testing.T) {
 	}
 }
 func TestBeliefMissingModelDoesNotUseCurrentSettings(t *testing.T) {
+	t.Parallel()
 	f := newBeliefFixture(t)
 	f.bind(t)
 	f.admit(t)
@@ -189,6 +192,7 @@ func TestBeliefMissingModelDoesNotUseCurrentSettings(t *testing.T) {
 	}
 }
 func TestBeliefSourceForgeryAndClosure(t *testing.T) {
+	t.Parallel()
 	f := newBeliefFixture(t)
 	f.bind(t)
 	if err := f.journal.AdmitVerification(t.Context(), f.epoch.ID, "invented-event", "comparison", ""); err == nil {
@@ -217,6 +221,7 @@ func TestBeliefSourceForgeryAndClosure(t *testing.T) {
 	}
 }
 func TestBeliefReplayBranchLineageAndSourceAdmissionGap(t *testing.T) {
+	t.Parallel()
 	f := newBeliefFixture(t)
 	f.bind(t)
 	// Crash before admission: reconstruct the writer, then admit from the original durable source.
@@ -281,6 +286,7 @@ func (j *uncertainBeliefJournal) Append(ctx context.Context, event RunEvent) (Ru
 	return durable, err
 }
 func TestBeliefUnknownCommitUsesSameAdmission(t *testing.T) {
+	t.Parallel()
 	f := newBeliefFixture(t)
 	f.bind(t)
 	uncertain := &uncertainBeliefJournal{EventJournal: eventStoreJournal{f.store}, fail: true}
@@ -318,6 +324,7 @@ func TestBeliefUnknownCommitUsesSameAdmission(t *testing.T) {
 }
 
 func TestBeliefRejectsForgedOutcomeAndRevision(t *testing.T) {
+	t.Parallel()
 	f := newBeliefFixture(t)
 	f.bind(t)
 	wrong := f.epoch
@@ -354,6 +361,7 @@ func TestBeliefRejectsForgedOutcomeAndRevision(t *testing.T) {
 	}
 }
 func TestBeliefDistinctInvocationsDoNotCreateIndependence(t *testing.T) {
+	t.Parallel()
 	f := newBeliefFixture(t)
 	f.bind(t)
 	f.admit(t)
@@ -382,6 +390,7 @@ func TestBeliefDistinctInvocationsDoNotCreateIndependence(t *testing.T) {
 }
 
 func TestBeliefEventScopeCannotBeRebound(t *testing.T) {
+	t.Parallel()
 	f := newBeliefFixture(t)
 	f.bind(t)
 	f.admit(t)

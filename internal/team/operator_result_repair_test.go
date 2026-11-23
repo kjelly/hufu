@@ -94,6 +94,7 @@ func resumeEvidenceFixture(t *testing.T, includeInputEvent bool) (*Coordinator, 
 }
 
 func TestOperatorResultRepairReusesCompletedSourcesAndOriginalObservations(t *testing.T) {
+	t.Parallel()
 	c, _ := resumeEvidenceFixture(t, true)
 	worker := scriptWorker(scriptedTurn{err: errors.New("worker must not be replayed")})
 	c.workerAgentOverride = worker
@@ -145,6 +146,7 @@ func TestOperatorResultRepairReusesCompletedSourcesAndOriginalObservations(t *te
 }
 
 func TestResultCollectionRecoveryGrantDiagnostics(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"proof", "source", "head", "budget", "cancelled"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, id, cp := blockedRecoveryFixture(t, `{"status":"success","summary":"private original claim"}`, true, RepairFailureSource)
@@ -190,6 +192,7 @@ func TestResultCollectionRecoveryGrantDiagnostics(t *testing.T) {
 }
 
 func TestResumeEvidencePreflightRejectsChangedSourcesBeforeRepair(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"missing_evidence", "changed_payload", "changed_inputs", "missing_inputs_event", "wrong_team", "changed_contract", "wrong_task"} {
 		t.Run(mode, func(t *testing.T) {
 			c, _ := resumeEvidenceFixture(t, mode != "missing_inputs_event")
@@ -230,6 +233,7 @@ func TestResumeEvidencePreflightRejectsChangedSourcesBeforeRepair(t *testing.T) 
 }
 
 func TestOperatorResultRepairExhaustionDoesNotGrantOrReplayAutomatically(t *testing.T) {
+	t.Parallel()
 	c, _ := resumeEvidenceFixture(t, true)
 	worker := scriptWorker(scriptedTurn{err: errors.New("worker replay forbidden")})
 	c.workerAgentOverride = worker

@@ -16,6 +16,7 @@ import (
 )
 
 func TestNativeProviderCompilerKeepsCanonicalReferencesAndOwnsBuffers(t *testing.T) {
+	t.Parallel()
 	for _, object := range []bool{false, true} {
 		name := "call"
 		if object {
@@ -84,6 +85,7 @@ func assertNativeCompilerCreditAvailable(t *testing.T) {
 }
 
 func TestNativeProviderCompilerRejectsInvalidInputsWithoutLeakingCredit(t *testing.T) {
+	t.Parallel()
 	for _, variant := range []string{"cancelled", "corrupt CAS", "metadata-only call", "text-only"} {
 		t.Run(variant, func(t *testing.T) {
 			c, ctx, item, request := nativeMediaProviderFixture(t)

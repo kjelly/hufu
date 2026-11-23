@@ -14,6 +14,7 @@ import (
 // Results are accepted fixture inputs; this test exercises delegation, immutable
 // workset expansion, checkpoint restoration and aggregate verification.
 func TestHufuCodeReviewSupplementReusesReviewerAfterRestore(t *testing.T) {
+	t.Parallel()
 	for _, count := range []int{0, 1, 2} {
 		t.Run(fmt.Sprintf("supplement_items_%d", count), func(t *testing.T) {
 			c := newTestCoordinator(t)

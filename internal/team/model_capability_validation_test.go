@@ -22,6 +22,7 @@ func (capabilityTestIntrospector) InspectModel(_ context.Context, _ providerintr
 }
 
 func TestMergeModelRequirementsIsAdditive(t *testing.T) {
+	t.Parallel()
 	got := mergeModelRequirements(
 		agent.ModelRequirements{Tools: true, MinContext: 16_384},
 		agent.ModelRequirements{Reasoning: true, MinContext: 32_768},
@@ -33,6 +34,7 @@ func TestMergeModelRequirementsIsAdditive(t *testing.T) {
 }
 
 func TestCheckModelRequirementKnownNoAndInsufficientContext(t *testing.T) {
+	t.Parallel()
 	validation := ModelCapabilityValidation{}
 	profile := modelprofile.ModelProfile{
 		EffectiveContext: 8_192,
@@ -51,6 +53,7 @@ func TestCheckModelRequirementKnownNoAndInsufficientContext(t *testing.T) {
 }
 
 func TestCheckModelRequirementUnknownIsWarning(t *testing.T) {
+	t.Parallel()
 	validation := ModelCapabilityValidation{}
 	checkModelRequirement(&validation, "worker", "model", modelprofile.ModelProfile{}, agent.ModelRequirements{Reasoning: true, MinContext: 16_384})
 	if len(validation.Errors) != 0 || len(validation.Warnings) != 2 {
@@ -59,6 +62,7 @@ func TestCheckModelRequirementUnknownIsWarning(t *testing.T) {
 }
 
 func TestKnownIncapableModelDoesNotReceiveToolsOrProtocolSurface(t *testing.T) {
+	t.Parallel()
 	manager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -83,6 +87,7 @@ func TestKnownIncapableModelDoesNotReceiveToolsOrProtocolSurface(t *testing.T) {
 }
 
 func TestCapabilityValidationUsesConfiguredInvocationContext(t *testing.T) {
+	t.Parallel()
 	manager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -118,6 +123,7 @@ func (configuredContextTestIntrospector) InspectModel(context.Context, provideri
 }
 
 func TestProtocolAgentConstructionFailsClosedForKnownToolIncapableModels(t *testing.T) {
+	t.Parallel()
 	manager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -150,6 +156,7 @@ func TestProtocolAgentConstructionFailsClosedForKnownToolIncapableModels(t *test
 }
 
 func TestCapabilityAwareRouteSkipsKnownIncapableAlternative(t *testing.T) {
+	t.Parallel()
 	manager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", nil)
 	if err != nil {
 		t.Fatal(err)

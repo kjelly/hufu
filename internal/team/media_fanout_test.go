@@ -10,6 +10,7 @@ import (
 )
 
 func TestMediaFanoutGrantPreservesLegacyPayloadAndComparableRoundTrip(t *testing.T) {
+	t.Parallel()
 	var legacy MediaProviderAdmittedPayload
 	encoded, err := json.Marshal(legacy)
 	if err != nil || bytes.Contains(encoded, []byte("model_fanout")) {
@@ -56,6 +57,7 @@ func TestMediaFanoutGrantPreservesLegacyPayloadAndComparableRoundTrip(t *testing
 }
 
 func TestMediaFanoutProviderOwnerRequiresCanonicalParentAndSlot(t *testing.T) {
+	t.Parallel()
 	primary, next := execution.ExecutionTarget{Backend: "fixture", Model: "vision"}, execution.ExecutionTarget{Backend: "fixture", Model: "next"}
 	base := TodoItem{ID: "task", Agent: "worker", Status: TaskInProgress, OccurrenceRevision: 7, DispatchID: "parent-dispatch",
 		ExecutionTarget: primary, ExecutionTopology: []execution.ExecutionTarget{primary, next}, ModelTopology: []string{"fixture/vision", "fixture/next"}}

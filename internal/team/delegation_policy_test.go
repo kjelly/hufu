@@ -21,6 +21,7 @@ func newDelegationPolicyCoordinator(policy agent.DelegationPolicy) *Coordinator 
 }
 
 func TestDelegationPolicyRejectsOneTaskBeforeConfiguredInitialBatch(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{
 		InitialBatch:             []string{"reader", "probe"},
 		RequireExactInitialBatch: true,
@@ -40,6 +41,7 @@ func TestDelegationPolicyRejectsOneTaskBeforeConfiguredInitialBatch(t *testing.T
 }
 
 func TestDelegationPolicyRejectsWorksetRedispatchBeforeTodoCreation(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{})
 	receipt := &WorksetExpansionReceipt{
 		WorksetID:    "workset-existing",
@@ -71,6 +73,7 @@ func TestDelegationPolicyRejectsWorksetRedispatchBeforeTodoCreation(t *testing.T
 }
 
 func TestDelegationPolicyBindsInitialStaticExecutionContract(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{
 		InitialBatch:             []string{"reader", "probe"},
 		RequireExactInitialBatch: true,
@@ -90,6 +93,7 @@ func TestDelegationPolicyBindsInitialStaticExecutionContract(t *testing.T) {
 }
 
 func TestDelegationPolicyRejectsGoalInvariantBeforeTodoCreation(t *testing.T) {
+	t.Parallel()
 	canonical := "BEGIN CANONICAL\nSPACE\nEND CANONICAL"
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
 		ContractID: "prepare", RequiredLiterals: []string{canonical}, ForbiddenLiterals: []string{"CHECKLIST_DOWN 0"},
@@ -112,6 +116,7 @@ func TestDelegationPolicyRejectsGoalInvariantBeforeTodoCreation(t *testing.T) {
 }
 
 func TestDelegationPolicyChecksInvariantLiteralsInConstraints(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
 		ContractID: "batch", RequiredLiterals: []string{"literal-range"}, ForbiddenLiterals: []string{"sizing"},
 	}}})
@@ -127,6 +132,7 @@ func TestDelegationPolicyChecksInvariantLiteralsInConstraints(t *testing.T) {
 }
 
 func TestDelegationPolicyRejectsRawRangeDiscoveryBeforeTodoCreation(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
 		ContractID: "discovery", RequiredLiterals: []string{"summary"}, ForbiddenLiterals: []string{"raw output"},
 	}}})
@@ -144,6 +150,7 @@ func TestDelegationPolicyRejectsRawRangeDiscoveryBeforeTodoCreation(t *testing.T
 }
 
 func TestDelegationPolicyRejectsExecutionInvariantBeforeTodoCreation(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
 		ContractID:               "freeze",
 		RequiredToolSequence:     []string{"bash", "bash", "submit_result"},
@@ -177,6 +184,7 @@ func TestDelegationPolicyRejectsExecutionInvariantBeforeTodoCreation(t *testing.
 }
 
 func TestDelegationPolicyValidatesCompletedTaskReferenceBeforeTodoCreation(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
 		ContractID: "freeze-audit",
 		RequiredTaskReference: &agent.TaskGoalReference{
@@ -212,6 +220,7 @@ func TestDelegationPolicyValidatesCompletedTaskReferenceBeforeTodoCreation(t *te
 // Constraints -- the same recommended practice as literals -- was therefore
 // rejected as a missing task reference even though it was present.
 func TestDelegationPolicyChecksTaskReferenceInConstraints(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
 		ContractID: "freeze-audit",
 		RequiredTaskReference: &agent.TaskGoalReference{
@@ -230,6 +239,7 @@ func TestDelegationPolicyChecksTaskReferenceInConstraints(t *testing.T) {
 }
 
 func TestDelegationPolicyValidatesDistinctCompletedProducerSetBeforeTodoCreation(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{TaskGoalInvariants: []agent.TaskGoalInvariant{{
 		ContractID: "consensus",
 		RequiredTaskReferences: []agent.TaskGoalReference{
@@ -260,6 +270,7 @@ func TestDelegationPolicyValidatesDistinctCompletedProducerSetBeforeTodoCreation
 }
 
 func TestDelegationPolicyBindsEachRecoverablePartialInitialBatchOnce(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{
 		InitialBatch:             []string{"reader", "probe"},
 		BindInitialTaskContracts: true,
@@ -287,6 +298,7 @@ func TestDelegationPolicyBindsEachRecoverablePartialInitialBatchOnce(t *testing.
 }
 
 func TestDelegationPolicyRejectsConflictingInitialStaticContract(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{
 		InitialBatch:             []string{"reader"},
 		RequireExactInitialBatch: true,
@@ -303,6 +315,7 @@ func TestDelegationPolicyRejectsConflictingInitialStaticContract(t *testing.T) {
 }
 
 func TestDelegationPhaseFreshAndResumedSessionsUseCanonicalTasks(t *testing.T) {
+	t.Parallel()
 	policy := agent.DelegationPolicy{
 		InitialBatch:             []string{"surface"},
 		RequireExactInitialBatch: true,
@@ -327,6 +340,7 @@ func TestDelegationPhaseFreshAndResumedSessionsUseCanonicalTasks(t *testing.T) {
 }
 
 func TestDelegationPhaseDoesNotTrustMemoryClaimOfCompletedInitialTask(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	policy := agent.DelegationPolicy{InitialBatch: []string{"surface"}, RequireExactInitialBatch: true}
 	c := &Coordinator{
@@ -346,6 +360,7 @@ func TestDelegationPhaseDoesNotTrustMemoryClaimOfCompletedInitialTask(t *testing
 }
 
 func TestFreshInitialPhaseWithholdsHistoricalCoordinatorMemory(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	orch := &agent.AgentDef{Name: "coordinator", Role: "coordinator", System: "coordinate safely", Generation: agent.GenerationParams{Model: "test"}}
 	c := &Coordinator{
@@ -390,6 +405,7 @@ func TestFreshInitialPhaseWithholdsHistoricalCoordinatorMemory(t *testing.T) {
 }
 
 func TestSetSessionDataInitialPhaseClearsCoordinatorConversationHistory(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{
 		InitialBatch:             []string{"surface"},
 		RequireExactInitialBatch: true,
@@ -408,6 +424,7 @@ func TestSetSessionDataInitialPhaseClearsCoordinatorConversationHistory(t *testi
 }
 
 func TestFreshSessionDisablesHistoricalMemoryForCoordinatorLifetime(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{})
 	if c.historicalMemoryDisabled() {
 		t.Fatal("ordinary coordinator unexpectedly disables historical memory")
@@ -433,6 +450,7 @@ func TestFreshSessionDisablesHistoricalMemoryForCoordinatorLifetime(t *testing.T
 }
 
 func TestDelegationPhasePersistsWhenInitialBatchIsAccepted(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{
 		InitialBatch:             []string{"surface"},
 		RequireExactInitialBatch: true,
@@ -452,6 +470,7 @@ func TestDelegationPhasePersistsWhenInitialBatchIsAccepted(t *testing.T) {
 }
 
 func TestDelegationPolicyRequiresConfiguredInitialCoordinatorTool(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{InitialCoordinatorTool: "agent"})
 	if got := c.initialCoordinatorToolDenial("", "view"); !strings.Contains(got, "first tool call") {
 		t.Fatalf("initial coordinator tool denial = %q, want a denial", got)
@@ -469,6 +488,7 @@ func TestDelegationPolicyRequiresConfiguredInitialCoordinatorTool(t *testing.T) 
 }
 
 func TestDelegationPolicyRejectsRedispatchAfterSuccessfulTerminalResult(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{
 		NoRedispatchAfterSuccess: []string{"reader", "probe"},
 	})
@@ -491,6 +511,7 @@ func TestDelegationPolicyRejectsRedispatchAfterSuccessfulTerminalResult(t *testi
 }
 
 func TestDelegationPolicyTaskDoneRealWorkerConsumesSlotWithoutTypedResultStatus(t *testing.T) {
+	t.Parallel()
 	cases := map[string]func(*TodoItem){
 		"nil typed result": func(*TodoItem) {},
 		"recovered protocol with empty status": func(item *TodoItem) {
@@ -532,6 +553,7 @@ func TestDelegationPolicyTaskDoneRealWorkerConsumesSlotWithoutTypedResultStatus(
 }
 
 func TestDelegationPolicyRuntimeOwnedSuccessDoesNotConsumeProtectedWorkerSlot(t *testing.T) {
+	t.Parallel()
 	cases := map[string]func(*TodoItem){
 		"action": func(item *TodoItem) {
 			item.Action = &Action{Capability: "structured-actions", Type: "produce-workset"}
@@ -571,6 +593,7 @@ func TestDelegationPolicyRuntimeOwnedSuccessDoesNotConsumeProtectedWorkerSlot(t 
 }
 
 func TestDelegationPolicyRepairIgnoresRuntimeOwnedTaskStates(t *testing.T) {
+	t.Parallel()
 	resolutionStatuses := map[string]TaskStatus{
 		"done":       TaskDone,
 		"skipped":    TaskSkipped,
@@ -620,6 +643,7 @@ func TestDelegationPolicyRepairIgnoresRuntimeOwnedTaskStates(t *testing.T) {
 }
 
 func TestDelegationPolicyRepairDoesNotTrustUnverifiedResolutionLabel(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{"superseded", "reconciled", "waived"} {
 		t.Run(status, func(t *testing.T) {
 			tracker := NewTaskTracker()
@@ -637,6 +661,7 @@ func TestDelegationPolicyRepairDoesNotTrustUnverifiedResolutionLabel(t *testing.
 }
 
 func TestDelegationPolicyRepairRealWorkerStillBlocksRuntimeMixedRedispatch(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	worker := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "completed review"}})[0]
 	worker.TypedResult = &TaskResult{Agent: worker.Agent, Status: TaskResultStatusSuccess, Source: "submitted"}
@@ -670,6 +695,7 @@ func (delegationWorksetActionProvider) Execute(ctx context.Context, _ Action) (i
 }
 
 func TestDelegationPolicyAdmitsRuntimeProducerFanOutAndPreservesFinish(t *testing.T) {
+	t.Parallel()
 	const worksetSize = 3
 	session := &TeamSession{
 		Workspace: t.TempDir(),
@@ -812,6 +838,7 @@ func TestDelegationPolicyAdmitsRuntimeProducerFanOutAndPreservesFinish(t *testin
 }
 
 func TestDelegationPolicyRejectsWorkerOutsideAllowlist(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{
 		AllowedWorkers: []string{"reader", "probe"},
 	})
@@ -825,6 +852,7 @@ func TestDelegationPolicyRejectsWorkerOutsideAllowlist(t *testing.T) {
 }
 
 func TestDelegationPolicyRejectsForbiddenContextFiles(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{ForbidContextFiles: true})
 	_, err := c.ExecuteTasks(context.Background(), []TaskDef{{
 		Agent:        "reader",
@@ -840,6 +868,7 @@ func TestDelegationPolicyRejectsForbiddenContextFiles(t *testing.T) {
 }
 
 func TestDelegationPolicySerializesConcurrentStateChangingTasks(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Agents: map[string]*agent.AgentDef{

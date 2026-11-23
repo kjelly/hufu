@@ -9,6 +9,7 @@ import "testing"
 // dispositions is covered by retry_loop_test.go.
 
 func TestDecideRecoveryEarlyBreakPaths(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   RecoveryDecisionInput
@@ -51,6 +52,7 @@ func TestDecideRecoveryEarlyBreakPaths(t *testing.T) {
 }
 
 func TestDecideRecoveryAllowsBoundedReplayAfterProvenReadOnlyProtocolFailure(t *testing.T) {
+	t.Parallel()
 	in := RecoveryDecisionInput{
 		FailureClass:        FailureProtocol,
 		ProtocolFailure:     true,
@@ -75,6 +77,7 @@ func TestDecideRecoveryAllowsBoundedReplayAfterProvenReadOnlyProtocolFailure(t *
 // replayable tasks when no early-break path triggers, including the resolved
 // recovery policy and the evidence gate.
 func TestDecideRecoveryClassBasedDisposition(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name               string
 		class              TaskFailureClass
@@ -125,6 +128,7 @@ func TestDecideRecoveryClassBasedDisposition(t *testing.T) {
 // TestDecideRecoveryCancelledPrecedence: cancellation, whether from the parent
 // context or the FailureCancelled class, is never retried.
 func TestDecideRecoveryCancelledPrecedence(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   RecoveryDecisionInput
@@ -147,6 +151,7 @@ func TestDecideRecoveryCancelledPrecedence(t *testing.T) {
 // TestDecideRecoveryBudgetExhausted: once attempt >= maxRetries a retryable
 // failure stops, while non-retry classes keep their own disposition.
 func TestDecideRecoveryBudgetExhausted(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   RecoveryDecisionInput
@@ -171,6 +176,7 @@ func TestDecideRecoveryBudgetExhausted(t *testing.T) {
 // TestDecideRecoveryReasonNonEmpty: every disposition carries a reason the
 // retry loop can report.
 func TestDecideRecoveryReasonNonEmpty(t *testing.T) {
+	t.Parallel()
 	inputs := []RecoveryDecisionInput{
 		{TerminalBlocked: true, Replayable: true, Attempt: 1, MaxRetries: 3},
 		{ProtocolFailure: true, Replayable: false, Attempt: 1, MaxRetries: 3},
@@ -204,6 +210,7 @@ func TestDecideRecoveryReasonNonEmpty(t *testing.T) {
 // normalized failure fingerprints, falling back to SameFailureRepeated only
 // when no fingerprints are available.
 func TestDecideRecoveryFingerprintRepeatDetection(t *testing.T) {
+	t.Parallel()
 	// "attempt N" is volatile and normalized away, so differently formatted
 	// errors share one digest.
 	first := NewFailureFingerprint("task-1", "worker", "verify:test", FailureExecution, "attempt 1 failed: timeout").Digest
@@ -248,6 +255,7 @@ func TestDecideRecoveryFingerprintRepeatDetection(t *testing.T) {
 // TestDecideRecoveryAcceptanceMatrix maps the §11 acceptance scenarios of the
 // generic task reliability design to dispositions.
 func TestDecideRecoveryAcceptanceMatrix(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   RecoveryDecisionInput
@@ -274,6 +282,7 @@ func TestDecideRecoveryAcceptanceMatrix(t *testing.T) {
 }
 
 func TestDispositionPredicates(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		disposition RetryDisposition
 		isRetry     bool

@@ -26,6 +26,7 @@ func disciplinePolicy(commit CommitGatePolicy, stop StopPolicy, replan ReplanPol
 // no-ops. This is the compatibility guarantee for every team that has not
 // adopted decision profiles.
 func TestDisciplineHooksAreNoOpsWhenUnarmed(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	if denial := c.commitGateDenial(context.Background(), "todo-1", "bash", `{"command":"touch out.txt"}`); denial != "" {
 		t.Fatalf("unarmed commit gate denied a tool: %q", denial)
@@ -45,6 +46,7 @@ func TestDisciplineHooksAreNoOpsWhenUnarmed(t *testing.T) {
 }
 
 func TestCheckpointSchedulerOutcomesProjectCanonicalTodoState(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name       string
 		action     string
@@ -77,6 +79,7 @@ func TestCheckpointSchedulerOutcomesProjectCanonicalTodoState(t *testing.T) {
 }
 
 func TestCheckpointSchedulerOffProfileLeavesTodoUntouched(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	tracker.TodoList().Restore([]*TodoItem{{ID: "todo-1", Status: TaskInProgress}})
 	c := disciplineCoordinator(t)
@@ -90,6 +93,7 @@ func TestCheckpointSchedulerOffProfileLeavesTodoUntouched(t *testing.T) {
 }
 
 func TestSubmitResultCriticalContradictionCannotCommitSuccess(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	c.executionRunID = "checkpoint-submit"
 	c.taskTracker = NewTaskTracker()
@@ -119,6 +123,7 @@ func TestSubmitResultCriticalContradictionCannotCommitSuccess(t *testing.T) {
 }
 
 func TestCheckpointReplanRejectsLateWorkerResultAndError(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	c.executionRunID = "checkpoint-stale-worker"
 	c.taskTracker = NewTaskTracker()
@@ -145,6 +150,7 @@ func TestCheckpointReplanRejectsLateWorkerResultAndError(t *testing.T) {
 }
 
 func TestCheckpointPauseIsNotCrashResumedButOrdinaryPauseIs(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	c.taskTracker = NewTaskTracker()
 	c.taskTracker.TodoList().Restore([]*TodoItem{
@@ -158,6 +164,7 @@ func TestCheckpointPauseIsNotCrashResumedButOrdinaryPauseIs(t *testing.T) {
 }
 
 func TestCheckpointLifecycleProvenanceSurvivesEventReplay(t *testing.T) {
+	t.Parallel()
 	created := &TodoItem{ID: "todo-1", Agent: "worker", Desc: "replay checkpoint", Status: TaskInProgress, Model: "fast", OccurrenceRevision: 1, DispatchID: "dispatch-old"}
 	paused := cloneTodoItem(created)
 	paused.Status = TaskPaused
@@ -182,6 +189,7 @@ func TestCheckpointLifecycleProvenanceSurvivesEventReplay(t *testing.T) {
 }
 
 func TestCheckpointReadsMaterialEvidenceChangeFromDecisionJournal(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	journal := c.eventJournal.(*memoryJournal)
 	if err := appendDecisionEvent(context.Background(), journal, agent.EventDecisionEvidenceSealed, decisionEvent{
@@ -203,6 +211,7 @@ func TestCheckpointReadsMaterialEvidenceChangeFromDecisionJournal(t *testing.T) 
 }
 
 func TestCheckpointPauseWithoutJournalKeepsFullOccurrenceProjection(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "no-journal checkpoint"}})[0]
 	if err := c.CommitTaskTransition(context.Background(), item.ID, TaskPending, TaskInProgress, "started", "", nil); err != nil {
@@ -222,6 +231,7 @@ func TestCheckpointPauseWithoutJournalKeepsFullOccurrenceProjection(t *testing.T
 // Arming fails closed when the profile requires kill criteria and the task
 // declared none: stop conditions must exist before resources are spent.
 func TestArmDisciplineRequiresKillCriteria(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	policy := disciplinePolicy(CommitGatePolicy{}, StopPolicy{RequireKillCriteria: true}, ReplanPolicy{})
 
@@ -235,6 +245,7 @@ func TestArmDisciplineRequiresKillCriteria(t *testing.T) {
 }
 
 func TestArmDisciplinePreservesDecisionProfileProjection(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	journal := c.eventJournal.(*memoryJournal)
 	if err := appendDecisionEvent(context.Background(), journal, agent.EventDecisionStarted, decisionEvent{
@@ -274,6 +285,7 @@ func TestArmDisciplinePreservesDecisionProfileProjection(t *testing.T) {
 // A blocked commit gate denies the tool before it starts, and the denial is
 // recorded (spec §30.2, test matrix L).
 func TestCommitGateDeniesBeforeToolStart(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	journal := c.eventJournal.(*memoryJournal)
 
@@ -299,6 +311,7 @@ func TestCommitGateDeniesBeforeToolStart(t *testing.T) {
 // A satisfied gate allows the tool and is not re-evaluated per call for that
 // same tool.
 func TestCommitGateAllowsSatisfiedTask(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	journal := c.eventJournal.(*memoryJournal)
 
@@ -323,6 +336,7 @@ func TestCommitGateAllowsSatisfiedTask(t *testing.T) {
 // A task whose side-effect class is not guarded is outside the gate's scope
 // entirely, even when it invokes a mutating tool.
 func TestCommitGateIgnoresNonMutatingTasks(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	task := TaskDef{ID: "t1", SideEffect: SideEffectNone}
 	policy := disciplinePolicy(CommitGatePolicy{RequireReconcile: true, RequireEvidence: true}, StopPolicy{}, ReplanPolicy{})
@@ -338,6 +352,7 @@ func TestCommitGateIgnoresNonMutatingTasks(t *testing.T) {
 // The checkpoint fires on the configured cadence and stops the task; once
 // stopped, further tool calls are refused rather than continuing on momentum.
 func TestCheckpointStopsTaskAndRefusesFurtherCalls(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	journal := c.eventJournal.(*memoryJournal)
 
@@ -374,6 +389,7 @@ func TestCheckpointStopsTaskAndRefusesFurtherCalls(t *testing.T) {
 // A checkpoint that decides to replan records a replan event rather than a
 // kill, so the two outcomes stay distinguishable in the log.
 func TestCheckpointReplanEmitsReplanEvent(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	journal := c.eventJournal.(*memoryJournal)
 
@@ -404,6 +420,7 @@ func TestCheckpointReplanEmitsReplanEvent(t *testing.T) {
 // model whether its assumptions still hold would turn execution into a second
 // inference loop (spec §29.1).
 func TestCheckpointMakesNoModelCalls(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	policy := disciplinePolicy(CommitGatePolicy{}, StopPolicy{
 		CheckpointEvery: 1,
@@ -432,6 +449,7 @@ func TestCheckpointMakesNoModelCalls(t *testing.T) {
 // Disarming releases the contract so a later task is not governed by an
 // earlier one's stop policy.
 func TestDisarmDiscipline(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	policy := disciplinePolicy(CommitGatePolicy{RequireReconcile: true}, StopPolicy{}, ReplanPolicy{})
 	task := TaskDef{ID: "t1", SideEffect: SideEffectInfraMutation}
@@ -451,6 +469,7 @@ func TestDisarmDiscipline(t *testing.T) {
 // A checkpoint that decides to replan because the decision's own assumptions
 // failed must also supersede the decision, once (spec §31, §35).
 func TestCheckpointReplanMarksTheDecisionStale(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	journal := c.eventJournal.(*memoryJournal)
 
@@ -488,6 +507,7 @@ func TestCheckpointReplanMarksTheDecisionStale(t *testing.T) {
 // A kill criterion is not an invalidated decision: the plan was fine, the
 // budget ran out. It must not mark the decision stale.
 func TestKillCriterionDoesNotMarkTheDecisionStale(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	journal := c.eventJournal.(*memoryJournal)
 
@@ -514,6 +534,7 @@ func TestKillCriterionDoesNotMarkTheDecisionStale(t *testing.T) {
 // classified must stop rather than run on over state nobody can account for
 // (spec §38.3, DoD "side-effect crash reconciles before retry").
 func TestCheckpointStopsOnUnknownSideEffectState(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "deployer", Desc: "create the bridge"}})
 	todoID := items[0].ID
@@ -539,6 +560,7 @@ func TestCheckpointStopsOnUnknownSideEffectState(t *testing.T) {
 // A classified outcome is not a reason to stop: complete, partial and
 // not-started are all accountable states.
 func TestCheckpointContinuesOnClassifiedSideEffectState(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"", RecoveryStateComplete, RecoveryStatePartial, RecoveryStateNotStarted} {
 		c := dispatchCoordinator(t, dispatchConfig())
 		items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "deployer", Desc: "create the bridge"}})
@@ -558,6 +580,7 @@ func TestCheckpointContinuesOnClassifiedSideEffectState(t *testing.T) {
 }
 
 func TestTaskRecoveryStateDefaultsToEmpty(t *testing.T) {
+	t.Parallel()
 	c := dispatchCoordinator(t, dispatchConfig())
 	if got := c.taskRecoveryState("unknown-todo"); got != "" {
 		t.Fatalf("taskRecoveryState = %q, want empty", got)

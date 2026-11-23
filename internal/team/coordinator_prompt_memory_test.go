@@ -9,6 +9,7 @@ import (
 )
 
 func TestDefaultCoordinatorPromptOmitsMemoryMutationAliases(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "team"}, Agents: map[string]*agent.AgentDef{
 			"coordinator": {Name: "coordinator", Role: "coordinator", Tools: "all"},
@@ -28,6 +29,7 @@ func TestDefaultCoordinatorPromptOmitsMemoryMutationAliases(t *testing.T) {
 }
 
 func TestCoordinatorRuntimeGuidanceTreatsArtifactsAsOutputStaging(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	session := &TeamSession{
 		Workspace: workspace,
@@ -73,6 +75,7 @@ func TestCoordinatorRuntimeGuidanceTreatsArtifactsAsOutputStaging(t *testing.T) 
 }
 
 func TestCoordinatorPromptDisplaysCanonicalResolvedRunInputs(t *testing.T) {
+	t.Parallel()
 	snapshot := mustRunInputSnapshot(t, []RunInputDefinition{{
 		Name: "review.scope", Schema: RunInputSchema{Type: "object"}, Required: true,
 	}}, []RunInputAssignment{{
@@ -102,6 +105,7 @@ func TestCoordinatorPromptDisplaysCanonicalResolvedRunInputs(t *testing.T) {
 }
 
 func TestCoordinatorPromptMatchesDelegationAllowlist(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{
 			Name:       "review-team",
@@ -124,6 +128,7 @@ func TestCoordinatorPromptMatchesDelegationAllowlist(t *testing.T) {
 }
 
 func TestCoordinatorPromptDescribesOptedInAliasAsCandidate(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "team"}, Agents: map[string]*agent.AgentDef{
 			"coordinator": {Name: "coordinator", Role: "coordinator", Tools: "ltm_update"},

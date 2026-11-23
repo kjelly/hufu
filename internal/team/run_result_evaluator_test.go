@@ -10,6 +10,7 @@ import (
 )
 
 func TestEvaluateRunOutcome(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		goalMode   GoalMode
@@ -59,6 +60,7 @@ func TestEvaluateRunOutcome(t *testing.T) {
 }
 
 func TestUnresolvedTaskReferencesProjectRecoveryAction(t *testing.T) {
+	t.Parallel()
 	items := []*TodoItem{{
 		ID: "task-7", Agent: "reviewer", Status: TaskError,
 		FailureEvent: &FailureEventPayload{FailureClass: FailureExecution, RetryDisposition: ReplanRequired, Summary: "attempt budget exceeded"},
@@ -76,6 +78,7 @@ func TestUnresolvedTaskReferencesProjectRecoveryAction(t *testing.T) {
 }
 
 func TestEvaluateRunOutcomeGoalModes(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		goalMode   GoalMode
@@ -208,6 +211,7 @@ func TestEvaluateRunOutcomeGoalModes(t *testing.T) {
 }
 
 func TestToTaskReferencePreservesFailureClass(t *testing.T) {
+	t.Parallel()
 	ref := toTaskReference(&TodoItem{
 		ID:     "blocked-1",
 		Status: TaskBlocked,
@@ -222,6 +226,7 @@ func TestToTaskReferencePreservesFailureClass(t *testing.T) {
 }
 
 func TestAcceptanceNotConfiguredIsNotPassed(t *testing.T) {
+	t.Parallel()
 	result := &AcceptanceResult{State: AcceptanceNotConfigured}
 	if result.State == AcceptancePassed || result.Passed {
 		t.Fatalf("not-configured acceptance must not be represented as passed: %#v", result)
@@ -229,6 +234,7 @@ func TestAcceptanceNotConfiguredIsNotPassed(t *testing.T) {
 }
 
 func TestAcceptanceSerializationCanonicalizesPassedBit(t *testing.T) {
+	t.Parallel()
 	raw, err := json.Marshal(AcceptanceResult{State: AcceptanceNotConfigured, Passed: true})
 	if err != nil {
 		t.Fatal(err)
@@ -246,6 +252,7 @@ func TestAcceptanceSerializationCanonicalizesPassedBit(t *testing.T) {
 }
 
 func TestRunOutcomeErrorPreservesCanonicalExitCode(t *testing.T) {
+	t.Parallel()
 	cause := errors.New("acceptance failed")
 	result := &RunResult{Outcome: RunOutcomePartial, ExitCode: 7}
 	err := WrapRunOutcomeError(cause, result)
@@ -262,6 +269,7 @@ func TestRunOutcomeErrorPreservesCanonicalExitCode(t *testing.T) {
 }
 
 func TestRunResultStatusDataIncludesAcceptanceState(t *testing.T) {
+	t.Parallel()
 	data := runResultStatusData(&RunResult{
 		Outcome:       RunOutcomeCompleted,
 		GoalSatisfied: true,
@@ -280,6 +288,7 @@ func TestRunResultStatusDataIncludesAcceptanceState(t *testing.T) {
 }
 
 func TestRunCompletionErrorDistinguishesUnresolvedTasksFromOtherFailures(t *testing.T) {
+	t.Parallel()
 	unresolved := runCompletionError(&RunResult{Outcome: RunOutcomePartial, StopReason: StopReasonUnresolvedTasks, Stats: RunStats{TasksUnresolved: 2}})
 	if !errors.Is(unresolved, ErrTasksUnresolved) {
 		t.Fatalf("unresolved error = %v, want ErrTasksUnresolved", unresolved)
@@ -292,6 +301,7 @@ func TestRunCompletionErrorDistinguishesUnresolvedTasksFromOtherFailures(t *test
 }
 
 func TestRunCompletionErrorPreservesUnverifiedResultForPresentation(t *testing.T) {
+	t.Parallel()
 	result := &RunResult{Outcome: RunOutcomeUnverified, StopReason: StopReasonAcceptanceNotSet, ExitCode: 7}
 	err := runCompletionError(result)
 	outcomeErr, ok := errors.AsType[*RunOutcomeError](err)
@@ -304,6 +314,7 @@ func TestRunCompletionErrorPreservesUnverifiedResultForPresentation(t *testing.T
 }
 
 func TestAggregateRunResultsUsesCanonicalPrecedence(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		results    []*RunResult
@@ -329,6 +340,7 @@ func TestAggregateRunResultsUsesCanonicalPrecedence(t *testing.T) {
 }
 
 func TestAggregateRunResultsMixedGoalModesAndUnresolvedFolding(t *testing.T) {
+	t.Parallel()
 	t.Run("outcome mode wins over exploratory mode in aggregation regardless of order", func(t *testing.T) {
 		resExploratory := &RunResult{GoalMode: GoalModeExploratory, Outcome: RunOutcomeCompleted}
 		resOutcome := &RunResult{GoalMode: GoalModeOutcome, Outcome: RunOutcomeCompleted, Acceptance: &AcceptanceResult{State: AcceptancePassed}}
@@ -367,6 +379,7 @@ func TestAggregateRunResultsMixedGoalModesAndUnresolvedFolding(t *testing.T) {
 }
 
 func TestAggregateRunResultsDoesNotDoubleCountStats(t *testing.T) {
+	t.Parallel()
 	t.Run("when caller provides non-zero stats, stats are preserved and not double-counted", func(t *testing.T) {
 		result1 := &RunResult{
 			Outcome:  RunOutcomeCompleted,
@@ -439,6 +452,7 @@ func TestAggregateRunResultsDoesNotDoubleCountStats(t *testing.T) {
 }
 
 func TestAggregateRunResultsUsesWinningExitCode(t *testing.T) {
+	t.Parallel()
 	got := AggregateRunResults([]*RunResult{
 		{Outcome: RunOutcomeFailed, ExitCode: 1},
 		{Outcome: RunOutcomePartial, ExitCode: 7},
@@ -467,6 +481,7 @@ func TestAggregateRunResultsUsesWinningExitCode(t *testing.T) {
 }
 
 func TestEvaluateRunOutcomeUnknownAcceptanceFailsClosed(t *testing.T) {
+	t.Parallel()
 	got := EvaluateRunOutcome(RunEvaluationInput{Acceptance: AcceptanceState("unexpected")})
 	if got.Outcome != RunOutcomePartial || got.GoalSatisfied || got.Acceptance == nil || got.Acceptance.State != AcceptanceFailed {
 		t.Fatalf("evaluation = %#v, want partial, unsatisfied, failed acceptance", got)
@@ -474,6 +489,7 @@ func TestEvaluateRunOutcomeUnknownAcceptanceFailsClosed(t *testing.T) {
 }
 
 func TestUnresolvedTaskReferencesIncludesProtocolIncompleteAndUnverifiedWaiver(t *testing.T) {
+	t.Parallel()
 	items := []*TodoItem{
 		{ID: "pending", Status: TaskPending, Agent: "worker"},
 		{ID: "protocol", Status: TaskProtocolIncomplete, Agent: "worker"},
@@ -490,6 +506,7 @@ func TestUnresolvedTaskReferencesIncludesProtocolIncompleteAndUnverifiedWaiver(t
 }
 
 func TestParseGoalMode(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input    string
 		expected GoalMode
@@ -515,6 +532,7 @@ func TestParseGoalMode(t *testing.T) {
 }
 
 func TestFormatCanonicalStatus(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		res      *RunResult
@@ -541,6 +559,7 @@ func TestFormatCanonicalStatus(t *testing.T) {
 }
 
 func TestSetLastRunResultKeepsReviewCompletionDistinctFromFixedAndVerified(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session:     &TeamSession{Config: agent.TeamConfig{Name: "review", GoalMode: "exploratory"}},
 		goalMode:    GoalModeExploratory,

@@ -45,6 +45,7 @@ func newReportStore(t *testing.T) (string, *EventStore) {
 }
 
 func TestRunReportUsesFollowUpCycleRequestAndFreshTasks(t *testing.T) {
+	t.Parallel()
 	dir, store := newReportStore(t)
 	appendReportEvent(t, store, RunEvent{Type: "task_completed", TaskID: "1"}, map[string]any{"id": "1", "status": "done", "output": "previous result"})
 	appendReportEvent(t, store, RunEvent{Type: string(EventWorkflowStateChanged)}, WorkflowStateChangedPayload{State: PhaseDone, PhaseResults: map[Phase]PhaseResult{PhaseVerify: {Status: PhaseStatusSuccess}}})
@@ -63,6 +64,7 @@ func TestRunReportUsesFollowUpCycleRequestAndFreshTasks(t *testing.T) {
 }
 
 func TestRunReportCapturedWithoutExportAndRemainsRunBound(t *testing.T) {
+	t.Parallel()
 	dir, store := newReportStore(t)
 	appendReportEvent(t, store, RunEvent{Type: "user_message_added"}, SessionMessageEventPayload{Role: "user", Content: "調查本次任務"})
 	appendReportEvent(t, store, RunEvent{Type: "task_created", TaskID: "1"}, map[string]any{"id": "1", "status": "pending", "agent": "helper", "desc": "原任務"})
@@ -108,6 +110,7 @@ func TestRunReportCapturedWithoutExportAndRemainsRunBound(t *testing.T) {
 }
 
 func TestRunReportResumeIncludesOnlyTouchedInheritedTasks(t *testing.T) {
+	t.Parallel()
 	dir, store := newReportStore(t)
 	for _, id := range []string{"1", "2"} {
 		appendReportEvent(t, store, RunEvent{Type: "task_created", TaskID: id}, map[string]any{"id": id, "status": "pending", "desc": "contract " + id})
@@ -126,6 +129,7 @@ func TestRunReportResumeIncludesOnlyTouchedInheritedTasks(t *testing.T) {
 }
 
 func TestRunReportForkVisibilityAndSourceRemainStable(t *testing.T) {
+	t.Parallel()
 	dir, store := newReportStore(t)
 	before := appendReportEvent(t, store, RunEvent{Type: "run_finished"}, map[string]any{"outcome": "completed", "response": "parent final"})
 	tree := NewSessionTree()
@@ -154,6 +158,7 @@ func TestRunReportForkVisibilityAndSourceRemainStable(t *testing.T) {
 }
 
 func TestRunReportAtomicFailureAndUnknownCommit(t *testing.T) {
+	t.Parallel()
 	dir, store := newReportStore(t)
 	if _, err := store.store.DB().Exec(`CREATE TRIGGER reject_report BEFORE INSERT ON run_reports BEGIN SELECT RAISE(ABORT, 'injected'); END;`); err != nil {
 		t.Fatal(err)
@@ -188,6 +193,7 @@ func TestRunReportAtomicFailureAndUnknownCommit(t *testing.T) {
 }
 
 func TestRunReportReadOnlyMissingAndTampered(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "missing")
 	if _, err := LoadRunReport(t.Context(), dir, "evt-missing"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing error: %v", err)
@@ -218,6 +224,7 @@ func TestRunReportReadOnlyMissingAndTampered(t *testing.T) {
 }
 
 func TestRunReportPreCaptureSchemaKeepsHistoryReadable(t *testing.T) {
+	t.Parallel()
 	dir, store := newReportStore(t)
 	finish := appendReportEvent(t, store, RunEvent{Type: "run_finished"}, map[string]any{"outcome": "completed", "response": "historical response"})
 	// Reproduce a workspace created before report capture, including its
@@ -260,6 +267,7 @@ func TestRunReportPreCaptureSchemaKeepsHistoryReadable(t *testing.T) {
 }
 
 func TestRunReportCapturesOnlyCanonicalRedactedBytes(t *testing.T) {
+	t.Parallel()
 	_, store := newReportStore(t)
 	finish := appendReportEvent(t, store, RunEvent{Type: "run_finished"}, map[string]any{"outcome": "completed", "response": "api_key=report-super-secret-token"})
 	var body []byte
@@ -272,6 +280,7 @@ func TestRunReportCapturesOnlyCanonicalRedactedBytes(t *testing.T) {
 }
 
 func TestRunReportFreshTaskContractsDoNotInheritReusedIDs(t *testing.T) {
+	t.Parallel()
 	dir, store := newReportStore(t)
 	appendReportEvent(t, store, RunEvent{Type: "task_created", TaskID: "1"}, map[string]any{"id": "1", "status": "pending", "agent": "old-helper", "desc": "OLD_CONTRACT_SENTINEL"})
 	appendReportEvent(t, store, RunEvent{Type: "task_completed", TaskID: "1"}, map[string]any{"id": "1", "status": "done", "output": "OLD_OUTPUT_SENTINEL"})
@@ -293,6 +302,7 @@ func TestRunReportFreshTaskContractsDoNotInheritReusedIDs(t *testing.T) {
 }
 
 func TestRunReportOversizeIsExplicitUnavailableWithoutChangingOutcome(t *testing.T) {
+	t.Parallel()
 	dir, store := newReportStore(t)
 	finish := appendReportEvent(t, store, RunEvent{Type: "run_finished"}, map[string]any{"outcome": "completed", "response": strings.Repeat("x", maxRunReportBytes)})
 	if _, err := LoadRunReport(t.Context(), dir, finish.ID); !errors.Is(err, ErrRunReportUnavailable) {

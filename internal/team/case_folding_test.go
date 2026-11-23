@@ -9,6 +9,7 @@ import (
 )
 
 func TestRecoveryStrategyFoldsCaseWhenDecoded(t *testing.T) {
+	t.Parallel()
 	var fromJSON RecoveryHypothesis
 	if err := json.Unmarshal([]byte(`{"strategy":" Human "}`), &fromJSON); err != nil {
 		t.Fatal(err)
@@ -30,6 +31,7 @@ func TestRecoveryStrategyFoldsCaseWhenDecoded(t *testing.T) {
 }
 
 func TestProposedOptionKindFoldsSpelling(t *testing.T) {
+	t.Parallel()
 	tests := map[string]DecisionOptionKind{
 		"Defer":               OptionDefer,
 		" ABANDON ":           OptionAbandon,
@@ -48,6 +50,7 @@ func TestProposedOptionKindFoldsSpelling(t *testing.T) {
 }
 
 func TestTodoToolFoldsActionAndStatus(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "researcher", Desc: "find bugs"}})
 	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher" })
@@ -65,6 +68,7 @@ func TestTodoToolFoldsActionAndStatus(t *testing.T) {
 }
 
 func TestTerminalArgsFoldVocabulary(t *testing.T) {
+	t.Parallel()
 	args, err := (&terminalTool{}).parseArgs(`{"action":"List","filter":" ALL ","target":"Exit"}`)
 	if err != nil {
 		t.Fatal(err)

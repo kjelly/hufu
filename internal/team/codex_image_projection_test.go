@@ -270,6 +270,9 @@ func TestCodexImageProjectionCancelledWaitPreservesConsumer(t *testing.T) {
 }
 
 func TestCodexImageProjectionRetainsCopiesWhenCleanupIsContended(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	c, ctx, request, hash := codexImageProjectionFixture(t)
 	first, err := newCodexImageProjection(ctx, c, request, hash)
 	if err != nil {
@@ -282,7 +285,9 @@ func TestCodexImageProjectionRetainsCopiesWhenCleanupIsContended(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unlock()
-	first.Close() // Bounded cleanup cannot delete outside the quota lock.
+	cleanupCtx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	first.close(cleanupCtx) // Bounded cleanup cannot delete outside the quota lock.
 	if _, err := os.Lstat(path); err != nil {
 		t.Fatal("contended cleanup lost retained copies", err)
 	}

@@ -11,6 +11,7 @@ import (
 )
 
 func TestAcceptedPayloadHashSurvivesLaterSourceIdentifierDiscovery(t *testing.T) {
+	t.Parallel()
 	compiled, ref := compiledReviewContract(t, true)
 	payload, err := validateStructuredResultPayload(compiled, ref, []byte(`{"verdict":"approve","findings":[{"summary":"DOCUMENT_API_KEY handling is fail-closed; it cannot be verified within this workset"}]}`))
 	if err != nil {

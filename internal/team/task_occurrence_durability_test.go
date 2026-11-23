@@ -54,6 +54,7 @@ func (*taskOccurrenceModelRuntime) ProviderFor(string) (*agent.OpenAICompatibleP
 }
 
 func TestRestoredTodoOccurrenceKeepsCanonicalModelWithoutJournal(t *testing.T) {
+	t.Parallel()
 	runtime := &taskOccurrenceModelRuntime{model: "live-model"}
 	c := &Coordinator{
 		session:      &TeamSession{Workspace: t.TempDir()},
@@ -97,6 +98,7 @@ func TestRestoredTodoOccurrenceKeepsCanonicalModelWithoutJournal(t *testing.T) {
 }
 
 func TestFreshTodoOccurrenceRetainsExtraModelsFanout(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker(), sessionData: NewSession()}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
 		Agent: "worker", Desc: "fresh task", Model: "fresh-model",
@@ -112,6 +114,7 @@ func TestFreshTodoOccurrenceRetainsExtraModelsFanout(t *testing.T) {
 }
 
 func TestEphemeralTodoExecutionPreservesSuppliedTaskDef(t *testing.T) {
+	t.Parallel()
 	c, store, calls := newOccurrenceExecutionCoordinator(t)
 	// Keep the Todo ephemeral even though the shared helper normally wires a
 	// durable store for its other occurrence tests.
@@ -169,6 +172,7 @@ func TestEphemeralTodoExecutionPreservesSuppliedTaskDef(t *testing.T) {
 }
 
 func TestExecuteTasksFreezesConfiguredModelTopologyBeforeExecution(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{
 		Workspace: t.TempDir(),
 		Config:    agent.TeamConfig{Name: "topology-test"},
@@ -202,6 +206,7 @@ func TestExecuteTasksFreezesConfiguredModelTopologyBeforeExecution(t *testing.T)
 }
 
 func TestExecuteTasksExecutesOverlappingRecordedModelTopologyOncePerConfiguredModel(t *testing.T) {
+	t.Parallel()
 	worker := &taskOccurrenceModelRecordingAgent{entered: make(chan struct{}, 3), release: make(chan struct{})}
 	session := &TeamSession{
 		Workspace: t.TempDir(),
@@ -263,6 +268,7 @@ func TestExecuteTasksExecutesOverlappingRecordedModelTopologyOncePerConfiguredMo
 }
 
 func TestDecisionEnabledFanoutSharesParentIndexForConcurrentLeaves(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-decision-fanout", "session-decision-fanout")
 	if err != nil {
@@ -332,6 +338,7 @@ func TestDecisionEnabledFanoutSharesParentIndexForConcurrentLeaves(t *testing.T)
 }
 
 func TestTaskOccurrenceModelTopologySurvivesEventReplayAndShadow(t *testing.T) {
+	t.Parallel()
 	item := todoItemFromSpec(TodoSpec{
 		Agent:         "worker",
 		Desc:          "durable fanout",
@@ -372,6 +379,7 @@ func TestTaskOccurrenceModelTopologySurvivesEventReplayAndShadow(t *testing.T) {
 }
 
 func TestTaskOccurrenceRetryKeepsRecordedModelTopology(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-topology", "session-topology")
 	if err != nil {
@@ -408,6 +416,7 @@ func TestTaskOccurrenceRetryKeepsRecordedModelTopology(t *testing.T) {
 }
 
 func TestTaskOccurrenceDigestIncludesFinalizedEdgesAndWorkset(t *testing.T) {
+	t.Parallel()
 	receipt := &WorksetExpansionReceipt{
 		WorksetID: "workset-1", ParentTaskID: "parent", SourceArtifactID: "source",
 		SourceSHA256: "source-digest", ItemCount: 1, ItemKeysSHA256: "keys",
@@ -461,6 +470,7 @@ func TestTaskOccurrenceDigestIncludesFinalizedEdgesAndWorkset(t *testing.T) {
 }
 
 func TestDurableTaskCreationRejectsImmutableOccurrenceTampering(t *testing.T) {
+	t.Parallel()
 	hypothesis := &RecoveryHypothesis{
 		ObservedFailure: "the first attempt failed", HypothesizedCause: "invalid input",
 		ProposedChange: "validate input", DifferenceFromPrior: "new validation", ExpectedChange: "exit 0",
@@ -515,6 +525,7 @@ func TestDurableTaskCreationRejectsImmutableOccurrenceTampering(t *testing.T) {
 }
 
 func TestTaskTransitionAuditProjectionBindsImmutableExecutionAndRecovery(t *testing.T) {
+	t.Parallel()
 	base := &TodoItem{
 		ID: "task-audit", Agent: "worker", Desc: "execute", Status: TaskPending,
 		Action: &Action{Capability: "deploy", Type: "apply", Payload: "release"},
@@ -543,6 +554,7 @@ func TestTaskTransitionAuditProjectionBindsImmutableExecutionAndRecovery(t *test
 }
 
 func TestDurableTaskCreationRejectsMarkerlessAndMismatchedAdmission(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-admission", "session-admission")
 	if err != nil {
@@ -594,6 +606,7 @@ func TestDurableTaskCreationRejectsMarkerlessAndMismatchedAdmission(t *testing.T
 }
 
 func TestExtraModelLeafUsesPinnedParentDecisionControlPlane(t *testing.T) {
+	t.Parallel()
 	parentWorkspace := t.TempDir()
 	store, err := NewEventStore(parentWorkspace, "run-parent-control", "session-parent-control")
 	if err != nil {

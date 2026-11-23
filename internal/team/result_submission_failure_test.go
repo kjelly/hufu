@@ -17,6 +17,7 @@ func failureResponseSteps(response fantasy.ToolResponse) []fantasy.StepResult {
 }
 
 func TestSubmissionFailureClassificationUsesRuntimeMetadata(t *testing.T) {
+	t.Parallel()
 	for _, reason := range []RepairFailureReason{RepairFailureInvalidSchema, RepairFailureSource, RepairFailureContract, RepairFailureCommit} {
 		t.Run(string(reason), func(t *testing.T) {
 			response := submissionFailureResponse(reason, "model-controlled prose says invalid_schema")
@@ -33,6 +34,7 @@ func TestSubmissionFailureClassificationUsesRuntimeMetadata(t *testing.T) {
 }
 
 func TestSubmissionGateClassifiesActualRejections(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"schema", "receipt", "commit"} {
 		t.Run(mode, func(t *testing.T) {
 			c, item, ctx, _ := resultCandidateFixture(t)
@@ -63,6 +65,7 @@ func TestSubmissionGateClassifiesActualRejections(t *testing.T) {
 }
 
 func TestNonFormatSubmissionDoesNotStartAnotherRepair(t *testing.T) {
+	t.Parallel()
 	c, _ := resumeEvidenceFixture(t, true)
 	worker := scriptWorker(failTurn(errors.New("worker forbidden")))
 	c.workerAgentOverride = worker
@@ -110,6 +113,7 @@ func invalidReceiptSubmissionTurn(t *testing.T, c *Coordinator, id string) scrip
 }
 
 func TestWorkerNonFormatSubmissionDoesNotStartRepair(t *testing.T) {
+	t.Parallel()
 	c, id, task := toolEvidenceRepairFixture(t)
 	worker := scriptWorker(invalidReceiptSubmissionTurn(t, c, id))
 	repair := scriptWorker(failTurn(errors.New("model repair forbidden")))

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/runtimestore"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // branchSwitchFixture is a workspace with main and a sibling branch, a live
@@ -90,6 +92,7 @@ func (s runtimeStateSnapshot) equal(other runtimeStateSnapshot) bool {
 // after the documents were written, no branch row, document, or active
 // branch changes, and the caller's tree is restored.
 func TestBranchSwitchCommitsAllOrNothing(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		run  func(workspace string, st *SessionTree, es *EventStore) error
@@ -108,13 +111,16 @@ func TestBranchSwitchCommitsAllOrNothing(t *testing.T) {
 			workspace, st, es := branchSwitchFixture(t)
 			before := snapshotRuntimeState(t, workspace)
 			treeBefore := cloneSessionTree(st)
-			injected := errors.New("injected commit failure")
-			previous := runtimeBatchCommitStage
-			runtimeBatchCommitStage = func() error { return injected }
-			t.Cleanup(func() { runtimeBatchCommitStage = previous })
-
-			if err := tt.run(workspace, st, es); !errors.Is(err, injected) {
-				t.Fatalf("switch error = %v, want the injected failure", err)
+			// Fail the last write in this fixture's transaction, after the
+			// branch rows and documents have both been staged in SQLite.
+			if err := es.store.Exec(t.Context(), `CREATE TRIGGER refuse_branch_switch
+				BEFORE UPDATE ON session_tree_head
+				BEGIN SELECT RAISE(ABORT, 'fixture rejected active branch'); END`); err != nil {
+				t.Fatal(err)
+			}
+			err := tt.run(workspace, st, es)
+			if constraint, ok := errors.AsType[*sqlite.Error](err); !ok || constraint.Code() != sqlite3.SQLITE_CONSTRAINT_TRIGGER {
+				t.Fatalf("switch error = %v, want the fixture's trigger failure", err)
 			}
 			if after := snapshotRuntimeState(t, workspace); !before.equal(after) {
 				t.Fatalf("failed switch changed runtime state:\nbefore %+v\nafter  %+v", before, after)
@@ -123,7 +129,9 @@ func TestBranchSwitchCommitsAllOrNothing(t *testing.T) {
 				t.Fatalf("failed switch left the caller's tree changed: active %q with %d branches", st.ActiveBranch, len(st.Branches))
 			}
 
-			runtimeBatchCommitStage = previous
+			if err := es.store.Exec(t.Context(), `DROP TRIGGER refuse_branch_switch`); err != nil {
+				t.Fatal(err)
+			}
 			if err := tt.run(workspace, st, es); err != nil {
 				t.Fatalf("switch after the failure: %v", err)
 			}
@@ -173,6 +181,7 @@ func countBranchWrites(t *testing.T, workspace string) func() []string {
 // TestBranchStateWritesTouchOnlyTheirRows pins that a fork writes only the
 // forked-from and new branch rows, and a checkpoint only the active row.
 func TestBranchStateWritesTouchOnlyTheirRows(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		write func(workspace string, st *SessionTree, es *EventStore) error
@@ -201,6 +210,7 @@ func TestBranchStateWritesTouchOnlyTheirRows(t *testing.T) {
 }
 
 func TestForkSessionBranchUsesSelectedTaskHistory(t *testing.T) {
+	t.Parallel()
 	for _, target := range []string{"empty", "before_task", "active_head"} {
 		t.Run(target, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -269,6 +279,7 @@ func TestForkSessionBranchUsesSelectedTaskHistory(t *testing.T) {
 }
 
 func TestForkBeforeCompactionClearsFutureSummary(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	es, err := NewEventStore(workspace, "run-fork", "session-fork")
 	if err != nil {
@@ -306,6 +317,7 @@ func TestForkBeforeCompactionClearsFutureSummary(t *testing.T) {
 }
 
 func TestSnapshotBranchStateClearsEmptyTaskPlan(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	st := NewSessionTree()
 	st.Branches["main"].State.TaskPlan = []*TodoItem{{ID: "stale", Status: TaskDone}}
@@ -322,6 +334,7 @@ func TestSnapshotBranchStateClearsEmptyTaskPlan(t *testing.T) {
 // tree: labels and branch fields survive a reload, a branch removed from a
 // loaded tree is deleted, and a tree built in memory replaces the stored one.
 func TestSessionTreeRoundTripsAndDropsRemovedBranches(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	st := NewSessionTree()
 	child, err := st.CreateBranch("child", "", nil)

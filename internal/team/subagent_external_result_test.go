@@ -36,6 +36,7 @@ func scopedAttemptRequest(provider, taskID string) AttemptRequest {
 // decode, and the canonical result's identity always comes from
 // AttemptRequest regardless of what a well-formed proposal claims.
 func TestExternalProviderCannotSetTaskID(t *testing.T) {
+	t.Parallel()
 	for _, key := range []string{`"task_id":"forged-task"`, `"run_id":"forged-run"`, `"attempt":99`, `"agent":"forged-agent"`} {
 		if _, err := DecodeWorkerResultProposal([]byte(validProposalJSON(key))); err == nil {
 			t.Fatalf("decode accepted forged field %s, want strict rejection", key)
@@ -67,6 +68,7 @@ func TestExternalProviderCannotSetTaskID(t *testing.T) {
 // and canonicalization never populates ReceiptIDs (§9.1, §19: "populated
 // only later by Hufu-owned logic").
 func TestExternalProviderCannotForgeReceipt(t *testing.T) {
+	t.Parallel()
 	if _, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"receipt_ids":["forged-receipt"]`))); err == nil {
 		t.Fatal("decode accepted a forged receipt_ids field")
 	}
@@ -87,6 +89,7 @@ func TestExternalProviderCannotForgeReceipt(t *testing.T) {
 // TestExternalProviderCannotForgeEvidence proves EvidenceRef (with its
 // SystemHMAC) is unreachable through the proposal.
 func TestExternalProviderCannotForgeEvidence(t *testing.T) {
+	t.Parallel()
 	if _, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"evidence":[{"type":"forged","description":"forged"}]`))); err == nil {
 		t.Fatal("decode accepted a forged evidence field")
 	}
@@ -108,6 +111,7 @@ func TestExternalProviderCannotForgeEvidence(t *testing.T) {
 // unreachable through the proposal, and Verification is only ever populated
 // by Hufu's own later verification step, never by canonicalization.
 func TestExternalProviderCannotForgeVerification(t *testing.T) {
+	t.Parallel()
 	if _, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"verification":[{"exit_code":0}]`))); err == nil {
 		t.Fatal("decode accepted a forged verification field")
 	}
@@ -126,6 +130,7 @@ func TestExternalProviderCannotForgeVerification(t *testing.T) {
 }
 
 func TestExternalProposalInvariantClaimsRemainUntrusted(t *testing.T) {
+	t.Parallel()
 	claimJSON := `"invariant_assessments":[{"invariant_id":"safe","status":"preserved","summary":"checked"}]`
 	proposal, err := DecodeWorkerResultProposal([]byte(validProposalJSON(claimJSON)))
 	if err != nil {
@@ -150,6 +155,7 @@ func TestExternalProposalInvariantClaimsRemainUntrusted(t *testing.T) {
 }
 
 func TestExternalProposalRejectsUnknownFindingSeverity(t *testing.T) {
+	t.Parallel()
 	if _, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"findings":[{"summary":"bad","severity":"critical"}]`))); err == nil {
 		t.Fatal("external proposal accepted unknown finding severity")
 	}
@@ -167,6 +173,7 @@ func TestExternalProposalRejectsUnknownFindingSeverity(t *testing.T) {
 // always comes from Hufu's own observed WorkspaceDelta, computed from actual
 // bytes — never from anything the provider claims.
 func TestExternalProviderCannotForgeArtifactHash(t *testing.T) {
+	t.Parallel()
 	if _, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"proposed_files":[{"path":"out.txt","sha256":"deadbeef"}]`))); err == nil {
 		t.Fatal("decode accepted a forged sha256 field on a proposed file")
 	}
@@ -206,6 +213,7 @@ func TestExternalProviderCannotForgeArtifactHash(t *testing.T) {
 // mentions: an omitted modified file is still recorded, and a fabricated
 // file the delta never observed is not (§19, §9.4).
 func TestExternalResultCanonicalUsesActualWorkspaceDelta(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "real-change.txt"), []byte("v1"), 0o644); err != nil {
 		t.Fatal(err)
@@ -255,6 +263,7 @@ func TestExternalResultCanonicalUsesActualWorkspaceDelta(t *testing.T) {
 // grounded-result task, and is at minimum dropped (never trusted as an
 // artifact) otherwise (§9.4, §SEC-09).
 func TestExternalResultRejectsOutsideWorkspaceArtifact(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	proposal, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"proposed_files":[{"path":"../../etc/passwd"}]`)))
 	if err != nil {
@@ -289,6 +298,7 @@ func TestExternalResultRejectsOutsideWorkspaceArtifact(t *testing.T) {
 // files_read extension: a claimed files_read path that is corroborated by
 // the actually-observed delta becomes a canonical FilesRead entry.
 func TestExternalResultCanonicalizesFilesReadFromDelta(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "reviewed.go"), []byte("package main\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -322,6 +332,7 @@ func TestExternalResultCanonicalizesFilesReadFromDelta(t *testing.T) {
 // provider read it but did not modify it) is still verified — against the
 // live workspace, not the delta alone — and accepted.
 func TestExternalResultCanonicalizesFilesReadFromLiveWorkspace(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "unchanged.go"), []byte("package main\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -342,6 +353,7 @@ func TestExternalResultCanonicalizesFilesReadFromLiveWorkspace(t *testing.T) {
 }
 
 func TestExternalResultRejectsMissingOrMismatchedScopeForWorkspaceFilesRead(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "reviewed.go"), []byte("package main\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -393,6 +405,7 @@ func TestExternalResultRejectsMissingOrMismatchedScopeForWorkspaceFilesRead(t *t
 // grounded-result attempt closed, the same provider_claimed_missing_file
 // treatment §9.4 already gives ProposedFiles.
 func TestExternalResultRejectsFabricatedFilesReadUnderGroundedResult(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	proposal, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"files_read":["never-existed.go"]`)))
 	if err != nil {
@@ -413,6 +426,7 @@ func TestExternalResultRejectsFabricatedFilesReadUnderGroundedResult(t *testing.
 // TestExternalResultDropsFabricatedFilesReadWhenNotGrounded proves the same
 // fabricated claim is merely dropped, not trusted, for a non-grounded task.
 func TestExternalResultDropsFabricatedFilesReadWhenNotGrounded(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	proposal, err := DecodeWorkerResultProposal([]byte(validProposalJSON(`"files_read":["never-existed.go"]`)))
 	if err != nil {
@@ -429,6 +443,7 @@ func TestExternalResultDropsFabricatedFilesReadWhenNotGrounded(t *testing.T) {
 }
 
 func TestExternalResultCanonicalizesOnlyAttemptScopedArtifactReferences(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	store, err := NewFileArtifactStore(root, root)
 	if err != nil {
@@ -531,6 +546,7 @@ func TestExternalResultCanonicalizesOnlyAttemptScopedArtifactReferences(t *testi
 }
 
 func TestExternalResultCanonicalizesCrossRunDuplicateArtifactReference(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	store, err := NewFileArtifactStore(root, root)
 	if err != nil {
@@ -586,6 +602,7 @@ func TestExternalResultCanonicalizesCrossRunDuplicateArtifactReference(t *testin
 }
 
 func TestExternalResultRejectsUnscopedCustomArtifactIDThatCollidesWithWorkspacePath(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	store, err := NewFileArtifactStore(root, root)
 	if err != nil {
@@ -615,6 +632,7 @@ func TestExternalResultRejectsUnscopedCustomArtifactIDThatCollidesWithWorkspaceP
 }
 
 func TestExternalResultCanonicalizesOnlyAttemptScopedManagedSkill(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	store, err := NewFileArtifactStore(root, root)
 	if err != nil {

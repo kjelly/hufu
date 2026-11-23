@@ -59,6 +59,7 @@ func (f *isolatedTeamFixture) interruptedApply(t *testing.T, goal string, crashB
 }
 
 func TestReconcileAttemptWorldsFinishesInterruptedApplies(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		// crashBefore is the lifecycle event the crash prevented.
@@ -127,6 +128,7 @@ func TestReconcileAttemptWorldsFinishesInterruptedApplies(t *testing.T) {
 }
 
 func TestReconcileAttemptWorldsBlocksAnApplyItCannotProve(t *testing.T) {
+	t.Parallel()
 	f := newIsolatedTeamFixture(t, nil)
 	f.write(t, "a.txt", "a before\n")
 	f.write(t, "b.txt", "b before\n")
@@ -150,6 +152,7 @@ func TestReconcileAttemptWorldsBlocksAnApplyItCannotProve(t *testing.T) {
 }
 
 func TestReconcileAttemptWorldsRemovesOnlyOrphans(t *testing.T) {
+	t.Parallel()
 	f := newIsolatedTeamFixture(t, nil)
 	ctx := context.Background()
 
@@ -217,6 +220,7 @@ func TestReconcileAttemptWorldsRemovesOnlyOrphans(t *testing.T) {
 }
 
 func TestIsolatedAttemptMetrics(t *testing.T) {
+	t.Parallel()
 	overlap := newBarrier(2)
 	f := newIsolatedTeamFixture(t, func(c *Coordinator) fantasy.Agent {
 		return &isolatedEditAgent{c: c, edit: func(root, goal string, attempt int) error {
@@ -247,6 +251,7 @@ func TestIsolatedAttemptMetrics(t *testing.T) {
 }
 
 func TestPublicEntryPointReconcilesAttemptWorldsBeforeDispatch(t *testing.T) {
+	t.Parallel()
 	f := newIsolatedTeamFixture(t, func(c *Coordinator) fantasy.Agent {
 		return &isolatedEditAgent{c: c, edit: func(root, _ string, _ int) error {
 			return writeWorldFile(root, "next.txt", "next\n")
@@ -270,6 +275,7 @@ func TestPublicEntryPointReconcilesAttemptWorldsBeforeDispatch(t *testing.T) {
 }
 
 func TestIsolatedTaskBlocksWhenItsWorldCannotBePrepared(t *testing.T) {
+	t.Parallel()
 	workerRuns := 0
 	f := newIsolatedTeamFixture(t, func(c *Coordinator) fantasy.Agent {
 		return &isolatedEditAgent{c: c, edit: func(string, string, int) error { workerRuns++; return nil }}

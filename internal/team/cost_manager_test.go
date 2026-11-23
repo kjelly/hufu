@@ -56,6 +56,7 @@ func newCostEventStore(t *testing.T) (*EventStore, EventJournal) {
 }
 
 func TestCostManagerSerializesConcurrentReservationsAndPersistsOrder(t *testing.T) {
+	t.Parallel()
 	manager, _ := newTestCostManager(t, "1.50", "0.50")
 	store, journal := newCostEventStore(t)
 	requests := []CostReservationRequest{
@@ -113,6 +114,7 @@ func TestCostManagerSerializesConcurrentReservationsAndPersistsOrder(t *testing.
 }
 
 func TestCostManagerSettlementReplacesReservationAndIsIdempotent(t *testing.T) {
+	t.Parallel()
 	manager, _ := newTestCostManager(t, "2", "")
 	_, journal := newCostEventStore(t)
 	reservation, err := manager.Reserve(t.Context(), journal, costReservationRequest("provider-1", 500_000, 500_000))
@@ -148,6 +150,7 @@ func TestCostManagerSettlementReplacesReservationAndIsIdempotent(t *testing.T) {
 }
 
 func TestCostManagerSettlementKeepsConservativeBoundWithoutCompleteUsage(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		usage *cost.TokenUsage
@@ -184,6 +187,7 @@ func TestCostManagerSettlementKeepsConservativeBoundWithoutCompleteUsage(t *test
 }
 
 func TestCostManagerExplicitZeroUsageSurvivesReplay(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		usage    *cost.TokenUsage
@@ -233,6 +237,7 @@ func TestCostManagerExplicitZeroUsageSurvivesReplay(t *testing.T) {
 }
 
 func TestCostManagerRehydrateKeepsOpenReservationCharged(t *testing.T) {
+	t.Parallel()
 	first, _ := newTestCostManager(t, "1.50", "")
 	store, journal := newCostEventStore(t)
 	if _, err := first.Reserve(t.Context(), journal, costReservationRequest("provider-open", 500_000, 500_000)); err != nil {
@@ -267,6 +272,7 @@ func (j costFailingJournal) Append(ctx context.Context, event RunEvent) (RunEven
 }
 
 func TestCostManagerPersistenceFailuresFailClosed(t *testing.T) {
+	t.Parallel()
 	t.Run("warning before reservation", func(t *testing.T) {
 		manager, _ := newTestCostManager(t, "2", "0.50")
 		store, journal := newCostEventStore(t)
@@ -303,6 +309,7 @@ func TestCostManagerPersistenceFailuresFailClosed(t *testing.T) {
 }
 
 func TestCloneCoordinatorSharesCostManager(t *testing.T) {
+	t.Parallel()
 	manager, _ := newTestCostManager(t, "2", "")
 	parent := &Coordinator{taskTracker: NewTaskTracker(), costManager: manager, session: &TeamSession{Config: agent.TeamConfig{Name: "cost-clone"}}}
 	clone := cloneCoordinator(parent, parent.session)
@@ -312,6 +319,7 @@ func TestCloneCoordinatorSharesCostManager(t *testing.T) {
 }
 
 func TestCostEventPayloadMustMatchEnvelope(t *testing.T) {
+	t.Parallel()
 	manager, _ := newTestCostManager(t, "2", "")
 	_, journal := newCostEventStore(t)
 	reservation, _, err := manager.buildReservation(costReservationRequest("provider-1", 1, 1))

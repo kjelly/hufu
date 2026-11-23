@@ -7,6 +7,7 @@ import (
 )
 
 func TestValidScoreRejectsWithoutClamping(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		value float64
 		want  bool
@@ -23,6 +24,7 @@ func TestValidScoreRejectsWithoutClamping(t *testing.T) {
 }
 
 func TestValidUnit(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		value float64
 		want  bool
@@ -34,6 +36,7 @@ func TestValidUnit(t *testing.T) {
 }
 
 func TestRoundDecisionHalfAwayFromZero(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		in   float64
 		want float64
@@ -56,6 +59,7 @@ func TestRoundDecisionHalfAwayFromZero(t *testing.T) {
 // Weights are normalized to sum to one so a profile's relative emphasis, not
 // its absolute numbers, decides the score (spec §14.2).
 func TestNormalizedWeights(t *testing.T) {
+	t.Parallel()
 	weights, err := normalizedWeights([]DecisionCriterion{
 		{ID: "cost", Weight: 2}, {ID: "risk", Weight: 1}, {ID: "speed", Weight: 1},
 	})
@@ -81,6 +85,7 @@ func TestNormalizedWeights(t *testing.T) {
 }
 
 func TestComputeOverall(t *testing.T) {
+	t.Parallel()
 	weights := map[string]float64{"cost": 0.5, "risk": 0.25, "speed": 0.25}
 
 	overall, err := computeOverall(map[string]float64{"cost": 8, "risk": 4, "speed": 6}, weights)
@@ -109,6 +114,7 @@ func TestComputeOverall(t *testing.T) {
 // Float summation order changes results; the aggregator therefore iterates in
 // a fixed order. This asserts the property directly (spec §14.4).
 func TestComputeOverallIsOrderIndependent(t *testing.T) {
+	t.Parallel()
 	weights := map[string]float64{"a": 0.1, "b": 0.2, "c": 0.3, "d": 0.4}
 	scores := map[string]float64{"a": 1.1, "b": 2.7, "c": 3.3, "d": 9.9}
 
@@ -128,6 +134,7 @@ func TestComputeOverallIsOrderIndependent(t *testing.T) {
 }
 
 func TestDispersionStatistics(t *testing.T) {
+	t.Parallel()
 	values := []float64{2, 4, 4, 4, 5, 5, 7, 9}
 	if got := meanOf(values); got != 5 {
 		t.Errorf("meanOf = %v, want 5", got)
@@ -158,6 +165,7 @@ func TestDispersionStatistics(t *testing.T) {
 }
 
 func TestStatisticsAreOrderIndependent(t *testing.T) {
+	t.Parallel()
 	ascending := []float64{1, 2, 3, 4, 5}
 	descending := []float64{5, 4, 3, 2, 1}
 	shuffled := []float64{3, 1, 5, 2, 4}

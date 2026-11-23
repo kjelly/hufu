@@ -13,6 +13,7 @@ import (
 )
 
 func TestTeamInfoTaskResultSelectorDisambiguatesCompletedTasks(t *testing.T) {
+	t.Parallel()
 	first := taskDescription("## Task Description\nExecute exactly the §3.1 binary freeze sequence.\n\n## Result\npass")
 	second := taskDescription("## Task Description\nExecute exactly the §3.2 topology creation sequence.\n\n## Result\npass")
 
@@ -31,6 +32,7 @@ func TestTeamInfoTaskResultSelectorDisambiguatesCompletedTasks(t *testing.T) {
 }
 
 func TestTeamInfoRejectsMultipleJSONValues(t *testing.T) {
+	t.Parallel()
 	tool := &teamInfoTool{}
 	response, err := tool.Run(t.Context(), fantasy.ToolCall{
 		Name:  "team_info",
@@ -45,6 +47,7 @@ func TestTeamInfoRejectsMultipleJSONValues(t *testing.T) {
 }
 
 func TestTaskResultByIDSurvivesSessionReplayWithSealedManifest(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	first := &Coordinator{session: &TeamSession{Workspace: workspace}, sessionData: NewSession(), taskTracker: NewTaskTracker()}
 	item := first.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "runner", Desc: "produce evidence"}})[0]
@@ -84,6 +87,7 @@ func TestTaskResultByIDSurvivesSessionReplayWithSealedManifest(t *testing.T) {
 }
 
 func TestTeamInfoFreshVerificationDoesNotReadHistoricalTaskTranscript(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	transcriptDir := filepath.Join(workspace, "tasks", "fresh-team", "reviewer")
 	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
@@ -121,6 +125,7 @@ func TestTeamInfoFreshVerificationDoesNotReadHistoricalTaskTranscript(t *testing
 }
 
 func TestInMemoryCompletedTaskResultBridgesTaskFilePublication(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	items := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "poc-step-runner", Desc: `Execute exactly the §3.1 \"Freeze the candidate\" checkpoint.`}})
 	if len(items) != 1 {
@@ -149,6 +154,7 @@ func TestInMemoryCompletedTaskResultBridgesTaskFilePublication(t *testing.T) {
 }
 
 func TestCompletedTaskResultForAgentNormalizesLegacyEscapedSelector(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	items := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "runner", Desc: `checkpoint "東京"`}})
 	if err := tracker.TodoList().TryUpdateStatusAndOutput(items[0].ID, TaskDone, "", "fallback output"); err != nil {
@@ -165,6 +171,7 @@ func TestCompletedTaskResultForAgentNormalizesLegacyEscapedSelector(t *testing.T
 }
 
 func TestCompletedTaskResultForAgentRequiresTaskIDForAmbiguousSelector(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	items := tracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "runner", Desc: "shared checkpoint A"},
@@ -183,6 +190,7 @@ func TestCompletedTaskResultForAgentRequiresTaskIDForAmbiguousSelector(t *testin
 }
 
 func TestTeamInfoRejectsUnverifiedMarkdownHistory(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	dir := filepath.Join(c.session.Workspace, "tasks", c.session.Config.Name, "worker")
 	if err := os.MkdirAll(dir, 0o700); err != nil {

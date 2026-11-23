@@ -32,6 +32,10 @@ func rejectedEvidenceRepairTurn(t *testing.T, c *Coordinator, id string) scripte
 }
 
 func TestResultRepairKeepsOneSchemaCorrectionAfterMissingCall(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, mode := range []string{"live", "preparation", "step_budget", "resume", "resume_first_rejected", "resume_rejected", "two_invalid", "two_missing", "correction_failed", "exhausted_resume"} {
 		t.Run(mode, func(t *testing.T) {
 			c, id, task := toolEvidenceRepairFixture(t)

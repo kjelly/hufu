@@ -8,6 +8,7 @@ import (
 )
 
 func TestProviderFailureDetailPreservesProviderSourceAfterLocalTool(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.SetCurrentTool("grep")
 	providerErr := &fantasy.ProviderError{

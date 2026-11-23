@@ -15,6 +15,7 @@ import (
 )
 
 func TestOpenArtifactRefAuthorizesDeclaredDependencyAndRejectsTypo(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	tracker := NewTaskTracker()
 	producer := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "producer", Desc: "produce transcript"}})[0]
@@ -71,6 +72,7 @@ func TestOpenArtifactRefAuthorizesDeclaredDependencyAndRejectsTypo(t *testing.T)
 }
 
 func TestScopedArtifactViewOpensCurrentUnboundDependencyArtifactSources(t *testing.T) {
+	t.Parallel()
 	for _, source := range unboundArtifactSources() {
 		t.Run(source.name, func(t *testing.T) {
 			c, producer, consumer, ref := newUnboundArtifactAccessFixture(t)
@@ -94,6 +96,7 @@ func TestScopedArtifactViewOpensCurrentUnboundDependencyArtifactSources(t *testi
 }
 
 func TestScopedArtifactViewRequiresCurrentUnboundDependencyOccurrenceFromEverySource(t *testing.T) {
+	t.Parallel()
 	mutations := []struct {
 		name   string
 		mutate func(*ArtifactRef)
@@ -183,6 +186,7 @@ func newUnboundArtifactAccessFixture(t *testing.T) (*Coordinator, *TodoItem, *To
 }
 
 func TestOpenArtifactRefRejectsUndeclaredProducer(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	tracker := NewTaskTracker()
 	producer := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "producer", Desc: "produce"}})[0]
@@ -213,6 +217,7 @@ func TestOpenArtifactRefRejectsUndeclaredProducer(t *testing.T) {
 }
 
 func TestBuildArtifactAccessScopeBindsManagedSkillSnapshot(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "unrelated gardening", Goal: "runtime review assigned source"}})[0]
@@ -256,6 +261,7 @@ func TestBuildArtifactAccessScopeBindsManagedSkillSnapshot(t *testing.T) {
 }
 
 func TestBuildArtifactAccessScopeUsesStructuredSelectedManagedSkills(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{
@@ -291,6 +297,7 @@ func TestBuildArtifactAccessScopeUsesStructuredSelectedManagedSkills(t *testing.
 }
 
 func TestCloneCoordinatorUsesParentArtifactStoreRootForScopedEvidence(t *testing.T) {
+	t.Parallel()
 	parentWorkspace := t.TempDir()
 	childWorkspace := t.TempDir()
 	store, err := NewFileArtifactStore(parentWorkspace, parentWorkspace)

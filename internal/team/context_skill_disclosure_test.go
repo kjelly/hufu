@@ -10,6 +10,7 @@ import (
 )
 
 func TestMandatorySkillLoadIsEnforcedBeforeTaskWork(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "task"}})[0]
 	c.taskTracker.TodoList().SetInjectedSkills(item.ID, []string{"dependency", "root"})
@@ -34,6 +35,7 @@ func TestMandatorySkillLoadIsEnforcedBeforeTaskWork(t *testing.T) {
 }
 
 func TestSkillContextUsesProgressiveDisclosureWhenLoadSkillIsGranted(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{skills: []*skill.SkillDef{{Name: "large", Description: "large workflow", Path: "skills/large/SKILL.md", Content: "FULL SECRET INSTRUCTIONS"}}, skillUsage: make(map[string]*skillUsageState), taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "goal"}})[0]
 	items, err := c.buildSkillContextItems(&agent.AgentDef{Name: "worker", Skills: "large"}, "worker", "goal", item.ID, map[string]bool{"load_skill": true})
@@ -52,6 +54,7 @@ func TestSkillContextUsesProgressiveDisclosureWhenLoadSkillIsGranted(t *testing.
 }
 
 func TestSkillContextFallsBackToFullInstructionsWithoutLoadSkill(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{skills: []*skill.SkillDef{{Name: "large", Description: "large workflow", Path: "skills/large/SKILL.md", Content: "FULL REQUIRED INSTRUCTIONS"}}, skillUsage: make(map[string]*skillUsageState), taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "goal"}})[0]
 	item.InjectedSkills = []string{"stale-pending-skill"}
@@ -72,6 +75,7 @@ func TestSkillContextFallsBackToFullInstructionsWithoutLoadSkill(t *testing.T) {
 }
 
 func TestLegacySkillPromptUsesResolvedLoadSkillGrant(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		skills:       []*skill.SkillDef{{Name: "large", Description: "large workflow", Path: "skills/large/SKILL.md", Content: "FULL REQUIRED INSTRUCTIONS"}},
 		taskTracker:  NewTaskTracker(),
@@ -94,6 +98,7 @@ func TestLegacySkillPromptUsesResolvedLoadSkillGrant(t *testing.T) {
 }
 
 func TestSkillContextFailsWhenAssignedSkillDependencyIsUnavailable(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{skills: []*skill.SkillDef{{Name: "root", Path: "skills/root/SKILL.md", Content: "Read skills/missing/SKILL.md first."}}, skillUsage: make(map[string]*skillUsageState), reportStatus: func(StatusEvent) {}}
 	_, err := c.buildSkillContextItems(&agent.AgentDef{Name: "worker", Skills: "root"}, "worker", "goal", "", map[string]bool{"load_skill": true})
 	if err == nil || !strings.Contains(err.Error(), "unavailable dependencies") {
@@ -102,6 +107,7 @@ func TestSkillContextFailsWhenAssignedSkillDependencyIsUnavailable(t *testing.T)
 }
 
 func TestSkillContextFailsWhenAssignedSkillWasFilteredOut(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{skillUsage: make(map[string]*skillUsageState), reportStatus: func(StatusEvent) {}}
 	_, err := c.buildSkillContextItems(&agent.AgentDef{Name: "worker", Skills: "missing"}, "worker", "goal", "", nil)
 	if err == nil || !strings.Contains(err.Error(), "unavailable after team filtering") {

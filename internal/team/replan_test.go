@@ -20,6 +20,7 @@ func assumptionsFixture() []DecisionAssumption {
 // Only the three declared sources may change a status; the runtime never
 // infers one (spec §18.1).
 func TestAssumptionTransitionSources(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{AssumptionSourceTaskResult, AssumptionSourceVerification, AssumptionSourceOperator} {
 		if !ValidAssumptionSource(source) {
 			t.Fatalf("ValidAssumptionSource(%q) = false", source)
@@ -43,6 +44,7 @@ func TestAssumptionTransitionSources(t *testing.T) {
 }
 
 func TestApplyAssumptionTransition(t *testing.T) {
+	t.Parallel()
 	original := assumptionsFixture()
 	updated, assumption, err := ApplyAssumptionTransition(original, AssumptionTransition{
 		AssumptionID: "A1", To: AssumptionContradicted, Source: AssumptionSourceVerification,
@@ -72,6 +74,7 @@ func TestApplyAssumptionTransition(t *testing.T) {
 }
 
 func TestRecordAssumptionTransitionEmitsLifecycleEvent(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	_, _, err := RecordAssumptionTransition(context.Background(), journal, assumptionsFixture(), AssumptionTransition{
 		DecisionID: "dec-1", AssumptionID: "A1", From: AssumptionSupported,
@@ -88,6 +91,7 @@ func TestRecordAssumptionTransitionEmitsLifecycleEvent(t *testing.T) {
 // An unchecked assumption stays unknown and does not block execution: gating on
 // it would deadlock every decision that declares one (spec §18.2).
 func TestUncheckedAssumptionDoesNotBlock(t *testing.T) {
+	t.Parallel()
 	assumptions := []DecisionAssumption{{ID: "A1", Critical: true}}
 	if got := (assumptions[0]).EffectiveStatus(); got != AssumptionUnknown {
 		t.Fatalf("EffectiveStatus = %q, want unknown", got)
@@ -98,6 +102,7 @@ func TestUncheckedAssumptionDoesNotBlock(t *testing.T) {
 }
 
 func TestCriticalContradiction(t *testing.T) {
+	t.Parallel()
 	assumptions := []DecisionAssumption{
 		{ID: "A3", Critical: true, Status: AssumptionContradicted},
 		{ID: "A1", Critical: false, Status: AssumptionContradicted},
@@ -115,6 +120,7 @@ func TestCriticalContradiction(t *testing.T) {
 // to look consistent with the present destroys the evidence of what was
 // actually believed at the time (spec §31, §35).
 func TestMarkDecisionStalePreservesTheRecord(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	record := fullDecisionRecord()
 	before, err := json.Marshal(record)
@@ -154,6 +160,7 @@ func TestMarkDecisionStalePreservesTheRecord(t *testing.T) {
 }
 
 func TestMarkDecisionStaleIsOneWayAndNeedsAReason(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	record := DecisionRecord{ID: "dec-1"}
 
@@ -178,6 +185,7 @@ func TestMarkDecisionStaleIsOneWayAndNeedsAReason(t *testing.T) {
 }
 
 func TestRequestReplanRecordsTheReason(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	err := RequestReplan(context.Background(), journal, "dec-1", CheckpointDecision{
 		Action: CheckpointReplan, Reason: ReasonAssumptionInvalidated, Detail: "critical assumption A1 was contradicted",
@@ -195,6 +203,7 @@ func TestRequestReplanRecordsTheReason(t *testing.T) {
 }
 
 func TestReplanActionIsTerminal(t *testing.T) {
+	t.Parallel()
 	for action, want := range map[string]bool{
 		agent.ReplanContinue:           false,
 		agent.ReplanReplan:             false,

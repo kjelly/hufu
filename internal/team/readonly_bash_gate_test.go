@@ -16,6 +16,7 @@ import (
 // and a rejected command names the construct instead of claiming that bash
 // itself is forbidden.
 func TestReadOnlyGateAdmitsStderrMergeAndExplainsDenials(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "bash", nil, nil)
 	cases := []struct {
 		name       string

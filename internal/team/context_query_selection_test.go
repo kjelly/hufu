@@ -48,6 +48,7 @@ func querySelectionFixture() (ContextQueryPlan, []ContextQuerySource, contextsto
 }
 
 func TestContextQuerySelectionRollsBackAllScopesOnFailure(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		delay    time.Duration
@@ -93,6 +94,7 @@ func TestContextQuerySelectionRollsBackAllScopesOnFailure(t *testing.T) {
 }
 
 func TestContextQuerySelectionOuterCancelAndRestrictedPrivateParity(t *testing.T) {
+	t.Parallel()
 	plan, sources, row := querySelectionFixture()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -123,6 +125,7 @@ func TestContextQuerySelectionOuterCancelAndRestrictedPrivateParity(t *testing.T
 }
 
 func TestContextQueryMergeRecallsSupplementWithoutGrowingK(t *testing.T) {
+	t.Parallel()
 	var primary []contextstore.SearchResult
 	for index := range 4 {
 		primary = append(primary, contextstore.SearchResult{Item: contextstore.ContextItem{ID: strings.Repeat("x", index+1)}, Score: .1})
@@ -141,6 +144,7 @@ func TestContextQueryMergeRecallsSupplementWithoutGrowingK(t *testing.T) {
 func stableQueryRevision(context.Context, ContextQuerySource) (string, error) { return "stable", nil }
 
 func TestContextQuerySelectionWithoutRevisionNeverReadsSupplement(t *testing.T) {
+	t.Parallel()
 	plan, sources, row := querySelectionFixture()
 	repo := &querySelectionRepo{rows: []contextstore.SearchResult{row}}
 	selection, err := SelectContextQuerySources(t.Context(), repo, plan, sources, nil)

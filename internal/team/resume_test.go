@@ -23,6 +23,7 @@ func (unavailableResumeProfileIntrospector) InspectModel(context.Context, provid
 }
 
 func TestIsInterruptedStatus(t *testing.T) {
+	t.Parallel()
 	interrupted := []TaskStatus{TaskInProgress, TaskVerifying, TaskPaused, TaskPlanned, TaskPending, TaskProtocolIncomplete}
 	for _, s := range interrupted {
 		if !isInterruptedStatus(s) {
@@ -43,6 +44,7 @@ func TestIsInterruptedStatus(t *testing.T) {
 // original worker override must not be called and the checkpoint must finish
 // with the repaired typed result.
 func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	var events []StatusEvent
 	config := agent.TeamConfig{Name: "protocol-resume", Timeout: 30, MaxRetries: 1}
@@ -221,6 +223,7 @@ func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testin
 // covers the crash boundary after submit_result checkpoints its TypedResult but
 // before protocol repair writes its execution receipt or terminal status.
 func TestResumeInterruptedTasks_ProtocolCheckpointedSubmittedResultFinalizesLocally(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	config := agent.TeamConfig{Name: "protocol-submitted-resume", Timeout: 30, MaxRetries: 1}
 	agents := map[string]*agent.AgentDef{
@@ -299,6 +302,7 @@ func TestResumeInterruptedTasks_ProtocolCheckpointedSubmittedResultFinalizesLoca
 }
 
 func TestResumeInterruptedTasks_ProtocolSchemaRetryPreservesPriorHistory(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	config := agent.TeamConfig{Name: "protocol-history-resume", Timeout: 30, MaxRetries: 1}
 	agents := map[string]*agent.AgentDef{
@@ -381,6 +385,7 @@ func TestResumeInterruptedTasks_ProtocolSchemaRetryPreservesPriorHistory(t *test
 // that a malformed/incomplete checkpoint cannot fall back to ordinary worker
 // retry when there is no execution output to feed to result-only repair.
 func TestResumeInterruptedTasks_ProtocolCheckpointWithoutEvidenceBlocks(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "protocol-resume"}, Agents: map[string]*agent.AgentDef{
@@ -413,6 +418,7 @@ func TestResumeInterruptedTasks_ProtocolCheckpointWithoutEvidenceBlocks(t *testi
 }
 
 func TestResumeInterruptedTasks_ProtocolPreparationFailureIsRecorded(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{
@@ -460,6 +466,7 @@ func TestResumeInterruptedTasks_ProtocolPreparationFailureIsRecorded(t *testing.
 }
 
 func TestResumeInterruptedTasks_BoundZeroPreparationFailureIsDurable(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	providerManager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", nil)
 	if err != nil {
@@ -587,6 +594,7 @@ func TestResumeInterruptedTasks_BoundZeroPreparationFailureIsDurable(t *testing.
 // boundary: callers that enter executeTask directly cannot bypass the resume
 // gate and replay the worker either.
 func TestExecuteTask_ProtocolIncompleteUsesResultOnlyRepair(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "protocol-direct"}, Agents: map[string]*agent.AgentDef{
@@ -622,6 +630,7 @@ func TestExecuteTask_ProtocolIncompleteUsesResultOnlyRepair(t *testing.T) {
 }
 
 func TestTodoIDLess(t *testing.T) {
+	t.Parallel()
 	if !todoIDLess("2", "10") {
 		t.Error("numeric IDs must order numerically: 2 < 10")
 	}
@@ -634,6 +643,7 @@ func TestTodoIDLess(t *testing.T) {
 }
 
 func TestGetInterruptedTasks_Selection(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.taskTracker.TodoList().Restore([]*TodoItem{
 		{ID: "1", Agent: "a", Desc: "done task", Status: TaskDone, Output: "out"},
@@ -684,6 +694,7 @@ func TestGetInterruptedTasks_Selection(t *testing.T) {
 }
 
 func TestResumeInterruptedTasks_NoopWhenNothingInterrupted(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.taskTracker.TodoList().Restore([]*TodoItem{
 		{ID: "1", Agent: "a", Desc: "done", Status: TaskDone, Output: "x"},
@@ -699,6 +710,7 @@ func TestResumeInterruptedTasks_NoopWhenNothingInterrupted(t *testing.T) {
 }
 
 func TestResumeInterruptedTasks_EmptyTodoList(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	n, err := c.ResumeInterruptedTasks(context.Background())
 	if err != nil || n != 0 {

@@ -17,6 +17,7 @@ import (
 )
 
 func TestEventStoreSyncFailureIsObservable(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	es, err := NewEventStore(dir, "run-sync", "session-sync")
 	if err != nil {
@@ -57,6 +58,7 @@ func TestEventStoreSyncFailureIsObservable(t *testing.T) {
 }
 
 func TestEventStoreStampsInvocationIdentity(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "run-invocation", "session-invocation")
 	if err != nil {
 		t.Fatal(err)
@@ -85,6 +87,7 @@ func TestEventStoreStampsInvocationIdentity(t *testing.T) {
 }
 
 func TestEventStoreWritesFramedHashesAfterLegacyEvents(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-digest", "session-digest")
 	if err != nil {
@@ -146,6 +149,7 @@ func TestEventStoreWritesFramedHashesAfterLegacyEvents(t *testing.T) {
 }
 
 func TestOpenEventStoreReadOnlyDoesNotCreateAndRejectsAppend(t *testing.T) {
+	t.Parallel()
 	missingWorkspace := filepath.Join(t.TempDir(), "missing")
 	if _, err := OpenEventStoreReadOnly(missingWorkspace); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing read-only open error = %v, want os.ErrNotExist", err)
@@ -186,6 +190,7 @@ func TestOpenEventStoreReadOnlyDoesNotCreateAndRejectsAppend(t *testing.T) {
 }
 
 func TestEventStoreIdempotencyIsScopedToBranch(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-branch-idempotency", "session-branch-idempotency")
 	if err != nil {
@@ -250,6 +255,7 @@ func TestEventStoreIdempotencyIsScopedToBranch(t *testing.T) {
 }
 
 func TestEventStoreAppendFailsSafelyWhenSyncFunctionIsAbsent(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "run-missing-sync", "session-missing-sync")
 	if err != nil {
 		t.Fatal(err)
@@ -296,6 +302,7 @@ func configureEventStoreSyncFailureForEventType(t *testing.T, store *EventStore,
 }
 
 func TestLearningGapRepairReplaysEventWithoutWorker(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
 	if err != nil {
@@ -333,6 +340,7 @@ func TestLearningGapRepairReplaysEventWithoutWorker(t *testing.T) {
 }
 
 func TestLearningGapCheckpointSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
 	if err != nil {
@@ -404,6 +412,7 @@ func TestLearningGapCheckpointSurvivesRestart(t *testing.T) {
 }
 
 func TestEmitEventOnceSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	es, err := NewEventStore(dir, "run-once", "session-once")
 	if err != nil {
@@ -441,6 +450,7 @@ func TestEmitEventOnceSurvivesRestart(t *testing.T) {
 }
 
 func TestEventStoreAppendAndVerifyHashChain(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	es, err := NewEventStore(dir, "run-101", "session-202")
 	if err != nil {
@@ -484,6 +494,7 @@ func TestEventStoreAppendAndVerifyHashChain(t *testing.T) {
 }
 
 func TestEventStoreTamperDetection(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	es, err := NewEventStore(dir, "run-101", "session-202")
 	if err != nil {
@@ -506,6 +517,7 @@ func TestEventStoreTamperDetection(t *testing.T) {
 }
 
 func TestCoordinatorStartupUsesSingleStrictEventStoreScan(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-history", "session-history")
 	if err != nil {
@@ -548,6 +560,7 @@ func TestCoordinatorStartupUsesSingleStrictEventStoreScan(t *testing.T) {
 }
 
 func TestEventStoreReadEventsUsesValidatedCacheAndCopiesPayload(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-cache", "session-cache")
 	if err != nil {
@@ -591,6 +604,7 @@ func TestEventStoreReadEventsUsesValidatedCacheAndCopiesPayload(t *testing.T) {
 }
 
 func TestEventStoreVerifyRefreshDetectsTamperAfterOpen(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-refresh", "session-refresh")
 	if err != nil {
@@ -612,6 +626,7 @@ func TestEventStoreVerifyRefreshDetectsTamperAfterOpen(t *testing.T) {
 }
 
 func TestEventStoreFailedRefreshInvalidatesStateAndBlocksAppend(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-refresh-failure", "session-refresh-failure")
 	if err != nil {
@@ -639,6 +654,7 @@ func TestEventStoreFailedRefreshInvalidatesStateAndBlocksAppend(t *testing.T) {
 }
 
 func TestEventStoreFailedRefreshDoesNotPublishPartialState(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-partial", "session-partial")
 	if err != nil {
@@ -663,6 +679,7 @@ func TestEventStoreFailedRefreshDoesNotPublishPartialState(t *testing.T) {
 }
 
 func TestEventStoreSuccessfulRefreshSwapsCacheAndAppendHandle(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-replacement", "session-replacement")
 	if err != nil {
@@ -717,6 +734,7 @@ func TestEventStoreSuccessfulRefreshSwapsCacheAndAppendHandle(t *testing.T) {
 }
 
 func TestEventStoreRejectsNonEmptyFirstLink(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		event RunEvent
@@ -746,6 +764,7 @@ func TestEventStoreRejectsNonEmptyFirstLink(t *testing.T) {
 }
 
 func TestCoordinatorStartupMarksCorruptEventStoreForRecovery(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-corrupt", "session-corrupt")
 	if err != nil {
@@ -781,6 +800,7 @@ func TestCoordinatorStartupMarksCorruptEventStoreForRecovery(t *testing.T) {
 }
 
 func TestWP14_RejectTerminalEventsWithEmptyPayload(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	es, err := NewEventStore(dir, "run-101", "session-202")
 	if err != nil {

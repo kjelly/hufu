@@ -25,6 +25,7 @@ func testFailureEvent() *FailureEventPayload {
 }
 
 func TestFailureRenderingIsSharedByWorkspaceAndJournal(t *testing.T) {
+	t.Parallel()
 	event := testFailureEvent()
 	want := RenderFailureText(event)
 	if want == "" || strings.Contains(want, "task description") || !strings.Contains(want, "next_action: resume with a materially changed plan") {
@@ -75,6 +76,7 @@ func TestFailureRenderingIsSharedByWorkspaceAndJournal(t *testing.T) {
 }
 
 func TestFailureMarkdownUsesCanonicalText(t *testing.T) {
+	t.Parallel()
 	event := testFailureEvent()
 	markdown := RenderFailureMarkdown(event)
 	if !strings.Contains(markdown, "```text") || !strings.Contains(markdown, RenderFailureText(event)) {
@@ -83,6 +85,7 @@ func TestFailureMarkdownUsesCanonicalText(t *testing.T) {
 }
 
 func TestFailureDisplayTextUsesStructuredEvidenceAndMasksLegacyDetail(t *testing.T) {
+	t.Parallel()
 	event := testFailureEvent()
 	event.FailureClass = FailureEnvironment
 	event.RetryDisposition = ReplanRequired
@@ -110,6 +113,7 @@ func TestFailureDisplayTextUsesStructuredEvidenceAndMasksLegacyDetail(t *testing
 }
 
 func TestCoordinatorToolFailurePathsUseStructuredDisplay(t *testing.T) {
+	t.Parallel()
 	event := testFailureEvent()
 	event.FailureClass = FailureEnvironment
 	tracker := NewTaskTracker()
@@ -137,6 +141,7 @@ func TestCoordinatorToolFailurePathsUseStructuredDisplay(t *testing.T) {
 }
 
 func TestCoordinatorToolDisplaysNormalDetailsWithoutFailureClassification(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		status TaskStatus
@@ -180,6 +185,7 @@ func TestCoordinatorToolDisplaysNormalDetailsWithoutFailureClassification(t *tes
 }
 
 func TestTeamInfoTodoStatusUsesStructuredFailureDisplay(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "failed"}})[0]
 	item.Status = TaskError
@@ -196,6 +202,7 @@ func TestTeamInfoTodoStatusUsesStructuredFailureDisplay(t *testing.T) {
 }
 
 func TestRequestAgentDuplicateUsesNormalDetailOrStructuredFailure(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		status     TaskStatus
@@ -232,6 +239,7 @@ func TestRequestAgentDuplicateUsesNormalDetailOrStructuredFailure(t *testing.T) 
 }
 
 func TestFailureEventAndEventStoreMaskSecrets(t *testing.T) {
+	t.Parallel()
 	event := &FailureEventPayload{
 		TaskID: "12", Phase: "verification", FailureClass: FailureVerify,
 		RetryDisposition: RetryNone, Command: "curl api_token=command-secret-value",

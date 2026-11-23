@@ -11,6 +11,7 @@ import (
 // A model re-proposing a pending consolidation's exact text must not take the
 // candidate over and have ConfirmRun confirm it without operator approval.
 func TestSharedMemoryProposalCannotTakeOverConsolidationCandidate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repo := sharedMemoryTestRepo(t)
 	sqlRepo := repo.(*contextstore.SQLiteRepository)

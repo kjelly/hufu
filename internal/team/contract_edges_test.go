@@ -21,6 +21,7 @@ func staticEdgesFixture() *TeamSession {
 }
 
 func TestStaticContractEdgesResolveNamesAndOverrideModelIndices(t *testing.T) {
+	t.Parallel()
 	session := staticEdgesFixture()
 	for _, reversed := range []bool{false, true} {
 		tasks := []TaskDef{{Agent: "writer", ContractID: "draft", DependsOn: []int{99}, OnFailure: new(99), Pipeline: true}, {Agent: "checker", ContractID: "check", DependsOn: []int{99}, OnFailure: new(99), Pipeline: true}}
@@ -47,6 +48,7 @@ func TestStaticContractEdgesResolveNamesAndOverrideModelIndices(t *testing.T) {
 }
 
 func TestStaticContractEdgesRejectIncompleteOrDuplicatedBatch(t *testing.T) {
+	t.Parallel()
 	for _, tasks := range [][]TaskDef{
 		{{Agent: "writer", ContractID: "draft"}},
 		{{Agent: "checker", ContractID: "check"}},
@@ -59,6 +61,7 @@ func TestStaticContractEdgesRejectIncompleteOrDuplicatedBatch(t *testing.T) {
 }
 
 func TestStaticContractEdgesPreflight(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		edit func(*TeamSession)
@@ -92,6 +95,7 @@ func TestStaticContractEdgesPreflight(t *testing.T) {
 }
 
 func TestStaticContractEdgesPinExecutionPolicyAndEffectiveHash(t *testing.T) {
+	t.Parallel()
 	c := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 1, 1)
 	s := staticEdgesFixture()
 	c.session.ContractTasks = s.ContractTasks
@@ -120,6 +124,7 @@ func TestStaticContractEdgesPinExecutionPolicyAndEffectiveHash(t *testing.T) {
 }
 
 func TestHufuCodeReviewDeclaresFinalReportGraph(t *testing.T) {
+	t.Parallel()
 	s := loadHufuCodeReviewTeam(t)
 	requests, err := decodeModelTaskDefsForMode([]byte(`{"tasks":[{"agent":"reviewer","contract_id":"derive-review-report","goal":"Derive completion"},{"agent":"synthesizer","contract_id":"synthesize-review","goal":"Synthesize accepted evidence"},{"agent":"reviewer","contract_id":"verify-review-report","goal":"Audit the report"}]}`), true)
 	if err != nil {
@@ -140,6 +145,7 @@ func TestHufuCodeReviewDeclaresFinalReportGraph(t *testing.T) {
 }
 
 func TestStaticContractEdgesAdmissionPersistsResolvedGraph(t *testing.T) {
+	t.Parallel()
 	c := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 1, 1)
 	s := staticEdgesFixture()
 	s.ContractTasks[0].Agent = "worker"

@@ -108,6 +108,7 @@ func rankingLockSummary(t *testing.T) string {
 // memories reach the prompt. Regenerate only for an intended ranking change:
 // UPDATE_RANKING_LOCK=1 go test ./internal/team -run TestPersistentRankingBehaviourIsLocked
 func TestPersistentRankingBehaviourIsLocked(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		got := rankingLockSummary(t)
 		path := filepath.Join("testdata", "memory_ranking_lock.golden")

@@ -14,6 +14,7 @@ import (
 )
 
 func TestCompatibilityMemoryMutationsFailClosedWithoutCanonicalRepository(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{projectDir: "project", session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}}}
 	cases := []struct {
@@ -41,6 +42,7 @@ func TestCompatibilityMemoryMutationsFailClosedWithoutCanonicalRepository(t *tes
 }
 
 func TestMemorySavePreservesExplicitZeroConfidence(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -66,6 +68,7 @@ func TestMemorySavePreservesExplicitZeroConfidence(t *testing.T) {
 }
 
 func TestCanonicalMemoryQueryFailsClosedWhenContextRepositoryIsUnavailable(t *testing.T) {
+	t.Parallel()
 	tool := &canonicalMemoryQueryTool{coordinator: &Coordinator{}}
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -82,6 +85,7 @@ func TestCanonicalMemoryQueryFailsClosedWhenContextRepositoryIsUnavailable(t *te
 }
 
 func TestMemorySaveSchemaAdvertisesAtomicSupersedes(t *testing.T) {
+	t.Parallel()
 	tool := &memorySaveLTMWrapper{}
 	if _, ok := tool.Info().Parameters["supersedes"]; !ok {
 		t.Fatal("memory_save does not advertise its supported atomic supersedes parameter")
@@ -89,6 +93,7 @@ func TestMemorySaveSchemaAdvertisesAtomicSupersedes(t *testing.T) {
 }
 
 func TestMemorySaveRejectsUnknownCategory(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -104,6 +109,7 @@ func TestMemorySaveRejectsUnknownCategory(t *testing.T) {
 }
 
 func TestCanonicalMemorySavePreservesContractFieldsAndQueryFilters(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -151,6 +157,7 @@ func TestCanonicalMemorySavePreservesContractFieldsAndQueryFilters(t *testing.T)
 }
 
 func TestMemorySaveProjectionRebuildFailureRetainsCanonicalWriteAndNoDuplicateCandidate(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {

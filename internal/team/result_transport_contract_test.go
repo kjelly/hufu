@@ -14,6 +14,7 @@ import (
 )
 
 func TestResultTransportDecodersRejectAmbiguousJSON(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "report", Execution: ExecutionContract{RequiresResult: true}}})[0]
 	decoders := map[string]func([]byte) error{
@@ -153,6 +154,7 @@ func admitTransportContract(t *testing.T, transport string, raw []byte, artifact
 }
 
 func TestResultTransportCommonClaimsAndCompletionBoundary(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps, TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked} {
 		t.Run(status, func(t *testing.T) {
 			var expected *transportCommonClaims
@@ -190,6 +192,7 @@ func TestResultTransportCommonClaimsAndCompletionBoundary(t *testing.T) {
 }
 
 func TestResultTransportRejectsInvalidClaimsWithoutSuccess(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct{ name, raw string }{
 		{"unknown status", `{"status":"unknown","summary":"invalid status"}`},
 		{"empty summary", `{"status":"success","summary":""}`},
@@ -208,6 +211,7 @@ func TestResultTransportRejectsInvalidClaimsWithoutSuccess(t *testing.T) {
 }
 
 func TestResultTransportArtifactHashesComeFromNativeBytes(t *testing.T) {
+	t.Parallel()
 	wantSHA := fmt.Sprintf("%x", sha256.Sum256([]byte(transportArtifactContent)))
 	for _, transport := range []string{"tool", "collector", "external"} {
 		t.Run(transport, func(t *testing.T) {

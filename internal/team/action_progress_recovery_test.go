@@ -7,6 +7,7 @@ import (
 )
 
 func TestActionProgressReplaysNewActionAfterAttemptCounterReset(t *testing.T) {
+	t.Parallel()
 	for _, nextAttempt := range []int{1, 3} {
 		t.Run(strconv.Itoa(nextAttempt), func(t *testing.T) {
 			c := newTestCoordinator(t)
@@ -122,6 +123,7 @@ func TestActionProgressReplaysNewActionAfterAttemptCounterReset(t *testing.T) {
 }
 
 func TestActionProgressReplayOrdering(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, active, observedID string
 		attempt, sequence        int

@@ -6,6 +6,7 @@ import (
 )
 
 func TestResultCollectionStopsIdenticalRepairsWithoutRepeatingWork(t *testing.T) {
+	t.Parallel()
 	c, item, ctx, checkpoint := beginCollectionFixture(t)
 	original := checkpoint.Work
 	for turn := range 2 {

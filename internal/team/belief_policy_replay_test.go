@@ -36,6 +36,7 @@ func beliefBoundArtifactPath(t *testing.T, f beliefFixture, policy bool) string 
 }
 
 func TestBeliefPolicyMissingArtifactsPreserveHistoricalDecision(t *testing.T) {
+	t.Parallel()
 	for _, policyMissing := range []bool{false, true} {
 		t.Run(map[bool]string{false: "model", true: "policy"}[policyMissing], func(t *testing.T) {
 			f := newBeliefPolicyFixture(t)
@@ -84,6 +85,7 @@ func TestBeliefPolicyMissingArtifactsPreserveHistoricalDecision(t *testing.T) {
 }
 
 func TestBeliefPolicyRecordedUnavailabilitySurvivesArtifactRestore(t *testing.T) {
+	t.Parallel()
 	for _, policyMissing := range []bool{false, true} {
 		f := newBeliefPolicyFixture(t)
 		path := beliefBoundArtifactPath(t, f, policyMissing)
@@ -109,6 +111,7 @@ func TestBeliefPolicyRecordedUnavailabilitySurvivesArtifactRestore(t *testing.T)
 }
 
 func TestBeliefPolicyUnresolvedAndUnauthorizedNeverSelect(t *testing.T) {
+	t.Parallel()
 	f := newBeliefPolicyFixture(t)
 	policy, err := CompileBeliefPolicy(f.model, beliefTestPolicy(), beliefTestCatalog(t, "worker"))
 	if err != nil {
@@ -134,6 +137,7 @@ func TestBeliefPolicyUnresolvedAndUnauthorizedNeverSelect(t *testing.T) {
 }
 
 func TestBeliefPolicyBranchLineageAndGlobalAppendFence(t *testing.T) {
+	t.Parallel()
 	f := newBeliefPolicyFixture(t)
 	first, err := f.journal.SuggestPolicy(t.Context(), f.epoch.ID, f.policySnapshot(t), 0)
 	if err != nil {
@@ -190,6 +194,7 @@ func TestBeliefPolicyBranchLineageAndGlobalAppendFence(t *testing.T) {
 }
 
 func TestBeliefPolicyDuplicateAdmissionKeepsOriginalActor(t *testing.T) {
+	t.Parallel()
 	f := newBeliefPolicyFixture(t)
 	snapshot := f.policySnapshot(t)
 	first, err := f.journal.SuggestPolicy(t.Context(), f.epoch.ID, snapshot, 0)

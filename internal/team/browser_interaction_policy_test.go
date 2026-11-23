@@ -11,6 +11,7 @@ import (
 )
 
 func TestBrowserInteractionRequiresExplicitTaskAndNativeAuthority(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	def := c.session.Agents["worker"]
 	if def == nil {

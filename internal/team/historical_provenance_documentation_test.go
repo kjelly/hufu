@@ -13,6 +13,7 @@ import (
 )
 
 func TestPublishedHistoricalProvenanceSchemaAcceptsRuntimeBinding(t *testing.T) {
+	t.Parallel()
 	doc, err := os.ReadFile(filepath.Join(bundledTeamsDir(t), "..", "docs", "reference", "agent-format.md"))
 	if err != nil {
 		t.Fatal(err)

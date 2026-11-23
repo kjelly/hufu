@@ -18,6 +18,7 @@ func metricEvent(t *testing.T, eventType string, payload decisionEvent) RunEvent
 
 // A workspace with no decisions reports zeroes, not an error.
 func TestComputeDecisionMetricsEmpty(t *testing.T) {
+	t.Parallel()
 	metrics := ComputeDecisionMetrics(nil, nil)
 	if metrics.DecisionCount != 0 || metrics.ReplanCount != 0 || metrics.DecisionRevisionRate != 0 {
 		t.Fatalf("metrics = %#v, want zeroes", metrics)
@@ -31,6 +32,7 @@ func TestComputeDecisionMetricsEmpty(t *testing.T) {
 }
 
 func TestComputeDecisionMetricsFromEvents(t *testing.T) {
+	t.Parallel()
 	events := []RunEvent{
 		metricEvent(t, agent.EventDecisionFinalized, decisionEvent{DecisionID: "dec-1"}),
 		metricEvent(t, agent.EventDecisionFinalized, decisionEvent{DecisionID: "dec-2"}),
@@ -96,6 +98,7 @@ func TestComputeDecisionMetricsFromEvents(t *testing.T) {
 // Foreign events share the log; they must contribute nothing rather than
 // breaking the projection.
 func TestComputeDecisionMetricsIgnoresForeignEvents(t *testing.T) {
+	t.Parallel()
 	events := []RunEvent{
 		{Type: "task_completed", Payload: json.RawMessage(`{"task_id":"t1","status":"done"}`)},
 		{Type: "artifact_created", Payload: json.RawMessage(`not json`)},
@@ -111,6 +114,7 @@ func TestComputeDecisionMetricsIgnoresForeignEvents(t *testing.T) {
 // must tally under the concrete agent that produced them; legacy
 // sidecar-produced stages (no AgentID) must not be counted at all.
 func TestComputeDecisionMetricsCountsCapabilityRoutedBindings(t *testing.T) {
+	t.Parallel()
 	events := []RunEvent{
 		metricEvent(t, agent.EventDecisionOpinionSubmitted, decisionEvent{
 			DecisionID: "dec-1", Opinion: &DecisionOpinion{JudgeID: "judge-1", AgentID: "cand-a"},
@@ -142,6 +146,7 @@ func TestComputeDecisionMetricsCountsCapabilityRoutedBindings(t *testing.T) {
 }
 
 func TestComputeDecisionMetricsFromIndex(t *testing.T) {
+	t.Parallel()
 	entries := []DecisionIndexEntry{
 		{DecisionID: "dec-1", Profile: "standard", IndependenceGroupCount: 2},
 		{DecisionID: "dec-2", Profile: "standard", IndependenceGroupCount: 1,
@@ -172,6 +177,7 @@ func TestComputeDecisionMetricsFromIndex(t *testing.T) {
 
 // The Phase 5 gate needs both thresholds; resolved alone does not open it.
 func TestPhase5Entry(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		resolved, verified int
 		open               bool
@@ -193,6 +199,7 @@ func TestPhase5Entry(t *testing.T) {
 
 // The projection is deterministic: the same log always yields the same numbers.
 func TestComputeDecisionMetricsIsDeterministic(t *testing.T) {
+	t.Parallel()
 	events := []RunEvent{
 		metricEvent(t, agent.EventDecisionAggregateComputed, decisionEvent{
 			DecisionID: "dec-1", Aggregate: &DecisionAggregate{PreferredOption: "a", StdDev: map[string]float64{"a": 1.1}},

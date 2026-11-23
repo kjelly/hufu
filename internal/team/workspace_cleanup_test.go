@@ -8,6 +8,7 @@ import (
 )
 
 func TestCleanRunDirsWithEvidencePersistsBeforeAfterState(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := EnsureWorkspaceDirs(workspace); err != nil {
 		t.Fatal(err)
@@ -39,6 +40,7 @@ func TestCleanRunDirsWithEvidencePersistsBeforeAfterState(t *testing.T) {
 }
 
 func TestCleanRunDirsRefusesProtectedRoots(t *testing.T) {
+	t.Parallel()
 	if _, err := CleanRunDirsWithEvidence("/"); err == nil {
 		t.Fatal("cleanup of root must be rejected")
 	}
@@ -50,6 +52,7 @@ func TestCleanRunDirsRefusesProtectedRoots(t *testing.T) {
 }
 
 func TestCleanRunDirsWithEvidenceFailsWhenEvidenceCannotBeWritten(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := EnsureWorkspaceDirs(workspace); err != nil {
 		t.Fatal(err)

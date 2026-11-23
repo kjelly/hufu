@@ -14,6 +14,7 @@ import (
 )
 
 func TestClassifyKnowledgeStateConflicting(t *testing.T) {
+	t.Parallel()
 	policy := agent.DefaultMemoryLearningPolicy()
 	now := time.Now()
 	supported := &contextstore.ExperienceAggregate{VerifiedSupportCount: 10, IndependentTaskCount: 10, LastObservedAt: now, LastStrongEvidenceAt: now}
@@ -59,6 +60,7 @@ func saveRuntimeConflict(t *testing.T, repo *contextstore.SQLiteRepository, aID,
 }
 
 func TestCoordinatorOpenConflictsForItems(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningObserve)
 	saveRuntimeConflict(t, repo, "a", "b")
 	items := []contextstore.ContextItem{rankingItem("a", 10), rankingItem("base-a", 10)}
@@ -75,6 +77,7 @@ func (failingConflictLookupRepository) OpenConflictsForItems(context.Context, st
 }
 
 func TestOpenConflictLookupFailureDegradesWithoutFailing(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningObserve)
 	c.contextRepo = failingConflictLookupRepository{repo}
 	if got := c.openConflictsForItems(t.Context(), []contextstore.ContextItem{rankingItem("a", 10)}); got != nil {
@@ -114,6 +117,7 @@ func manifestStates(t *testing.T, compiled CompiledContext) map[string]Knowledge
 }
 
 func TestConflictMarkingDoesNotChangePrompt(t *testing.T) {
+	t.Parallel()
 	records := []contextstore.ContextItem{rankingItem("a", 10), rankingItem("b", 20)}
 	plain := &CanonicalContextBundle{SharedPersistent: records}
 	marked := &CanonicalContextBundle{SharedPersistent: records, SharedPersistentConflicts: map[string][]string{"a": {"conflict-1"}, "b": {"conflict-1"}}}
@@ -143,6 +147,7 @@ func TestConflictMarkingDoesNotChangePrompt(t *testing.T) {
 }
 
 func TestManifestMarksConflictEvenWhenCounterpartOmitted(t *testing.T) {
+	t.Parallel()
 	bundle := &CanonicalContextBundle{SharedPersistent: []contextstore.ContextItem{rankingItem("a", 10)}, SharedPersistentConflicts: map[string][]string{"a": {"conflict-with-unselected"}}}
 	compiled, err := CompileWorkerContext(t.Context(), conflictCompileInput(bundle))
 	if err != nil {
@@ -154,6 +159,7 @@ func TestManifestMarksConflictEvenWhenCounterpartOmitted(t *testing.T) {
 }
 
 func TestTaskKnowledgeCoverageCountsConflicting(t *testing.T) {
+	t.Parallel()
 	manifest := &ContextInjectionManifest{Items: []ContextManifestItem{
 		{ID: "a", Included: true, KnowledgeState: KnowledgeConflicting},
 		{ID: "b", Included: true, KnowledgeState: KnowledgeKnown},
@@ -166,6 +172,7 @@ func TestTaskKnowledgeCoverageCountsConflicting(t *testing.T) {
 }
 
 func TestCoverageJSONUnchangedWithoutConflicts(t *testing.T) {
+	t.Parallel()
 	data, err := json.Marshal(OutcomeCoverageSignal{IncludedItemCount: 1, KnownCount: 1})
 	if err != nil {
 		t.Fatal(err)

@@ -10,6 +10,7 @@ import (
 )
 
 func TestParseSkepticVote(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		response string
@@ -42,6 +43,7 @@ func TestParseSkepticVote(t *testing.T) {
 }
 
 func TestTallySkepticVotes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name            string
 		votes           []skepticVote
@@ -80,6 +82,7 @@ func TestTallySkepticVotes(t *testing.T) {
 }
 
 func TestSkepticLenses(t *testing.T) {
+	t.Parallel()
 	for n, wantLen := range map[int]int{0: 1, 1: 1, 2: 2, 3: 3, 5: 3} {
 		lenses := skepticLenses(n)
 		if len(lenses) != wantLen {
@@ -96,6 +99,7 @@ func TestSkepticLenses(t *testing.T) {
 }
 
 func TestBuildSkepticPrompt(t *testing.T) {
+	t.Parallel()
 	prompt, err := buildSkepticPrompt("correctness", "the goal", "the constraints", "the output", "go test ./...")
 	if err != nil {
 		t.Fatal(err)
@@ -117,6 +121,7 @@ func TestBuildSkepticPrompt(t *testing.T) {
 }
 
 func TestBuildSkepticPromptBoundsLargeResultWithoutDroppingContract(t *testing.T) {
+	t.Parallel()
 	prompt, err := buildSkepticPrompt(
 		"reproducibility",
 		strings.Repeat("goal", 1000),
@@ -138,6 +143,7 @@ func TestBuildSkepticPromptBoundsLargeResultWithoutDroppingContract(t *testing.T
 }
 
 func TestAdversarialVerifyFailsClosedWithoutDecisionRuntime(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{},
 	}

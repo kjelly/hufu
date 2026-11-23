@@ -49,6 +49,7 @@ func historicalGrantPreparationFixture(t *testing.T) (*Coordinator, *[]Historica
 }
 
 func TestHistoricalResultPreparationBindsCanonicalCompatiblePolicy(t *testing.T) {
+	t.Parallel()
 	c := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 2)
 	delete(c.session.Agents, "codex-worker")
 	if err := c.session.SetWorkspaceScope(WorkspaceScope{Managed: true, ProjectID: "project", ContextScopeID: "project",
@@ -127,6 +128,7 @@ func historicalGrantSourceFixture(t *testing.T, workspace, id string) Historical
 }
 
 func TestHistoricalResultPreparationResolvesCanonicalRecipients(t *testing.T) {
+	t.Parallel()
 	c, rows, worker := historicalGrantPreparationFixture(t)
 	profile := c.ExecutionProfile()
 	profile.DisableHistoricalMemory = true
@@ -177,6 +179,7 @@ func TestHistoricalResultPreparationResolvesCanonicalRecipients(t *testing.T) {
 }
 
 func TestHistoricalResultPreparationRejectsUnavailableOrInvalidSources(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		change func(*HistoricalTaskResult)
@@ -209,6 +212,7 @@ func TestHistoricalResultPreparationRejectsUnavailableOrInvalidSources(t *testin
 }
 
 func TestHistoricalResultPreparationRejectsUnsupportedScopeAndBindings(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"unmanaged", "disabled", "independent_root", "missing_policy", "policy_drift", "missing_reader", "duplicate_source", "coordinator", "orchestrator", "unknown", "wildcard", "prefix", "empty", "too_many", "cancelled"} {
 		t.Run(name, func(t *testing.T) {
 			c, rows, worker := historicalGrantPreparationFixture(t)
@@ -256,6 +260,7 @@ func TestHistoricalResultPreparationRejectsUnsupportedScopeAndBindings(t *testin
 }
 
 func TestHistoricalResultRecipientRolesCannotUseCaseAliases(t *testing.T) {
+	t.Parallel()
 	c, rows, _ := historicalGrantPreparationFixture(t)
 	for _, role := range []string{"COORDINATOR", "Orchestrator"} {
 		c.session.Agents["control-alias"] = &agent.AgentDef{Name: "Controller", Role: role}
@@ -266,6 +271,7 @@ func TestHistoricalResultRecipientRolesCannotUseCaseAliases(t *testing.T) {
 }
 
 func TestHistoricalResultPreparationRejectsFrozenDrift(t *testing.T) {
+	t.Parallel()
 	for _, changed := range []string{"body", "source_hash", "payload_hash", "policy", "invalidated"} {
 		t.Run(changed, func(t *testing.T) {
 			c, rows, _ := historicalGrantPreparationFixture(t)
@@ -297,6 +303,7 @@ func TestHistoricalResultPreparationRejectsFrozenDrift(t *testing.T) {
 }
 
 func TestHistoricalResultPreparationEnforcesCompleteByteLimit(t *testing.T) {
+	t.Parallel()
 	c, rows, _ := historicalGrantPreparationFixture(t)
 	row := &(*rows)[0]
 	var document map[string]jsonv1.RawMessage
@@ -312,6 +319,7 @@ func TestHistoricalResultPreparationEnforcesCompleteByteLimit(t *testing.T) {
 }
 
 func TestHistoricalResultPreparationCountsAllRequiredPresentations(t *testing.T) {
+	t.Parallel()
 	c, rows, _ := historicalGrantPreparationFixture(t)
 	*rows = append(*rows, historicalGrantSourceFixture(t, c.session.Workspace, "2"))
 	for i := range *rows {
@@ -328,6 +336,7 @@ func TestHistoricalResultPreparationCountsAllRequiredPresentations(t *testing.T)
 }
 
 func TestHistoricalResultPreparationReturnsNoPartialGrantSet(t *testing.T) {
+	t.Parallel()
 	c, rows, worker := historicalGrantPreparationFixture(t)
 	*rows = append(*rows, historicalGrantSourceFixture(t, c.session.Workspace, "2"))
 	slices.SortFunc(*rows, func(a, b HistoricalTaskResult) int { return strings.Compare(a.ResultID, b.ResultID) })
@@ -338,6 +347,7 @@ func TestHistoricalResultPreparationReturnsNoPartialGrantSet(t *testing.T) {
 }
 
 func TestHistoricalResultPreparationValidatesReceiptBoundPayloads(t *testing.T) {
+	t.Parallel()
 	for _, valid := range []bool{true, false} {
 		t.Run(fmt.Sprint(valid), func(t *testing.T) {
 			c, rows, _ := historicalGrantPreparationFixture(t)
@@ -373,6 +383,7 @@ func TestHistoricalResultPreparationValidatesReceiptBoundPayloads(t *testing.T) 
 }
 
 func TestHistoricalResultPreparationPreservesRawStructuredPayloads(t *testing.T) {
+	t.Parallel()
 	c, rows, _ := historicalGrantPreparationFixture(t)
 	row := &(*rows)[0]
 	var document map[string]jsonv1.RawMessage

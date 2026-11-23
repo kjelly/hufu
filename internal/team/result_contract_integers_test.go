@@ -12,6 +12,7 @@ import (
 )
 
 func TestResultContractIntegerNormalization(t *testing.T) {
+	t.Parallel()
 	compiled, err := CompileResultContractDocument("integers.json", []byte(`{
 	 "type":"object","additionalProperties":false,"required":["rows"],
 	 "properties":{"rows":{"type":"array","items":{"$ref":"#/$defs/row"}}},
@@ -46,6 +47,7 @@ func TestResultContractIntegerNormalization(t *testing.T) {
 }
 
 func TestResultContractIntegerNormalizationPreservesRestrictions(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name, field, input string
 		valid              bool
@@ -86,6 +88,7 @@ func TestResultContractIntegerNormalizationPreservesRestrictions(t *testing.T) {
 }
 
 func TestSubmitResultNormalizesIntegerWithOriginalContract(t *testing.T) {
+	t.Parallel()
 	for _, gated := range []bool{false, true} {
 		for _, repair := range []bool{false, true} {
 			t.Run(fmt.Sprintf("gated=%v/repair=%v", gated, repair), func(t *testing.T) {

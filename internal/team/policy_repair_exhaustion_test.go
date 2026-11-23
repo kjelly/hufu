@@ -39,6 +39,7 @@ func coordinatorToolContext(allowed ...string) context.Context {
 }
 
 func TestPolicyGateKeepsRepairExhaustionSentinel(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		innerErr error
@@ -86,6 +87,7 @@ func TestPolicyGateKeepsRepairExhaustionSentinel(t *testing.T) {
 // attemptWrapUpRecovery must take the LLM-free policy-repair summary instead of
 // treating the run as a coordinator tool failure.
 func TestRepairExhaustionThroughGateFinalizesWithoutModelTurn(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "completed work"}})[0]
 	if err := tracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskDone, "done", "authoritative worker result"); err != nil {

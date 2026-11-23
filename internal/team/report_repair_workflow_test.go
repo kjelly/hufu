@@ -7,6 +7,7 @@ import (
 )
 
 func TestVerificationRepairReturnsToProducerOnce(t *testing.T) {
+	t.Parallel()
 	declared := loadHufuCodeReviewTeam(t)
 	const (
 		derive = iota

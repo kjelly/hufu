@@ -63,6 +63,7 @@ func (m *rejectedResultStreamModel) Stream(_ context.Context, call fantasy.Call)
 }
 
 func TestLocalToolResultFailureStopsFantasyStream(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"next_round", "step_limit", "provider_stop", "stop_without_dispatch", "valid_correction", "same_turn_continuation"} {
 		t.Run(name, func(t *testing.T) {
 			c := newBudgetCoordinator(t)
@@ -156,6 +157,7 @@ func TestLocalToolResultFailureStopsFantasyStream(t *testing.T) {
 }
 
 func TestFantasyStreamFinishControlsLocalToolExecution(t *testing.T) {
+	t.Parallel()
 	for _, finish := range []fantasy.FinishReason{
 		fantasy.FinishReasonToolCalls,
 		fantasy.FinishReasonStop,
@@ -218,6 +220,7 @@ func TestFantasyStreamFinishControlsLocalToolExecution(t *testing.T) {
 }
 
 func TestToolResultFailureSurvivesIgnoredCallbackAndStreamSuccess(t *testing.T) {
+	t.Parallel()
 	for _, continuation := range []bool{false, true} {
 		t.Run(fmt.Sprintf("continuation=%t", continuation), func(t *testing.T) {
 			testIgnoredToolResultFailure(t, continuation)
@@ -266,6 +269,7 @@ func testIgnoredToolResultFailure(t *testing.T, continuation bool) {
 }
 
 func TestFantasySubmitResultLoopRepairsWithoutWorkerReplay(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.session.Workspace = t.TempDir()
 	c.executionRunID = "run-fantasy-result-repair"

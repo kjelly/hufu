@@ -11,6 +11,7 @@ import (
 // workers return "" (fall through to the team path so the coordinator picks
 // the right specialist rather than guessing).
 func TestPrimaryWorkerName(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		agents map[string]*agent.AgentDef

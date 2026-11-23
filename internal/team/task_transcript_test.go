@@ -8,6 +8,7 @@ import (
 )
 
 func TestTaskTranscriptCapturesCompleteToolEvidenceAndBuildsManifest(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	transcript, err := newTaskTranscript(workspace, "17", "run-17")
 	if err != nil {
@@ -65,6 +66,7 @@ func TestTaskTranscriptCapturesCompleteToolEvidenceAndBuildsManifest(t *testing.
 }
 
 func TestTaskTranscriptRequiresAtLeastOneToolResult(t *testing.T) {
+	t.Parallel()
 	transcript, err := newTaskTranscript(t.TempDir(), "18", "run-18")
 	if err != nil {
 		t.Fatalf("newTaskTranscript() error = %v", err)
@@ -77,6 +79,7 @@ func TestTaskTranscriptRequiresAtLeastOneToolResult(t *testing.T) {
 }
 
 func TestVerbatimTaskResultUsesTranscriptManifestInsteadOfWorkerSummary(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	transcript, err := newTaskTranscript(workspace, "19", "run-19")
 	if err != nil {
@@ -114,6 +117,7 @@ func TestVerbatimTaskResultUsesTranscriptManifestInsteadOfWorkerSummary(t *testi
 }
 
 func TestValidateTaskOutputModeRejectsUnknownValue(t *testing.T) {
+	t.Parallel()
 	err := validateTaskOutputMode(TaskDef{OutputMode: "all-the-things"})
 	if err == nil {
 		t.Fatal("validateTaskOutputMode() error = nil, want invalid output mode")
@@ -121,6 +125,7 @@ func TestValidateTaskOutputModeRejectsUnknownValue(t *testing.T) {
 }
 
 func TestValidateTaskOutputModeRejectsIncompatibleVerbatimOptions(t *testing.T) {
+	t.Parallel()
 	for _, task := range []TaskDef{
 		{OutputMode: TaskOutputModeVerbatim, Sidecar: true},
 		{OutputMode: TaskOutputModeVerbatim, Summarize: true},

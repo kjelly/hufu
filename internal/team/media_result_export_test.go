@@ -141,6 +141,7 @@ func testResultImageExport(t *testing.T, c *Coordinator, item *TodoItem) {
 }
 
 func TestImageExportDestinationAndCancellation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "new.png")
 	if err := writeExclusiveImage(t.Context(), path, &failedImageExportReader{}); err == nil {

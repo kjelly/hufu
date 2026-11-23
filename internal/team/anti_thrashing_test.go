@@ -12,6 +12,7 @@ import (
 )
 
 func TestFailureFingerprintIgnoresVolatileMetadata(t *testing.T) {
+	t.Parallel()
 	a := NewFailureFingerprint("build", "worker", "bash", FailureVerify, "task 12 attempt 1 failed at 2026-07-30T10:00:00Z: exit code 2")
 	b := NewFailureFingerprint("build", "worker", "bash", FailureVerify, "task 99 attempt 4 failed at 2026-07-31T11:12:00Z: exit code 2")
 	if !SameFailureFingerprint(a, b) {
@@ -23,6 +24,7 @@ func TestFailureFingerprintIgnoresVolatileMetadata(t *testing.T) {
 }
 
 func TestRecoveryHypothesisRequiresDifferentStrategyAfterRepeat(t *testing.T) {
+	t.Parallel()
 	h := RecoveryHypothesis{ObservedFailure: "exit 2", HypothesizedCause: "bad input", ProposedChange: "validate input", ExpectedChange: "exit 0", Strategy: RecoveryStrategyRetry}
 	if err := h.Validate(false, ""); err != nil {
 		t.Fatal(err)
@@ -38,6 +40,7 @@ func TestRecoveryHypothesisRequiresDifferentStrategyAfterRepeat(t *testing.T) {
 }
 
 func TestRecoveryHypothesisBindsFailedCriterion(t *testing.T) {
+	t.Parallel()
 	h := RecoveryHypothesis{
 		CriterionID: "build", ObservedFailure: "exit 1", HypothesizedCause: "bad input",
 		ProposedChange: "validate input", DifferenceFromPrior: "use validation", ExpectedChange: "exit 0",
@@ -52,6 +55,7 @@ func TestRecoveryHypothesisBindsFailedCriterion(t *testing.T) {
 }
 
 func TestRecoveryHypothesisRejectsUnsafeReplayWithoutReconcile(t *testing.T) {
+	t.Parallel()
 	h := RecoveryHypothesis{CriterionID: "build", ObservedFailure: "exit 1", HypothesizedCause: "bad input", ProposedChange: "validate", ExpectedChange: "exit 0", Strategy: RecoveryStrategyRetry}
 	unsafe := TaskDef{SideEffect: SideEffectExternalWrite, Recovery: RecoveryRetry}
 	if err := h.ValidateForTask("build", true, RecoveryStrategyRetry, unsafe); err == nil {
@@ -65,6 +69,7 @@ func TestRecoveryHypothesisRejectsUnsafeReplayWithoutReconcile(t *testing.T) {
 }
 
 func TestRepeatedHypothesisRequiresCriterionID(t *testing.T) {
+	t.Parallel()
 	h := RecoveryHypothesis{ObservedFailure: "exit 1", HypothesizedCause: "bad input", ProposedChange: "validate", ExpectedChange: "exit 0", Strategy: RecoveryStrategyToolChange}
 	if err := h.ValidateForCriterion("", true, RecoveryStrategyRetry); err == nil {
 		t.Fatal("empty failed criterion bypassed repeated binding")
@@ -72,6 +77,7 @@ func TestRepeatedHypothesisRequiresCriterionID(t *testing.T) {
 }
 
 func TestReplayPolicyBlocksExplicitManualAndNever(t *testing.T) {
+	t.Parallel()
 	for _, policy := range []RecoveryPolicy{RecoveryManual, RecoveryReconcile, RecoveryNever} {
 		if CanAutomaticallyReplay(TaskDef{Recovery: policy}) {
 			t.Fatalf("recovery policy %q must not auto-replay", policy)
@@ -83,6 +89,7 @@ func TestReplayPolicyBlocksExplicitManualAndNever(t *testing.T) {
 }
 
 func TestFailedCriterionSelectionSkipsPassedCriteria(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{sessionData: &SessionData{CriterionResults: []CriterionResult{
 		{ID: "build", State: CriterionPassed}, {ID: "tests", State: CriterionFailed},
 	}}}
@@ -93,6 +100,7 @@ func TestFailedCriterionSelectionSkipsPassedCriteria(t *testing.T) {
 }
 
 func TestRepeatedRepairFailureRejectsWrongCriterionHypothesis(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{Config: agent.TeamConfig{
 			Name: "binding", Reliability: agent.ReliabilityConfig{HardEnforcement: true},
@@ -112,6 +120,7 @@ func TestRepeatedRepairFailureRejectsWrongCriterionHypothesis(t *testing.T) {
 }
 
 func TestReplayRetainsRejectedSameRecoveryStrategy(t *testing.T) {
+	t.Parallel()
 	hypothesis := &RecoveryHypothesis{
 		CriterionID: "build", ObservedFailure: "exit code 1", HypothesizedCause: "bad input",
 		ProposedChange: "validate input", DifferenceFromPrior: "retry with the same repair", ExpectedChange: "exit 0",
@@ -185,6 +194,7 @@ func TestReplayRetainsRejectedSameRecoveryStrategy(t *testing.T) {
 }
 
 func TestAntiThrashingLimitsCountWithoutTaskIDReuse(t *testing.T) {
+	t.Parallel()
 	var state AntiThrashingState
 	limits := agent.ReliabilityConfig{MaxSameFailureFingerprint: 2, HardEnforcement: true}
 	first := &TodoItem{ID: "1", Kind: TaskKindRepair, Advances: []string{"build"}}
@@ -205,6 +215,7 @@ func TestAntiThrashingLimitsCountWithoutTaskIDReuse(t *testing.T) {
 }
 
 func TestReliabilityConfigParses(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: reliable\nacceptance: 'true'\nreliability:\n  rollout: strict-opt-in\n  max-diagnostic-tasks-without-progress: 3\n  max-same-failure-fingerprint: 2\n  max-repairs-per-criterion: 5\n  hard-enforcement: true\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -219,6 +230,7 @@ func TestReliabilityConfigParses(t *testing.T) {
 }
 
 func TestPersistFailureStoresFingerprintOnCanonicalTaskAndSession(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "persist"}},
@@ -239,6 +251,7 @@ func TestPersistFailureStoresFingerprintOnCanonicalTaskAndSession(t *testing.T) 
 }
 
 func TestRepeatedIdenticalFailureOccurrencesPersistAndRebuild(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Reliability: agent.ReliabilityConfig{MaxRepairsPerCriterion: 2, HardEnforcement: true}}},
@@ -270,6 +283,7 @@ func TestRepeatedIdenticalFailureOccurrencesPersistAndRebuild(t *testing.T) {
 }
 
 func TestLiveSuccessfulRepairLimitMatchesReplayEnforcement(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	session := &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Reliability: agent.ReliabilityConfig{MaxRepairsPerCriterion: 1, HardEnforcement: true}}}
 	live := &Coordinator{session: session, sessionData: NewSession(), taskTracker: NewTaskTracker()}
@@ -294,6 +308,7 @@ func TestLiveSuccessfulRepairLimitMatchesReplayEnforcement(t *testing.T) {
 }
 
 func TestFailureFingerprintEventReplayDoesNotDoubleCountSnapshots(t *testing.T) {
+	t.Parallel()
 	fp := NewFailureFingerprint("build", "repairer", "probe", FailureVerify, "exit code 1")
 	first := fp
 	second := fp
@@ -310,6 +325,7 @@ func TestFailureFingerprintEventReplayDoesNotDoubleCountSnapshots(t *testing.T) 
 }
 
 func TestFailureFingerprintEventReplayRestoresTaskEvidence(t *testing.T) {
+	t.Parallel()
 	fp := NewFailureFingerprint("build", "worker", "go test", FailureVerify, "exit code 1")
 	allowReplay := false
 	hypothesis := &RecoveryHypothesis{CriterionID: "build", ObservedFailure: "exit 1", HypothesizedCause: "bad input", ProposedChange: "validate", ExpectedChange: "exit 0", Strategy: RecoveryStrategyToolChange}
@@ -334,6 +350,7 @@ func TestFailureFingerprintEventReplayRestoresTaskEvidence(t *testing.T) {
 }
 
 func TestResetForRetryClearsRecoveryState(t *testing.T) {
+	t.Parallel()
 	tl := NewTaskTracker().TodoList()
 	item := tl.AddBatch([]TodoSpec{{Agent: "worker", Desc: "resume"}})[0]
 	tl.UpdateStatus(item.ID, TaskInProgress, "running")
@@ -350,6 +367,7 @@ func TestResetForRetryClearsRecoveryState(t *testing.T) {
 }
 
 func TestDiagnosticLimitCountsLinkedDiagnosticWithoutProgress(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "diagnostic", Reliability: agent.ReliabilityConfig{MaxDiagnosticTasksWithoutProgress: 1, HardEnforcement: true}}},
@@ -375,6 +393,7 @@ func TestDiagnosticLimitCountsLinkedDiagnosticWithoutProgress(t *testing.T) {
 }
 
 func TestAntiThrashingBlocksOnlyRelatedPendingScope(t *testing.T) {
+	t.Parallel()
 	s := AntiThrashingState{
 		HardBlocked:     true,
 		BlockedCriteria: map[string]bool{"build": true},
@@ -388,6 +407,7 @@ func TestAntiThrashingBlocksOnlyRelatedPendingScope(t *testing.T) {
 }
 
 func TestHardScopeSeparatesRepairAndOutcomeForSameCriterion(t *testing.T) {
+	t.Parallel()
 	var state AntiThrashingState
 	limits := agent.ReliabilityConfig{MaxSameFailureFingerprint: 1, HardEnforcement: true}
 	fp := NewFailureFingerprint("build", "repairer", "go test", FailureVerify, "exit code 1")
@@ -409,6 +429,7 @@ func TestHardScopeSeparatesRepairAndOutcomeForSameCriterion(t *testing.T) {
 }
 
 func TestHardEnforcementRebuildsFromPersistedFingerprints(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	fp := NewFailureFingerprint("build", "repairer", "go test", FailureVerify, "exit code 1")
 	saved := NewSession()
@@ -438,6 +459,7 @@ func TestHardEnforcementRebuildsFromPersistedFingerprints(t *testing.T) {
 }
 
 func TestHardEnforcementRebuildsSuccessfulRepairWithoutFingerprint(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	saved := NewSession()
 	saved.Tasks = []*TodoItem{{ID: "repair-success", Kind: TaskKindRepair, Advances: []string{"build"}, Status: TaskDone}}
@@ -455,6 +477,7 @@ func TestHardEnforcementRebuildsSuccessfulRepairWithoutFingerprint(t *testing.T)
 }
 
 func TestHardEnforcementRebuildsFailedThenSuccessfulRepairAttempts(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	fp := NewFailureFingerprint("build", "repairer", "go test", FailureVerify, "exit code 1")
 	saved := NewSession()
@@ -480,6 +503,7 @@ func TestHardEnforcementRebuildsFailedThenSuccessfulRepairAttempts(t *testing.T)
 }
 
 func TestRepairAttemptCountUsesTheLargerEvidenceBound(t *testing.T) {
+	t.Parallel()
 	fpA := NewFailureFingerprint("build", "repairer", "probe-a", FailureVerify, "exit code 1")
 	fpB := NewFailureFingerprint("build", "repairer", "probe-b", FailureVerify, "exit code 2")
 	cases := []struct {
@@ -506,6 +530,7 @@ func TestRepairAttemptCountUsesTheLargerEvidenceBound(t *testing.T) {
 }
 
 func TestLiveRepairAttemptCountMatchesReplayWithRetryEvidence(t *testing.T) {
+	t.Parallel()
 	item := &TodoItem{ID: "repair-live", Kind: TaskKindRepair, Advances: []string{"build"}, Status: TaskDone, Progress: ProgressUnknown, Retries: 2}
 	c := &Coordinator{
 		session:     &TeamSession{Config: agent.TeamConfig{Reliability: agent.ReliabilityConfig{MaxRepairsPerCriterion: 3, HardEnforcement: true}}},
@@ -534,6 +559,7 @@ func TestLiveRepairAttemptCountMatchesReplayWithRetryEvidence(t *testing.T) {
 }
 
 func TestRebuildDoesNotDoubleCountDistinctFailuresAndRetries(t *testing.T) {
+	t.Parallel()
 	fpA := NewFailureFingerprint("build", "repairer", "probe-a", FailureVerify, "exit code 1")
 	fpB := NewFailureFingerprint("build", "repairer", "probe-b", FailureVerify, "exit code 2")
 	saved := NewSession()
@@ -559,6 +585,7 @@ func TestRebuildDoesNotDoubleCountDistinctFailuresAndRetries(t *testing.T) {
 }
 
 func TestHardEnforcementRebuildsAfterEventReplay(t *testing.T) {
+	t.Parallel()
 	fp := NewFailureFingerprint("build", "repairer", "go test", FailureVerify, "exit code 1")
 	taskPayload := func(id string) json.RawMessage {
 		payload, _ := json.Marshal(map[string]any{"id": id, "kind": TaskKindRepair, "advances": []string{"build"}, "status": TaskError})
@@ -586,6 +613,7 @@ func TestHardEnforcementRebuildsAfterEventReplay(t *testing.T) {
 }
 
 func TestRepairRetriesSurviveEventReplayForRebuild(t *testing.T) {
+	t.Parallel()
 	fp := NewFailureFingerprint("build", "repairer", "go test", FailureVerify, "exit code 1")
 	taskPayload, _ := json.Marshal(map[string]any{
 		"id": "repair-recovered", "kind": TaskKindRepair, "advances": []string{"build"}, "status": TaskDone, "retries": 1,
@@ -609,6 +637,7 @@ func TestRepairRetriesSurviveEventReplayForRebuild(t *testing.T) {
 }
 
 func TestCriterionProgressReplayResetsDiagnosticRebuildCounter(t *testing.T) {
+	t.Parallel()
 	first, _ := json.Marshal(map[string]any{"id": "diagnostic-1", "kind": TaskKindDiagnostic, "advances": []string{"build"}, "status": TaskDone})
 	second, _ := json.Marshal(map[string]any{"id": "diagnostic-2", "kind": TaskKindDiagnostic, "advances": []string{"build"}, "status": TaskDone})
 	progress, _ := json.Marshal(map[string]any{"progress": ProgressAdvanced})
@@ -629,6 +658,7 @@ func TestCriterionProgressReplayResetsDiagnosticRebuildCounter(t *testing.T) {
 }
 
 func TestCriterionProgressResetsRepairCounterForLiveAndReplay(t *testing.T) {
+	t.Parallel()
 	first, _ := json.Marshal(map[string]any{
 		"id": "repair-1", "kind": TaskKindRepair, "advances": []string{"build"},
 		"status": TaskDone, "progress": ProgressNoChange,
@@ -668,6 +698,7 @@ func TestCriterionProgressResetsRepairCounterForLiveAndReplay(t *testing.T) {
 }
 
 func TestCriterionProgressClearsLiveAndReplayRepairBlock(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Config: agent.TeamConfig{Reliability: agent.ReliabilityConfig{MaxRepairsPerCriterion: 1, HardEnforcement: true}}}
 	acceptance := &AcceptanceSpec{Criteria: []AcceptanceCriterion{{
 		ID: "build", Required: true, Verify: VerificationSpec{Type: VerifyCommandExit, Command: "true"},
@@ -697,6 +728,7 @@ func TestCriterionProgressClearsLiveAndReplayRepairBlock(t *testing.T) {
 }
 
 func TestCriterionProgressClearsFingerprintBlockOnLiveAndReplay(t *testing.T) {
+	t.Parallel()
 	fp := NewFailureFingerprint("build", "repairer", "verify", FailureVerify, "exit code 1")
 	session := &TeamSession{Config: agent.TeamConfig{Reliability: agent.ReliabilityConfig{MaxSameFailureFingerprint: 1, HardEnforcement: true}}}
 	acceptance := &AcceptanceSpec{Criteria: []AcceptanceCriterion{{
@@ -725,6 +757,7 @@ func TestCriterionProgressClearsFingerprintBlockOnLiveAndReplay(t *testing.T) {
 }
 
 func TestPartialMultiCriterionProgressOnlyResetsAdvancedCriterionLiveAndReplay(t *testing.T) {
+	t.Parallel()
 	config := agent.TeamConfig{Reliability: agent.ReliabilityConfig{MaxRepairsPerCriterion: 1, HardEnforcement: true}}
 	acceptance := &AcceptanceSpec{Criteria: []AcceptanceCriterion{
 		{ID: "build", Required: true, Verify: VerificationSpec{Type: VerifyCommandExit, Command: "true"}},
@@ -804,6 +837,7 @@ func TestPartialMultiCriterionProgressOnlyResetsAdvancedCriterionLiveAndReplay(t
 }
 
 func TestFailureOperationUsesTaskLocalIdentity(t *testing.T) {
+	t.Parallel()
 	a := &TodoItem{ID: "a", Kind: TaskKindRepair, LastOperation: "bash"}
 	b := &TodoItem{ID: "b", Kind: TaskKindRepair, LastOperation: "go-test"}
 	if got := failureOperation(a); got != "bash" {
@@ -815,6 +849,7 @@ func TestFailureOperationUsesTaskLocalIdentity(t *testing.T) {
 }
 
 func TestConcurrentTaskOperationsRemainTaskLocal(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	items := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "a", Desc: "a"}, {Agent: "b", Desc: "b"}})
 	var wg sync.WaitGroup
@@ -838,6 +873,7 @@ func TestConcurrentTaskOperationsRemainTaskLocal(t *testing.T) {
 }
 
 func TestWP09_DefaultAntiThrashingLimitsAppliedWhenYAMLUnset(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: default-reliability\nacceptance: 'true'\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -876,6 +912,7 @@ func TestWP09_DefaultAntiThrashingLimitsAppliedWhenYAMLUnset(t *testing.T) {
 }
 
 func TestWP09_WarnOnlyOptInDoesNotHardBlock(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: warn-only-team\nacceptance: 'true'\nreliability:\n  warn-only: true\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -906,6 +943,7 @@ func TestWP09_WarnOnlyOptInDoesNotHardBlock(t *testing.T) {
 }
 
 func TestWP09_MDOnlyTeamReceivesDefaultReliabilityConfig(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	// Create a team.yml with exploratory mode for MD-only testing
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte("name: md-team\ngoal-mode: exploratory\n"), 0o644); err != nil {
@@ -944,6 +982,7 @@ func TestWP09_MDOnlyTeamReceivesDefaultReliabilityConfig(t *testing.T) {
 }
 
 func TestWP09_LoadDefaultTeamReceivesDefaultReliabilityConfig(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	sess, err := LoadDefaultTeam(dir, nil, "")
 	if err != nil {
@@ -972,6 +1011,7 @@ func TestWP09_LoadDefaultTeamReceivesDefaultReliabilityConfig(t *testing.T) {
 }
 
 func TestWP09_ZeroValueSessionConfigPreservesHardEnforcementDefault(t *testing.T) {
+	t.Parallel()
 	// Construct a TeamSession where Reliability is explicitly the zero struct (agent.ReliabilityConfig{})
 	sess := &TeamSession{
 		Config: agent.TeamConfig{

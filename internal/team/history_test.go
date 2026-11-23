@@ -13,6 +13,7 @@ import (
 )
 
 func TestCancelledHistoryCompactionPreservesInputWithoutProviderWork(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"cancelled_context", "sealed_run"} {
 		t.Run(name, func(t *testing.T) {
 			c := newTestCoordinator(t)
@@ -37,6 +38,7 @@ func TestCancelledHistoryCompactionPreservesInputWithoutProviderWork(t *testing.
 }
 
 func TestPriorCancelledRunDoesNotSuppressCompaction(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	c.SetLastRunResult(&RunResult{RunID: "previous-run", Outcome: RunOutcomeCancelled})
 	c.finishCalled.Store(true)
@@ -49,6 +51,7 @@ func TestPriorCancelledRunDoesNotSuppressCompaction(t *testing.T) {
 }
 
 func TestSaveAndLoadConversationHistory(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	messages := []fantasy.Message{
@@ -74,6 +77,7 @@ func TestSaveAndLoadConversationHistory(t *testing.T) {
 }
 
 func TestLoadConversationHistoryMissing(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	loaded := LoadConversationHistory(dir)
 	if loaded != nil {
@@ -82,6 +86,7 @@ func TestLoadConversationHistoryMissing(t *testing.T) {
 }
 
 func TestLoadConversationHistoryPreservesToolPairsAtLimit(t *testing.T) {
+	t.Parallel()
 	for _, parallel := range []bool{false, true} {
 		t.Run(map[bool]string{false: "single", true: "parallel"}[parallel], func(t *testing.T) {
 			workspace := t.TempDir()
@@ -121,6 +126,7 @@ func TestLoadConversationHistoryPreservesToolPairsAtLimit(t *testing.T) {
 }
 
 func TestLoadConversationHistoryCorrupt(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	putRuntimeDocument(t, dir, runtimestore.DocumentSessionHistory, []byte("not valid json{}"))
 
@@ -131,6 +137,7 @@ func TestLoadConversationHistoryCorrupt(t *testing.T) {
 }
 
 func TestDeleteConversationHistory(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	SaveConversationHistory(dir, []fantasy.Message{fantasy.NewUserMessage("test")})
@@ -151,6 +158,7 @@ func TestDeleteConversationHistory(t *testing.T) {
 }
 
 func TestFilterMessagesTruncatesOversized(t *testing.T) {
+	t.Parallel()
 	big := strings.Repeat("x", maxMessageSize+1000)
 	filtered := filterMessages([]fantasy.Message{fantasy.NewUserMessage(big)})
 	if len(filtered) != 1 {

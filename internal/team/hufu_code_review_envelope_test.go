@@ -6,6 +6,7 @@ import (
 )
 
 func TestHufuCodeReviewCritiqueEnvelopeMatchesBoundEvidence(t *testing.T) {
+	t.Parallel()
 	compiled := hufuCodeReviewLegacySchema(t, loadHufuCodeReviewTeam(t), "schemas/critique-v2.json")
 	for _, tc := range []struct {
 		name, status                  string

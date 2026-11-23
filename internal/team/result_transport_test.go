@@ -10,6 +10,7 @@ import (
 )
 
 func TestRuntimeResultTransportRemovesReportingAuthority(t *testing.T) {
+	t.Parallel()
 	def := testWorkerDef()
 	def.Tools = "view,submit_result"
 	task := TaskDef{Agent: def.Name, Execution: ExecutionContract{RequiresResult: true}}
@@ -33,6 +34,7 @@ func TestRuntimeResultTransportRemovesReportingAuthority(t *testing.T) {
 }
 
 func TestCollectorResponseChannelIsFrozenPolicy(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	policy, err := executionPolicyResultCollection(c.session, executionPolicySnapshotVersion)
 	if err != nil {
@@ -59,6 +61,7 @@ func TestCollectorResponseChannelIsFrozenPolicy(t *testing.T) {
 }
 
 func TestResultTransportUsesFrozenStaticPolicy(t *testing.T) {
+	t.Parallel()
 	c, item, _, _ := resultCollectionProviderFixture(t, "http://127.0.0.1:1/v1", true)
 	pinned := c.ExecutionPolicySnapshot().ResultCollection
 	task := taskDefFromTodoItem(item)
@@ -94,6 +97,7 @@ func TestResultTransportUsesFrozenStaticPolicy(t *testing.T) {
 }
 
 func TestResultTransportDefaultsAndAgentPrecedence(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		team, worker agent.ResultTransport
 		want         agent.ResultTransport
@@ -117,6 +121,7 @@ func TestResultTransportDefaultsAndAgentPrecedence(t *testing.T) {
 }
 
 func TestRuntimeResultTransportPreservesPlanSubmissionSurface(t *testing.T) {
+	t.Parallel()
 	c, item, _, _ := resultCollectionProviderFixture(t, "http://127.0.0.1:1/v1", true, func(c *Coordinator) { c.session.Agents["worker"].ResultTransport = "" })
 	def := c.session.Agents["worker"]
 	for _, mode := range []WorkerToolResolutionMode{WorkerToolResolutionInitialPlan, WorkerToolResolutionApprovedPlan} {
@@ -135,6 +140,7 @@ func TestRuntimeResultTransportPreservesPlanSubmissionSurface(t *testing.T) {
 }
 
 func TestBoundArtifactPolicyPreflightUsesResultTransportAndLifecycle(t *testing.T) {
+	t.Parallel()
 	for _, transport := range []agent.ResultTransport{"", agent.ResultTransportTool} {
 		for _, phase := range []string{"work", "initial_plan", "approved_plan", "closed_sequence"} {
 			t.Run(string(transport)+"/"+phase, func(t *testing.T) {

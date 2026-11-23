@@ -73,6 +73,7 @@ func (j mediaTaskAppendFailure) AppendBatchAtHead(ctx context.Context, events []
 }
 
 func TestTaskMediaCreationCommitsBothEventsAndReconciles(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"before-commit", "after-commit", "invalid-second-event"} {
 		t.Run(stage, func(t *testing.T) {
 			c := newMediaPolicyCoordinator(t)
@@ -132,6 +133,7 @@ func TestTaskMediaCreationCommitsBothEventsAndReconciles(t *testing.T) {
 }
 
 func TestTaskMediaBindingOwnershipAndLease(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	task := admittedMediaTask(t, c, ctx, "turn")
@@ -196,6 +198,7 @@ func TestTaskMediaBindingOwnershipAndLease(t *testing.T) {
 }
 
 func TestMediaTaskCacheBypass(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	cache := c.TaskCache()
 	cache.Store(TaskCacheStoreRequest{AgentKey: "worker", Task: "compare", Output: "old text result"})
@@ -234,6 +237,7 @@ func (o *mediaCacheObserver) Store(request TaskCacheStoreRequest) {
 }
 
 func TestMediaDAGKeepsIndependentOccurrencesWithoutJournalReuse(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	c.SetNoJournal(true)
 	ctx := openMediaInvocation(t, c)
@@ -260,6 +264,7 @@ func TestMediaDAGKeepsIndependentOccurrencesWithoutJournalReuse(t *testing.T) {
 }
 
 func TestMediaBranchQuotaCountsUniqueContent(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	_ = admittedMediaTask(t, c, ctx, "turn")

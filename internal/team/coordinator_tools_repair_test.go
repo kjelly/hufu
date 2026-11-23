@@ -44,6 +44,7 @@ func (m *protocolRecordingTool) Info() fantasy.ToolInfo {
 }
 
 func TestCoordinatorToolArgumentRepairRedirectsOneWrongToolWithoutExecution(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	state := &protocolRepairState{}
 	agentTool := &protocolRecordingTool{name: "agent"}
@@ -75,6 +76,7 @@ func TestCoordinatorToolArgumentRepairRedirectsOneWrongToolWithoutExecution(t *t
 }
 
 func TestCoordinatorToolArgumentRepairFailsClosedAfterSecondWrongTool(t *testing.T) {
+	t.Parallel()
 	state := &protocolRepairState{}
 	agentWrapper := &protocolRepairWrapper{base: &protocolRecordingTool{name: "agent"}, c: &Coordinator{}, state: state}
 	strayWrapper := &protocolRepairWrapper{base: &protocolRecordingTool{name: "ls"}, c: &Coordinator{}, state: state}
@@ -105,6 +107,7 @@ func newProtocolWrapper(c *Coordinator, base fantasy.AgentTool) *protocolRepairW
 }
 
 func TestCoordinatorToolArgumentsNativeArrayExecutesNormally(t *testing.T) {
+	t.Parallel()
 	base := &protocolRecordingTool{}
 	wrapper := newProtocolWrapper(&Coordinator{}, base)
 	response, err := wrapper.Run(context.Background(), fantasy.ToolCall{ID: "native", Name: "agent", Input: `{"tasks":[{"agent":"worker","goal":"bounded"}]}`})
@@ -117,6 +120,7 @@ func TestCoordinatorToolArgumentsNativeArrayExecutesNormally(t *testing.T) {
 }
 
 func TestCoordinatorToolArgumentsRejectStringifiedArrayWithoutExecution(t *testing.T) {
+	t.Parallel()
 	base := &protocolRecordingTool{}
 	wrapper := newProtocolWrapper(&Coordinator{}, base)
 	response, err := wrapper.Run(context.Background(), fantasy.ToolCall{ID: "bad-string", Name: "agent", Input: `{"tasks":"[{\"agent\":\"worker\",\"goal\":\"secret\"}]"}`})
@@ -134,6 +138,7 @@ func TestCoordinatorToolArgumentsRejectStringifiedArrayWithoutExecution(t *testi
 }
 
 func TestCoordinatorToolArgumentsRejectStringArrayElementWithoutExecution(t *testing.T) {
+	t.Parallel()
 	base := &protocolRecordingTool{}
 	wrapper := newProtocolWrapper(&Coordinator{}, base)
 	response, err := wrapper.Run(context.Background(), fantasy.ToolCall{ID: "bad-item", Name: "agent", Input: `{"tasks":["not-an-object"]}`})
@@ -146,6 +151,7 @@ func TestCoordinatorToolArgumentsRejectStringArrayElementWithoutExecution(t *tes
 }
 
 func TestCoordinatorToolArgumentsRequireCompleteTaskObject(t *testing.T) {
+	t.Parallel()
 	base := &protocolRecordingTool{}
 	wrapper := newProtocolWrapper(&Coordinator{}, base)
 	response, err := wrapper.Run(context.Background(), fantasy.ToolCall{ID: "missing-goal", Name: "agent", Input: `{"tasks":[{"agent":"worker"}]}`})
@@ -158,6 +164,7 @@ func TestCoordinatorToolArgumentsRequireCompleteTaskObject(t *testing.T) {
 }
 
 func TestValidateToolArgumentsHonorsPrefixItemsAndMinimum(t *testing.T) {
+	t.Parallel()
 	info := fantasy.ToolInfo{
 		Name: "ordered",
 		Parameters: map[string]any{"tasks": map[string]any{
@@ -178,6 +185,7 @@ func TestValidateToolArgumentsHonorsPrefixItemsAndMinimum(t *testing.T) {
 }
 
 func TestSubmitResultUnionReportsTheRejectedObjectMember(t *testing.T) {
+	t.Parallel()
 	info := submitResultToolInfo(taskResultSubmissionContract{})
 	for _, tc := range []struct {
 		name, entry, path string
@@ -208,6 +216,7 @@ func TestSubmitResultUnionReportsTheRejectedObjectMember(t *testing.T) {
 }
 
 func TestSubmitResultRepairShowsOptionalQuestionEntryExample(t *testing.T) {
+	t.Parallel()
 	info := submitResultToolInfo(taskResultSubmissionContract{})
 	input := `{"status":"success","summary":"review","open_questions":[{"detail":"private question"}]}`
 	violation := validateToolArguments(input, info)
@@ -229,6 +238,7 @@ func TestSubmitResultRepairShowsOptionalQuestionEntryExample(t *testing.T) {
 }
 
 func TestUnionDiagnosticDoesNotGuessBetweenSameTypedBranches(t *testing.T) {
+	t.Parallel()
 	schema := map[string]any{"oneOf": []any{
 		map[string]any{"type": "object", "required": []string{"first"}},
 		map[string]any{"type": "object", "required": []string{"second"}},
@@ -240,6 +250,7 @@ func TestUnionDiagnosticDoesNotGuessBetweenSameTypedBranches(t *testing.T) {
 }
 
 func TestCoordinatorToolArgumentRepairExecutesCorrectedCallExactlyOnce(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	base := &protocolRecordingTool{}
 	wrapper := newProtocolWrapper(c, base)
@@ -261,6 +272,7 @@ func TestCoordinatorToolArgumentRepairExecutesCorrectedCallExactlyOnce(t *testin
 }
 
 func TestCoordinatorToolArgumentSecondMalformedRepairRetainsBothDiagnostics(t *testing.T) {
+	t.Parallel()
 	base := &protocolRecordingTool{}
 	wrapper := newProtocolWrapper(&Coordinator{}, base)
 	ctx := context.WithValue(context.Background(), modelKey{}, "openai/gpt-test")
@@ -281,6 +293,7 @@ func TestCoordinatorToolArgumentSecondMalformedRepairRetainsBothDiagnostics(t *t
 }
 
 func TestCoordinatorToolPolicyAndExecutionErrorsDoNotEnterRepair(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		response fantasy.ToolResponse
@@ -309,6 +322,7 @@ func TestCoordinatorToolPolicyAndExecutionErrorsDoNotEnterRepair(t *testing.T) {
 }
 
 func TestCoordinatorToolArgumentCancellationDuringRepairDoesNotExecute(t *testing.T) {
+	t.Parallel()
 	base := &protocolRecordingTool{}
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	wrapper := newProtocolWrapper(c, base)
@@ -325,6 +339,7 @@ func TestCoordinatorToolArgumentCancellationDuringRepairDoesNotExecute(t *testin
 }
 
 func TestCoordinatorToolArgumentAuditRecordsPathWithoutSecret(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	logger, err := audit.NewAuditLogger(workspace, "repair-team")
 	if err != nil {
@@ -363,6 +378,7 @@ func TestCoordinatorToolArgumentAuditRecordsPathWithoutSecret(t *testing.T) {
 }
 
 func TestCoordinatorToolLocalValidationRemainsEnabledWithProviderOptions(t *testing.T) {
+	t.Parallel()
 	base := &protocolRecordingTool{}
 	wrapper := newProtocolWrapper(&Coordinator{}, base)
 	user := "strict-schema-provider"
@@ -390,6 +406,7 @@ func (*enumRecordingTool) Info() fantasy.ToolInfo {
 }
 
 func TestProtocolRepairFoldsEnumCaseWithoutARepairRound(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input     string
 		wantRuns  int

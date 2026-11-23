@@ -15,6 +15,7 @@ import (
 )
 
 func TestHasExecutableAcceptanceContract(t *testing.T) {
+	t.Parallel()
 	if (*Coordinator)(nil).HasExecutableAcceptanceContract() {
 		t.Fatal("nil coordinator reported an acceptance contract")
 	}
@@ -33,6 +34,7 @@ func TestHasExecutableAcceptanceContract(t *testing.T) {
 }
 
 func TestNamedCriteriaPersistAndRespectDependencies(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{Name: "test"}}, projectDir: dir, taskTracker: NewTaskTracker(), sessionData: NewSession()}
 	c.acceptanceSpec = &AcceptanceSpec{Criteria: []AcceptanceCriterion{
@@ -58,6 +60,7 @@ func TestNamedCriteriaPersistAndRespectDependencies(t *testing.T) {
 }
 
 func TestCriterionFingerprintIncludesRevisionAndSecurityInputs(t *testing.T) {
+	t.Parallel()
 	criteria := []AcceptanceCriterion{{ID: "ready", Required: true, Verify: VerificationSpec{Type: VerifyCommandExit, Command: "true"}}}
 	newCoordinator := func(revision int, noNet bool) *Coordinator {
 		return &Coordinator{
@@ -81,6 +84,7 @@ func TestCriterionFingerprintIncludesRevisionAndSecurityInputs(t *testing.T) {
 }
 
 func TestDiagnosticTaskRequiresUncertaintyDeclaration(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{Name: "test", GoalMode: "outcome"}}}
 	if err := c.validateTaskCriterionLinks([]TaskDef{{Kind: TaskKindDiagnostic, Goal: "inspect"}}); err == nil {
 		t.Fatal("diagnostic task without expected state change should be rejected")
@@ -91,6 +95,7 @@ func TestDiagnosticTaskRequiresUncertaintyDeclaration(t *testing.T) {
 }
 
 func TestOutcomeTasksRequireSemanticAcceptanceVerifier(t *testing.T) {
+	t.Parallel()
 	newCoordinator := func() *Coordinator {
 		return &Coordinator{
 			session: &TeamSession{Config: agent.TeamConfig{Name: "test", GoalMode: "outcome"}},
@@ -145,6 +150,7 @@ func TestOutcomeTasksRequireSemanticAcceptanceVerifier(t *testing.T) {
 }
 
 func TestNormalizeOutcomeTaskKindsPreservesSidecars(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{Config: agent.TeamConfig{Name: "test", GoalMode: "outcome"}},
 		// Promotion is conditional on there being an acceptance contract for an
@@ -170,6 +176,7 @@ func TestNormalizeOutcomeTaskKindsPreservesSidecars(t *testing.T) {
 }
 
 func TestCriterionRetryTargetsFailedCriteria(t *testing.T) {
+	t.Parallel()
 	tasks := []TaskDef{
 		{Kind: TaskKindOutcome, Advances: []string{"build"}},
 		{Kind: TaskKindDiagnostic, Advances: []string{"build"}, ExpectedStateChange: "inspect build failure"},
@@ -183,6 +190,7 @@ func TestCriterionRetryTargetsFailedCriteria(t *testing.T) {
 }
 
 func TestSuccessfulNoProgressWithFailedCriterionIsRetryEligible(t *testing.T) {
+	t.Parallel()
 	if !criterionRetryEligible(ProgressNoChange, []string{"build"}) {
 		t.Fatal("successful task with no criterion progress should route to remediation")
 	}
@@ -200,6 +208,7 @@ func dirForCriteriaTest(t *testing.T) string {
 }
 
 func TestCriteriaUseConfiguredVerificationShell(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	c := &Coordinator{
 		session:     &TeamSession{Config: agent.TeamConfig{Name: "test", Shell: "bash"}},
@@ -218,6 +227,7 @@ func TestCriteriaUseConfiguredVerificationShell(t *testing.T) {
 }
 
 func TestCriterionAndTaskProgressPersistInSession(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	session := NewSession()
 	session.CriterionResults = []CriterionResult{{ID: "artifact", State: CriterionPassed, EvaluatedAt: time.Now().UTC(), InputFingerprint: "vfp_test"}}
@@ -235,6 +245,7 @@ func TestCriterionAndTaskProgressPersistInSession(t *testing.T) {
 }
 
 func TestCriterionAndTaskProgressReplayFromEvents(t *testing.T) {
+	t.Parallel()
 	encode := func(value any) json.RawMessage {
 		data, err := json.Marshal(value)
 		if err != nil {
@@ -260,6 +271,7 @@ func TestCriterionAndTaskProgressReplayFromEvents(t *testing.T) {
 }
 
 func TestOutcomeTaskReevaluatesAdvancedCriterion(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{Name: "test"}}, projectDir: dir, taskTracker: NewTaskTracker(), sessionData: NewSession()}
 	c.acceptanceSpec = &AcceptanceSpec{Criteria: []AcceptanceCriterion{{ID: "artifact", Required: true, Verify: VerificationSpec{Type: VerifyFileExists, Path: "report.txt"}}}}
@@ -280,6 +292,7 @@ func TestOutcomeTaskReevaluatesAdvancedCriterion(t *testing.T) {
 }
 
 func TestValidateAcceptanceSpec_VacuousContract(t *testing.T) {
+	t.Parallel()
 	// In outcome mode, empty acceptance contracts must fail validation with acceptance_vacuous error.
 	if err := ValidateAcceptanceSpec(nil, "outcome"); err == nil || !strings.Contains(err.Error(), FindingAcceptanceVacuous) {
 		t.Fatalf("expected acceptance_vacuous error for nil spec in outcome mode, got %v", err)
@@ -304,6 +317,7 @@ func TestValidateAcceptanceSpec_VacuousContract(t *testing.T) {
 }
 
 func TestSetAcceptance_RejectsVacuousContract(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session:     &TeamSession{Config: agent.TeamConfig{Name: "test", GoalMode: "outcome"}},
 		projectDir:  t.TempDir(),
@@ -327,6 +341,7 @@ func TestSetAcceptance_RejectsVacuousContract(t *testing.T) {
 }
 
 func TestOutcomeModeMissingAcceptanceRejected(t *testing.T) {
+	t.Parallel()
 	// 1. YAML with no acceptance field uses the default profile's exploratory mode.
 	dir1 := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir1, "team.yml"), []byte("name: no-acc\n"), 0o644); err != nil {
@@ -396,6 +411,7 @@ func TestOutcomeModeMissingAcceptanceRejected(t *testing.T) {
 }
 
 func TestDefaultProfileGoalModeResolution(t *testing.T) {
+	t.Parallel()
 	mode, err := ResolveEffectiveGoalMode("", "")
 	if err != nil {
 		t.Fatalf("default profile resolution failed: %v", err)
@@ -416,6 +432,7 @@ func TestDefaultProfileGoalModeResolution(t *testing.T) {
 }
 
 func TestDefaultTeamWithoutAcceptanceGateIsUnverified(t *testing.T) {
+	t.Parallel()
 	// Exercise the real default coordinator's finish path without contacting a
 	// provider. This catches regressions where omitted goal-mode is treated as
 	// outcome before the default profile has resolved it.
@@ -455,6 +472,7 @@ func TestDefaultTeamWithoutAcceptanceGateIsUnverified(t *testing.T) {
 }
 
 func TestSetAcceptance_RejectedEmptyUpdateAudited(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	session := &TeamSession{
 		Workspace: ws,
@@ -499,6 +517,7 @@ func TestSetAcceptance_RejectedEmptyUpdateAudited(t *testing.T) {
 }
 
 func TestAcceptanceAuditDistinguishesUnsetFromExplicitEmpty(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	events := make([]StatusEvent, 0, 2)
 	c := &Coordinator{
@@ -542,6 +561,7 @@ func TestAcceptanceAuditDistinguishesUnsetFromExplicitEmpty(t *testing.T) {
 }
 
 func TestAcceptanceAuditRedactsJSONEmbeddedSecrets(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "audit-redaction"}}}
 	c.persistAcceptanceAuditEvent("test", "rejected", AcceptanceContractConfigured,
@@ -557,6 +577,7 @@ func TestAcceptanceAuditRedactsJSONEmbeddedSecrets(t *testing.T) {
 }
 
 func TestSetGoalModeRejectsExistingVacuousAcceptance(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session:     &TeamSession{Config: agent.TeamConfig{Name: "mode-switch", GoalMode: "exploratory"}},
 		sessionData: NewSession(),

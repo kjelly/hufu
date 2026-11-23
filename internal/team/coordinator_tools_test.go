@@ -15,6 +15,7 @@ import (
 )
 
 func TestFinishRejectsUnresolvedPendingTasks(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker(), sessionData: NewSession(), session: &TeamSession{Config: agent.TeamConfig{Name: "pending-finish"}}}
 	c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "still running"}})
 	response, err := (&finishTool{coordinator: c}).Run(context.Background(), fantasy.ToolCall{Input: `{"response":"done"}`})
@@ -50,6 +51,7 @@ func TestAgentCreatedTodosRetainRunInputs(t *testing.T) {
 }
 
 func TestRunAgentsRejectsProviderWorksetStateBeforeTodoCreation(t *testing.T) {
+	t.Parallel()
 	for _, field := range []string{"workset_binding", "workset_receipt"} {
 		t.Run(field, func(t *testing.T) {
 			c := &Coordinator{taskTracker: NewTaskTracker()}
@@ -70,6 +72,7 @@ func TestRunAgentsRejectsProviderWorksetStateBeforeTodoCreation(t *testing.T) {
 }
 
 func TestFinishWritesCanonicalSessionItemNotSTMInCanonicalMode(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -112,6 +115,7 @@ func TestFinishWritesCanonicalSessionItemNotSTMInCanonicalMode(t *testing.T) {
 }
 
 func TestCanonicalFinishedResponsePrefersSealedFinishResponse(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.finishCalled.Store(true)
 	c.SetLastRunResult(&RunResult{Response: "# Evidence-backed final review"})
@@ -127,6 +131,7 @@ func TestCanonicalFinishedResponsePrefersSealedFinishResponse(t *testing.T) {
 }
 
 func TestDelegationChain(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		ctxChain   string
@@ -153,6 +158,7 @@ func TestDelegationChain(t *testing.T) {
 }
 
 func TestRunAgentsToolRendersTerminalWorkerFailureAsCoordinatorEvidence(t *testing.T) {
+	t.Parallel()
 	response := renderRunAgentsToolResponse("## Agent: worker\n**Status**: ERROR\n**Todo ID**: 4", errAllWorkerTasksFailed)
 	if response.IsError {
 		t.Fatalf("terminal worker outcome was rendered as agent tool error: %#v", response)
@@ -165,6 +171,7 @@ func TestRunAgentsToolRendersTerminalWorkerFailureAsCoordinatorEvidence(t *testi
 }
 
 func TestTerminalUnresolvedWorkerResponseStopsCoordinatorToolTurn(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "non-replayable checkpoint"}})[0]
 	tracker.TodoList().UpdateStatus(item.ID, TaskBlocked, "closed task contract failed")
@@ -196,6 +203,7 @@ func TestTerminalUnresolvedWorkerResponseStopsCoordinatorToolTurn(t *testing.T) 
 }
 
 func TestRunAgentsDescriptionForbidsSuccessfulRedispatch(t *testing.T) {
+	t.Parallel()
 	tool := &runAgentsTool{coordinator: &Coordinator{
 		session: &TeamSession{Agents: map[string]*agent.AgentDef{
 			"worker": {Name: "worker"},
@@ -210,6 +218,7 @@ func TestRunAgentsDescriptionForbidsSuccessfulRedispatch(t *testing.T) {
 }
 
 func TestRunAgentsToolInfoPinsFreshInitialDelegationSchema(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{Config: agent.TeamConfig{
 			Delegation: agent.DelegationPolicy{
@@ -270,6 +279,7 @@ func TestRunAgentsToolInfoPinsFreshInitialDelegationSchema(t *testing.T) {
 }
 
 func TestRunAgentsToolInfoCompactsRuntimeWorkflowSchema(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{Config: agent.TeamConfig{}, Agents: map[string]*agent.AgentDef{
 			"reviewer": {Name: "reviewer", Role: "worker"},
@@ -306,6 +316,7 @@ func TestRunAgentsToolInfoCompactsRuntimeWorkflowSchema(t *testing.T) {
 }
 
 func TestPortableProviderTaskPropertiesHidesComplexContractsOnlyFromModelSchema(t *testing.T) {
+	t.Parallel()
 	full := buildAgentTaskProperties([]string{"worker"}, true, "/tmp/shared", []string{"network"}, true)
 	portable := portableProviderTaskProperties(full)
 
@@ -325,6 +336,7 @@ func TestPortableProviderTaskPropertiesHidesComplexContractsOnlyFromModelSchema(
 }
 
 func TestRunAgentsToolInfoUsesPortableProviderProjection(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{Agents: map[string]*agent.AgentDef{
 			"worker": {Name: "worker", Role: "worker"},
@@ -345,6 +357,7 @@ func TestRunAgentsToolInfoUsesPortableProviderProjection(t *testing.T) {
 }
 
 func TestDecodeModelTaskDefsRetainsRuntimeContractFieldsOutsideProviderSchema(t *testing.T) {
+	t.Parallel()
 	tasks, err := decodeModelTaskDefs([]byte(`{"tasks":[{"agent":"worker","goal":"run the bounded check","execution":{"tool_sequence":["bash","submit_result"]},"fan_out":{"goal_template":"check {name}"}}]}`))
 	if err != nil {
 		t.Fatalf("decodeModelTaskDefs rejected a complete internal task: %v", err)
@@ -355,6 +368,7 @@ func TestDecodeModelTaskDefsRetainsRuntimeContractFieldsOutsideProviderSchema(t 
 }
 
 func TestRunAgentsToolInfoHidesForbiddenContextFiles(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 			ForbidContextFiles: true,
@@ -375,6 +389,7 @@ func TestRunAgentsToolInfoHidesForbiddenContextFiles(t *testing.T) {
 }
 
 func TestCheckDelegationLimits(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		chain    []string
@@ -406,6 +421,7 @@ func TestCheckDelegationLimits(t *testing.T) {
 // snapshot, which only ever holds the immediate agent's flat name). It must
 // instead accumulate across hops so depth and cycle checks are meaningful.
 func TestDelegationChainPropagatesAcrossHops(t *testing.T) {
+	t.Parallel()
 	// Hop 1: top-level agent "A" delegates to "B".
 	ctx := context.Background()
 	chain := delegationChain(ctx, "A")

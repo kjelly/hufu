@@ -7,6 +7,7 @@ import (
 )
 
 func TestResultGuidancePreservesVisibleConditionalConstraints(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, field string
 		visible     bool
@@ -38,6 +39,7 @@ func TestResultGuidancePreservesVisibleConditionalConstraints(t *testing.T) {
 }
 
 func TestResultGuidanceOmitsCompositeConditionalConstraints(t *testing.T) {
+	t.Parallel()
 	for _, constraint := range []string{
 		`{"then":{"properties":{"rows":{"items":{"properties":{"receipt":{"const":"runtime"}}}}}}}`,
 		`{"then":{"additionalProperties":false}}`,
@@ -56,6 +58,7 @@ func TestResultGuidanceOmitsCompositeConditionalConstraints(t *testing.T) {
 }
 
 func TestResultGuidancePreservesPrimitiveArrayConditions(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, item string
 		retained   bool
@@ -83,6 +86,7 @@ func TestResultGuidancePreservesPrimitiveArrayConditions(t *testing.T) {
 }
 
 func TestProviderResultSchemaPreservesNestedRequiredFields(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	const schema = `{
 		"$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -164,6 +168,7 @@ func TestProviderResultSchemaPreservesNestedRequiredFields(t *testing.T) {
 }
 
 func TestProviderResultSchemaFallsBackForUnsafeReferenceShapes(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		schema string
@@ -184,6 +189,7 @@ func TestProviderResultSchemaFallsBackForUnsafeReferenceShapes(t *testing.T) {
 }
 
 func TestProviderResultSchemaProjectionBounds(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"depth", "nodes"} {
 		t.Run(name, func(t *testing.T) {
 			root := map[string]any{"type": "object"}
@@ -209,6 +215,7 @@ func TestProviderResultSchemaProjectionBounds(t *testing.T) {
 }
 
 func TestProviderResultSchemaDoesNotClosePatternProperties(t *testing.T) {
+	t.Parallel()
 	root := map[string]any{
 		"type": "object", "additionalProperties": false,
 		"patternProperties": map[string]any{"^item": map[string]any{"type": "string"}},

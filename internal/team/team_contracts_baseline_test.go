@@ -41,6 +41,7 @@ func indentContractFixture(value string, spaces int) string {
 // Pin full typed contracts and both binding paths before changing the public key.
 // BuildCompatSnapshot alone omits execution, action and verification fields.
 func TestLegacyContractCharacterization(t *testing.T) {
+	t.Parallel()
 	for _, phases := range []bool{false, true} {
 		var baseline []TaskDef
 		var initialBaseline, goalBaseline []EffectiveTaskContract

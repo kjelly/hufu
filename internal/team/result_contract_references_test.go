@@ -25,6 +25,7 @@ func referenceBindingFixture(t *testing.T) (*Coordinator, *TodoItem, *TodoItem, 
 }
 
 func TestResultReferenceOwnershipAndReads(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"valid", "wrong_task", "wrong_reference", "missing_reads", "wrong_source", "empty_refs", "not_array", "not_string", "retained", "self_reference"} {
 		t.Run(name, func(t *testing.T) {
 			c, source, audit, value := referenceBindingFixture(t)
@@ -65,6 +66,7 @@ func TestResultReferenceOwnershipAndReads(t *testing.T) {
 }
 
 func TestResultReferenceRejectedSubmissionCanBeCorrected(t *testing.T) {
+	t.Parallel()
 	for _, route := range []string{"local", "external"} {
 		t.Run(route, func(t *testing.T) {
 			c, source, audit, value := referenceBindingFixture(t)
@@ -99,6 +101,7 @@ func TestResultReferenceRejectedSubmissionCanBeCorrected(t *testing.T) {
 }
 
 func TestReferenceExtensionPreflight(t *testing.T) {
+	t.Parallel()
 	valid := map[string]any{"items_pointer": "/links", "task_id_pointer": "/origin", "references_pointer": "/refs"}
 	for _, name := range []string{"valid", "missing", "pointer", "unknown", "condition"} {
 		t.Run(name, func(t *testing.T) {
@@ -126,6 +129,7 @@ func TestReferenceExtensionPreflight(t *testing.T) {
 }
 
 func TestReferenceOwnershipFeedbackNamesAcceptedReaders(t *testing.T) {
+	t.Parallel()
 	c, source, audit, value := referenceBindingFixture(t)
 	results := c.dependencyResultsForTask(audit.ID)
 	other := *source.TypedResult
@@ -139,6 +143,7 @@ func TestReferenceOwnershipFeedbackNamesAcceptedReaders(t *testing.T) {
 }
 
 func TestExternalResultReferenceChecksCanonicalReadsWithoutRequiredDelivery(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"valid", "missing_submitter_reads", "missing_source_reads"} {
 		t.Run(name, func(t *testing.T) {
 			c, source, audit, value := referenceBindingFixture(t)
@@ -179,6 +184,7 @@ func TestExternalResultReferenceChecksCanonicalReadsWithoutRequiredDelivery(t *t
 }
 
 func TestReplayedResultReferenceChecksWithoutRequiredDelivery(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"valid", "missing_submitter_reads", "missing_source_reads", "tampered_source_hash"} {
 		t.Run(name, func(t *testing.T) {
 			c, source, audit, value := referenceBindingFixture(t)

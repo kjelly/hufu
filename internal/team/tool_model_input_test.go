@@ -59,6 +59,7 @@ func appendObservedModelInput(t *testing.T, compiled *CompiledResultContract, re
 }
 
 func TestToolModelInputRequiresObservedCompleteSource(t *testing.T) {
+	t.Parallel()
 	compiled := modelInputTestContract(t)
 	for _, scenario := range []string{"full", "captured_only", "omitted", "truncated", "modified", "duplicate", "wrong_call", "wrong_target", "unobserved", "cancelled", "provider_error", "different_snapshot", "later_omission", "receipt_hash_mismatch", "receipt_size_mismatch", "redaction_masked_change"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -140,6 +141,7 @@ func TestToolModelInputRequiresObservedCompleteSource(t *testing.T) {
 }
 
 func TestToolModelInputRejectsModelReceiptAndOmitsGuidance(t *testing.T) {
+	t.Parallel()
 	compiled := modelInputTestContract(t)
 	schema := visibleResultPayloadSchema(compiled.ref(true), compiled, true)
 	if node := resultProjectionSchemaAt(schema, "/findings/0/sources/0/delivery"); node != nil {
@@ -159,6 +161,7 @@ func TestToolModelInputRejectsModelReceiptAndOmitsGuidance(t *testing.T) {
 }
 
 func TestToolModelInputProviderBoundaryAndReplay(t *testing.T) {
+	t.Parallel()
 	compiled := modelInputTestContract(t)
 	c := newTestCoordinator(t)
 	c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
@@ -243,6 +246,7 @@ func TestToolModelInputProviderBoundaryAndReplay(t *testing.T) {
 }
 
 func TestToolModelInputRejectsInheritedWorkerRecorder(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"own", "custom_role", "auxiliary", "coordinator", "other_task", "other_agent", "other_attempt", "other_run", "repair", "collector"} {
 		t.Run(scenario, func(t *testing.T) {
 			transcript := &taskTranscript{todoID: "task", runID: "run", agent: "worker", attempt: 1}
@@ -279,6 +283,7 @@ func TestToolModelInputRejectsInheritedWorkerRecorder(t *testing.T) {
 }
 
 func TestToolModelInputVerifierRequiresOwnRead(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(bundledTeamsDir(t), "web-research")
 	compiled, err := compileResultContractSchema(dir, "schemas/audit-v3.json")
 	if err != nil {

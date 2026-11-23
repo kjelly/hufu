@@ -241,6 +241,7 @@ func newTestEngineWithStages(journal *memoryJournal, runner JudgeRunner, budget 
 }
 
 func TestDecisionEngineRunProducesDurableRecord(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	runner := newRecordingRunner(func(judgeID string, _ int) (DecisionOpinion, error) {
 		switch judgeID {
@@ -295,6 +296,7 @@ func TestDecisionEngineRunProducesDurableRecord(t *testing.T) {
 }
 
 func TestDecisionEvidenceResolutionDoesNotMutateCallerRequest(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
@@ -322,6 +324,7 @@ func TestDecisionEvidenceResolutionDoesNotMutateCallerRequest(t *testing.T) {
 }
 
 func TestDecisionEngineRequiredRequestContractFailsBeforeJudge(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	runner := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
 		t.Fatal("judge was called without a required request contract")
@@ -342,6 +345,7 @@ func TestDecisionEngineRequiredRequestContractFailsBeforeJudge(t *testing.T) {
 // Isolation is the point of the whole first round: assert against the prompts
 // judges actually received (spec §16, test matrix B).
 func TestDecisionEngineJudgesAreIsolated(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	secrets := map[string]string{
 		"judge-1": "JUDGE-ONE-SECRET-RATIONALE",
@@ -397,6 +401,7 @@ func TestDecisionEngineJudgesAreIsolated(t *testing.T) {
 
 // Sealed isolation drops every non-evidence context source (spec §16).
 func TestSealedIsolationDropsContextSources(t *testing.T) {
+	t.Parallel()
 	packet := mustSeal(t, DecisionEvidencePacket{
 		Question: "Ship?",
 		Options:  []DecisionOption{{ID: "a", Kind: OptionExecute}},
@@ -423,6 +428,7 @@ func TestSealedIsolationDropsContextSources(t *testing.T) {
 }
 
 func TestJudgeContextRequiresSealedEvidence(t *testing.T) {
+	t.Parallel()
 	_, err := BuildJudgeContext(JudgeContextRequest{
 		JudgeID: "judge-1", Packet: DecisionEvidencePacket{Question: "Ship?"},
 	})
@@ -434,6 +440,7 @@ func TestJudgeContextRequiresSealedEvidence(t *testing.T) {
 // A crash after two of three opinions must dispatch only the missing judge and
 // must not regenerate the durable ones (spec §38.1, test matrix P).
 func TestDecisionEngineResumeDispatchesOnlyMissingJudges(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	failing := newRecordingRunner(func(judgeID string, _ int) (DecisionOpinion, error) {
 		if judgeID == "judge-3" {
@@ -471,6 +478,7 @@ func TestDecisionEngineResumeDispatchesOnlyMissingJudges(t *testing.T) {
 
 // A finalized decision is never recomputed (spec §35).
 func TestDecisionEngineDoesNotRerunFinalizedDecisions(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	runner := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
 		return scoredOpinion(8, 4, "migrate", 0.8), nil
@@ -502,6 +510,7 @@ func TestDecisionEngineDoesNotRerunFinalizedDecisions(t *testing.T) {
 // Changed material evidence supersedes the old hash instead of editing the
 // durable opinions (spec §15.4).
 func TestDecisionEngineMaterialEvidenceChangeStartsANewRound(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	runner := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
 		return scoredOpinion(8, 4, "migrate", 0.8), nil
@@ -553,6 +562,7 @@ func TestDecisionEngineMaterialEvidenceChangeStartsANewRound(t *testing.T) {
 // An invalid structured response is repaired once, then rejected. The rejected
 // opinion stays durable but never reaches the aggregate (spec §14.3).
 func TestDecisionEngineRepairsOnceThenRejects(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	runner := newRecordingRunner(func(judgeID string, attempt int) (DecisionOpinion, error) {
 		if judgeID == "judge-2" && attempt == 1 {
@@ -600,6 +610,7 @@ func TestDecisionEngineRepairsOnceThenRejects(t *testing.T) {
 }
 
 func TestDecisionEngineFailsClosedBelowMinimumJudges(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	runner := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
 		bad := scoredOpinion(8, 4, "migrate", 0.8)
@@ -617,6 +628,7 @@ func TestDecisionEngineFailsClosedBelowMinimumJudges(t *testing.T) {
 // The runtime aggregates in Go; a judge's own overall is ignored and the fact
 // is recorded rather than passed over in silence (spec §14.2).
 func TestDecisionEngineRecordsIgnoredJudgeOverall(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	runner := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
 		o := scoredOpinion(8, 4, "migrate", 0.8)

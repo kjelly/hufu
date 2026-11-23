@@ -67,6 +67,7 @@ func claimHistoricalRequestFixture(t *testing.T, c *Coordinator, rows *[]Histori
 }
 
 func TestHistoricalResultRequestCommitsCycleAndGrantTogether(t *testing.T) {
+	t.Parallel()
 	c, rows := historicalRequestFixture(t)
 	ctx := claimHistoricalRequestFixture(t, c, rows)
 	if started, err := c.beginFollowUpWorkflow(ctx, "new request"); err != nil || !started {
@@ -102,6 +103,7 @@ func TestHistoricalResultRequestCommitsCycleAndGrantTogether(t *testing.T) {
 }
 
 func TestHistoricalResultRequestAtomicFailure(t *testing.T) {
+	t.Parallel()
 	for _, failure := range []string{"index", "sync", "source_drift"} {
 		t.Run(failure, func(t *testing.T) {
 			c, rows := historicalRequestFixture(t)
@@ -150,6 +152,7 @@ func (j historicalSyncFailureJournal) AppendBatchAtHead(ctx context.Context, eve
 }
 
 func TestHistoricalResultRequestRejectsUnsupportedEntriesBeforeModels(t *testing.T) {
+	t.Parallel()
 	for _, entry := range []string{"resume", "direct", "continue", "dry_run", "other_owner", "prompt_changed", "source_changed", "inactive_branch"} {
 		t.Run(entry, func(t *testing.T) {
 			c, rows := historicalRequestFixture(t)

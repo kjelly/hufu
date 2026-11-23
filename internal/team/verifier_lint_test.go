@@ -16,6 +16,7 @@ import (
 //   - none=true  → no verifier_not_asserting finding expected
 //   - code+sev   → at least one finding with that code and severity expected
 func TestLintVerifier_AntiPatterns(t *testing.T) {
+	t.Parallel()
 	type want struct {
 		code     string
 		severity string
@@ -404,6 +405,7 @@ func TestLintVerifier_AntiPatterns(t *testing.T) {
 // TestSplitPipelineStages verifies the pipeline splitter handles `|` vs `||`
 // and basic quoting correctly.
 func TestSplitPipelineStages(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		command string
@@ -466,6 +468,7 @@ func TestSplitPipelineStages(t *testing.T) {
 // TestLintVerifier_ObservationExempt validates that observation-mode verifiers
 // with known anti-patterns produce no verifier_not_asserting findings.
 func TestLintVerifier_ObservationExempt(t *testing.T) {
+	t.Parallel()
 	antis := []string{
 		"check || true",
 		"ps aux | grep -c running",
@@ -492,6 +495,7 @@ func TestLintVerifier_ObservationExempt(t *testing.T) {
 }
 
 func TestLintTeamContracts(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		session   *TeamSession
@@ -609,6 +613,7 @@ func TestLintTeamContracts(t *testing.T) {
 }
 
 func TestLintTeamContracts_LoadTeam_Observation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	yamlContent := `name: obs-team
 acceptance:
@@ -643,6 +648,7 @@ acceptance:
 }
 
 func TestTeamContractPreflightIncludesStaticTasksAndExecutables(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name             string
 		session          *TeamSession
@@ -708,6 +714,7 @@ func TestTeamContractPreflightIncludesStaticTasksAndExecutables(t *testing.T) {
 }
 
 func TestLoadTeamRetainsStaticContractTasks(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	teamYAML := `name: doctor-contracts
 tasks:
@@ -744,6 +751,7 @@ func hasContractFinding(findings []ContractFinding, code, field string) bool {
 }
 
 func TestEvaluateAndChain(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		andParts     []string

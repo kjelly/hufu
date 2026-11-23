@@ -22,6 +22,7 @@ func sharedMemoryTestRepo(t *testing.T) contextstore.Repository {
 }
 
 func TestSharedMemoryCandidateLifecycleIsCanonical(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repo := sharedMemoryTestRepo(t)
 	svc := NewSharedMemoryService(repo)
@@ -72,6 +73,7 @@ func TestSharedMemoryCandidateLifecycleIsCanonical(t *testing.T) {
 }
 
 func TestSharedMemoryRejectedRunRemainsHidden(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repo := sharedMemoryTestRepo(t)
 	svc := NewSharedMemoryService(repo)
@@ -92,6 +94,7 @@ func TestSharedMemoryRejectedRunRemainsHidden(t *testing.T) {
 }
 
 func TestSharedMemorySupersessionIsAtomicOnConfirmation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repo := sharedMemoryTestRepo(t)
 	svc := NewSharedMemoryService(repo)
@@ -131,6 +134,7 @@ func TestSharedMemorySupersessionIsAtomicOnConfirmation(t *testing.T) {
 }
 
 func TestSharedMemorySupersessionRefusesForeignTarget(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repo := sharedMemoryTestRepo(t)
 	svc := NewSharedMemoryService(repo)
@@ -144,6 +148,7 @@ func TestSharedMemorySupersessionRefusesForeignTarget(t *testing.T) {
 }
 
 func TestSharedMemoryProposalPreservesExplicitZeroConfidence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repo := sharedMemoryTestRepo(t)
 	svc := NewSharedMemoryService(repo)
@@ -180,6 +185,7 @@ func TestSharedMemoryProposalPreservesExplicitZeroConfidence(t *testing.T) {
 }
 
 func TestCoordinatorSharedKnowledgeDoesNotWriteLegacyJSONL(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -203,6 +209,7 @@ func TestCoordinatorSharedKnowledgeDoesNotWriteLegacyJSONL(t *testing.T) {
 }
 
 func TestSharedMemory_RejectedRunWithoutPriorCandidates_RejectsLateProposalOnFreshServiceAndReopenedRepo(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	dbPath := filepath.Join(workspace, "context.sqlite")
 	repo1, err := contextstore.OpenSQLite(dbPath)
@@ -269,6 +276,7 @@ func TestSharedMemory_RejectedRunWithoutPriorCandidates_RejectsLateProposalOnFre
 }
 
 func TestSharedMemory_RejectionIsScopeBound_DoesNotAffectOtherProjectOrTeam(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	dbPath := filepath.Join(workspace, "context.sqlite")
 	repo1, err := contextstore.OpenSQLite(dbPath)
@@ -348,6 +356,7 @@ func (f *failingAppendRepo) Append(ctx context.Context, items ...contextstore.Co
 }
 
 func TestSharedMemory_RejectRun_FailClosedOnAppendError(t *testing.T) {
+	t.Parallel()
 	repo := sharedMemoryTestRepo(t)
 	failing := &failingAppendRepo{Repository: repo, failAppend: true}
 	svc := NewSharedMemoryService(failing)

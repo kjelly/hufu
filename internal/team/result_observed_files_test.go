@@ -18,6 +18,7 @@ func observedFilesTestSchema() string {
 }
 
 func TestRuntimeOwnedFilesReadAdmission(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"full_id", "short_key", "empty", "unread", "other_model", "corrupt", "override", "null_override", "empty_override", "typo_full_id", "typo_key", "typo_full_id_receipt", "typo_key_receipt"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := artifactKeysFixtureForSchema(t, observedFilesTestSchema())
@@ -132,6 +133,7 @@ func TestRuntimeOwnedFilesReadAdmission(t *testing.T) {
 }
 
 func TestRuntimeOwnedFilesReadRejectsExternalProposal(t *testing.T) {
+	t.Parallel()
 	compiled, err := CompileResultContractDocument("reads.json", []byte(observedFilesTestSchema()))
 	if err != nil {
 		t.Fatal(err)
@@ -146,6 +148,7 @@ func TestRuntimeOwnedFilesReadRejectsExternalProposal(t *testing.T) {
 }
 
 func TestRuntimeOwnedFilesReadPreflightsNativeCapability(t *testing.T) {
+	t.Parallel()
 	compiled, err := CompileResultContractDocument("reads.json", []byte(observedFilesTestSchema()))
 	if err != nil {
 		t.Fatal(err)
@@ -173,6 +176,7 @@ func TestRuntimeOwnedFilesReadPreflightsNativeCapability(t *testing.T) {
 }
 
 func TestRuntimeOwnedFilesReadSelectionSchema(t *testing.T) {
+	t.Parallel()
 	for _, shape := range []string{"array", "fixed_rows", "no_reads"} {
 		t.Run(shape, func(t *testing.T) {
 			f := artifactKeysFixtureForSchema(t, observedFilesTestSchema())

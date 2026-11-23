@@ -21,6 +21,7 @@ func (bindingTestStore) Resolve(_ context.Context, ref ArtifactRef) (ArtifactRef
 func (bindingTestStore) ListByTask(context.Context, string) ([]ArtifactRef, error) { return nil, nil }
 
 func TestEvidenceManifestRejectsConflictingTaskAttemptAndTranscriptBinding(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		mutate func(*EvidenceBinding)
@@ -48,6 +49,7 @@ func TestEvidenceManifestRejectsConflictingTaskAttemptAndTranscriptBinding(t *te
 }
 
 func TestEvidenceManifestVerifyCommandWithoutTranscriptIsNotVerified(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir()}, taskTracker: NewTaskTracker(), executionRunID: "run-verify"}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "verify-only"}})[0]
 	c.taskTracker.TodoList().UpdateStatus(item.ID, TaskDone, "done")
@@ -59,6 +61,7 @@ func TestEvidenceManifestVerifyCommandWithoutTranscriptIsNotVerified(t *testing.
 }
 
 func TestEvidenceManifestStrictFalseBindingCorruptionIsTerminalFailure(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	transcript := workspace + "/transcript.md"
 	if err := os.WriteFile(transcript, []byte("worker transcript\n"), 0o644); err != nil {
@@ -84,6 +87,7 @@ func TestEvidenceManifestStrictFalseBindingCorruptionIsTerminalFailure(t *testin
 }
 
 func TestEvidenceManifestIncludesVerifiedTranscriptInTaskArtifactRefs(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	transcript := workspace + "/transcript.md"
 	if err := os.WriteFile(transcript, []byte("worker transcript\n"), 0o644); err != nil {
@@ -112,6 +116,7 @@ func TestEvidenceManifestIncludesVerifiedTranscriptInTaskArtifactRefs(t *testing
 }
 
 func TestEvidenceManifestProjectsDeduplicatedTranscriptPerCurrentOccurrence(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store := mustArtifactStore(t, workspace)
 	immutable, err := store.Put(context.Background(), PutArtifactRequest{
@@ -159,6 +164,7 @@ func TestEvidenceManifestProjectsDeduplicatedTranscriptPerCurrentOccurrence(t *t
 }
 
 func TestEvidenceManifestVerifiesTwoCurrentOccurrencesWithOneArtifactID(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store := mustArtifactStore(t, workspace)
 	artifact, err := store.Put(context.Background(), PutArtifactRequest{
@@ -214,6 +220,7 @@ func mustArtifactStore(t *testing.T, workspace string) *FileArtifactStore {
 }
 
 func TestEvidenceManifestRejectsPassedTaskWithoutBinding(t *testing.T) {
+	t.Parallel()
 	manifest := &EvidenceManifest{RunID: "run-1", Status: "accepted", EvidenceResults: []EvidenceResult{{
 		RequirementID: "task:task-1", Status: "passed",
 	}}}

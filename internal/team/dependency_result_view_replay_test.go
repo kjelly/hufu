@@ -6,6 +6,7 @@ import (
 )
 
 func TestDependencyResultViewRetryFanoutAndReplayKeepSources(t *testing.T) {
+	t.Parallel()
 	c, _, consumer, input := dependencyViewRuntimeFixture(t)
 	var expectedHash string
 	for _, test := range []struct {
@@ -74,6 +75,7 @@ func TestDependencyResultViewRetryFanoutAndReplayKeepSources(t *testing.T) {
 }
 
 func TestDependencyResultViewCompletionOrderKeepsPresentation(t *testing.T) {
+	t.Parallel()
 	var expected string
 	for _, test := range []struct {
 		name  string

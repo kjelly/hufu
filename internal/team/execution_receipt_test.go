@@ -14,6 +14,7 @@ import (
 )
 
 func TestExecutionReceipt_JSONSerialization(t *testing.T) {
+	t.Parallel()
 	now := time.Now().Truncate(time.Millisecond)
 	exitCode := 0
 	receipt := ExecutionReceipt{
@@ -45,6 +46,7 @@ func TestExecutionReceipt_JSONSerialization(t *testing.T) {
 }
 
 func TestExecutionReceiptSucceededRequiresExplicitZeroExit(t *testing.T) {
+	t.Parallel()
 	zero, failed := 0, 1
 	tests := []struct {
 		name    string
@@ -65,6 +67,7 @@ func TestExecutionReceiptSucceededRequiresExplicitZeroExit(t *testing.T) {
 }
 
 func TestExecutionReceiptPersistsCanonicalBackendWithoutLegacyProvider(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{items: []*TodoItem{{
 		ID:              "task-1",
 		ExecutionTarget: execution.ExecutionTarget{Backend: "ollama", Model: "qwen3:8b"},
@@ -105,6 +108,7 @@ func TestExecutionReceiptPersistsCanonicalBackendWithoutLegacyProvider(t *testin
 }
 
 func TestArtifactExpectation_AllSerializationVariants(t *testing.T) {
+	t.Parallel()
 	// 1. JSON with kebab-case and explicit required: false
 	jsonKebab := `{"name":"opt_build", "locator":"dist/opt", "must-be-fresh":true, "required":false, "verification-mode":"file"}`
 	var exp1 ArtifactExpectation
@@ -159,6 +163,7 @@ verification_mode: file
 }
 
 func TestArtifactVerifierRegistry_DispatchAndDefault(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	reg := NewArtifactVerifierRegistry(dir)
 
@@ -201,6 +206,7 @@ func TestArtifactVerifierRegistry_DispatchAndDefault(t *testing.T) {
 }
 
 func TestExecutionReceiptsKeepConcurrentModelExecutionsDistinct(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{items: []*TodoItem{{ID: "task-1"}}}
 	first := ExecutionReceipt{RunID: "run-1", TaskID: "task-1", Attempt: 1, ModelExecutionID: "model-a"}
 	second := first
@@ -218,6 +224,7 @@ func TestExecutionReceiptsKeepConcurrentModelExecutionsDistinct(t *testing.T) {
 }
 
 func TestExecutionReceiptSnapshotsIsolateRepairHistoryAndMutableChildren(t *testing.T) {
+	t.Parallel()
 	tl := &TodoList{items: []*TodoItem{{ID: "task-1"}}}
 
 	historyResult := &TaskResult{
@@ -335,6 +342,7 @@ func (m *mockVerifier) Verify(ctx context.Context, receipt ExecutionReceipt, exp
 }
 
 func TestFileArtifactVerifier_FreshnessValidation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	fv := NewFileArtifactVerifier(dir)
 
@@ -383,6 +391,7 @@ func TestFileArtifactVerifier_FreshnessValidation(t *testing.T) {
 }
 
 func TestFileArtifactVerifier_FreshnessEquality(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	fv := NewFileArtifactVerifier(dir)
 
@@ -421,6 +430,7 @@ func TestFileArtifactVerifier_FreshnessEquality(t *testing.T) {
 }
 
 func TestFileArtifactVerifier_RetryAttemptRejection_MustBeFreshFalse(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	fv := NewFileArtifactVerifier(dir)
 
@@ -466,6 +476,7 @@ func TestFileArtifactVerifier_RetryAttemptRejection_MustBeFreshFalse(t *testing.
 }
 
 func TestFileArtifactVerifier_AttemptZeroIdentityComparison(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	fv := NewFileArtifactVerifier(dir)
 
@@ -514,6 +525,7 @@ func TestFileArtifactVerifier_AttemptZeroIdentityComparison(t *testing.T) {
 }
 
 func TestFileArtifactVerifier_OptionalArtifactMissing(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	fv := NewFileArtifactVerifier(dir)
 
@@ -548,6 +560,7 @@ func TestFileArtifactVerifier_OptionalArtifactMissing(t *testing.T) {
 }
 
 func TestFileArtifactVerifier_ProducerMetadataMismatch(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	fv := NewFileArtifactVerifier(dir)
 
@@ -592,6 +605,7 @@ func TestFileArtifactVerifier_ProducerMetadataMismatch(t *testing.T) {
 }
 
 func TestVerificationResult_EventStoreAppendAndReplayIntegration(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	es, err := NewEventStore(dir, "run-test-es", "session-test-es")
 	if err != nil {
@@ -682,6 +696,7 @@ func TestVerificationResult_EventStoreAppendAndReplayIntegration(t *testing.T) {
 // receipt that records the target its attempt ran on keeps that backend, so a
 // fallback attempt is not recorded under the primary.
 func TestReceiptBackendFollowsAttemptTarget(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		receipt ExecutionReceipt
@@ -712,6 +727,7 @@ func TestReceiptBackendFollowsAttemptTarget(t *testing.T) {
 }
 
 func TestReceiptUsageAndTargetHelpers(t *testing.T) {
+	t.Parallel()
 	if got := receiptUsage(ExecutionUsage{}); got != nil {
 		t.Fatalf("receiptUsage(zero) = %#v, want nil (unknown)", got)
 	}
@@ -753,6 +769,7 @@ func TestReceiptUsageAndTargetHelpers(t *testing.T) {
 // A worker attempt's durable receipt records its occurrence attempt and the
 // target it ran on.
 func TestWorkerReceiptRecordsAttemptIdentity(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t, withMaxRetries(0))
 	todoID := addTodo(t, c, "inspect")
 	c.workerAgentOverride = &submittingWorkerAgent{onSubmit: func() {

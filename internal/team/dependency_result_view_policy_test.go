@@ -9,6 +9,7 @@ import (
 )
 
 func TestDependencyResultViewPolicyVersionAndDrift(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	manager, err := agent.NewProviderManager("http://127.0.0.1:1", "", nil)
 	if err != nil {
@@ -107,6 +108,7 @@ func TestDependencyResultViewPolicyVersionAndDrift(t *testing.T) {
 }
 
 func TestDependencyResultViewManifestPolicyPresence(t *testing.T) {
+	t.Parallel()
 	for _, input := range []string{
 		"contracts: [{id: review, agent: worker, dependency-result-view: null}]",
 		"vars: {missing: &missing null}\ncontracts: &contracts [{id: review, agent: worker, dependency-result-view: *missing}]",
@@ -139,6 +141,7 @@ func TestDependencyResultViewManifestPolicyPresence(t *testing.T) {
 }
 
 func TestDependencyResultViewManifestMigration(t *testing.T) {
+	t.Parallel()
 	source := `name: dependency-view
 tasks:
   - id: produce

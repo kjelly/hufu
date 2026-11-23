@@ -9,6 +9,7 @@ import (
 )
 
 func TestTaskFailureOutputSurvivesCheckpointAndReplay(t *testing.T) {
+	t.Parallel()
 	for _, status := range []TaskStatus{TaskBlocked, TaskError, TaskProtocolIncomplete} {
 		t.Run(string(status), func(t *testing.T) {
 			c := newFailureOutputCoordinator(t)
@@ -31,6 +32,7 @@ func TestTaskFailureOutputSurvivesCheckpointAndReplay(t *testing.T) {
 }
 
 func TestTaskReplayRestoresOnlyRedundantLegacyFailureOutput(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"redundant", "different_prefix", "changed_detail", "changed_receipt", "new_attempt", "complete_short", "without_source"} {
 		t.Run(scenario, func(t *testing.T) {
 			c := newFailureOutputCoordinator(t)
@@ -102,6 +104,7 @@ func newFailureOutputCoordinator(t *testing.T) *Coordinator {
 }
 
 func TestTaskReplayRejectsLegacyOutputWithChangedRedaction(t *testing.T) {
+	t.Parallel()
 	output := strings.Repeat("canonical evidence ", 500) + " password=replay-redaction-fixture-value-87654321"
 	redacted := utils.RedactSecrets(output)
 	if redacted == output {

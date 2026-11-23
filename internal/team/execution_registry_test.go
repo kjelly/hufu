@@ -49,6 +49,7 @@ func (r *capturingAttemptRunner) RunAttempt(_ context.Context, request AttemptRe
 }
 
 func TestLLMExecutionBackendUsesCanonicalTargetForTransportModel(t *testing.T) {
+	t.Parallel()
 	manager, err := agent.NewProviderManager("http://localhost:11434/v1", "", map[string]config.ProviderConfig{})
 	if err != nil {
 		t.Fatalf("NewProviderManager: %v", err)
@@ -71,6 +72,7 @@ func TestLLMExecutionBackendUsesCanonicalTargetForTransportModel(t *testing.T) {
 }
 
 func TestOllamaExecutionBackendRoutesCloudModelToOllamaLeaf(t *testing.T) {
+	t.Parallel()
 	manager, err := agent.NewProviderManager("http://localhost:11434/v1", "", nil)
 	if err != nil {
 		t.Fatalf("NewProviderManager: %v", err)
@@ -96,6 +98,7 @@ func TestOllamaExecutionBackendRoutesCloudModelToOllamaLeaf(t *testing.T) {
 }
 
 func TestLLMExecutionBackendRejectsLegacyModelOnlyAttempt(t *testing.T) {
+	t.Parallel()
 	manager, err := agent.NewProviderManager("http://localhost:11434/v1", "", nil)
 	if err != nil {
 		t.Fatalf("NewProviderManager: %v", err)
@@ -114,6 +117,7 @@ func TestLLMExecutionBackendRejectsLegacyModelOnlyAttempt(t *testing.T) {
 }
 
 func TestExecutionRegistryResolvesCanonicalTargetsFailClosed(t *testing.T) {
+	t.Parallel()
 	registry := NewExecutionRegistry()
 	if err := registry.Register(fakeLanguageModelBackend{fakeExecutionBackend{name: "local", kind: execution.BackendKindLLM, caps: execution.BackendCapabilities{DirectLanguageModel: true}}}); err != nil {
 		t.Fatalf("register local: %v", err)
@@ -144,6 +148,7 @@ func TestExecutionRegistryResolvesCanonicalTargetsFailClosed(t *testing.T) {
 }
 
 func TestExecutionRegistryBareSelectorRequiresLLMDefault(t *testing.T) {
+	t.Parallel()
 	registry := NewExecutionRegistry()
 	if err := registry.Register(fakeExecutionBackend{name: "codex", kind: execution.BackendKindAgent}); err != nil {
 		t.Fatal(err)
@@ -158,6 +163,7 @@ func TestExecutionRegistryBareSelectorRequiresLLMDefault(t *testing.T) {
 }
 
 func TestExecutionRegistryLanguageModelCapability(t *testing.T) {
+	t.Parallel()
 	registry := NewExecutionRegistry()
 	if err := registry.Register(fakeExecutionBackend{name: "codex", kind: execution.BackendKindAgent}); err != nil {
 		t.Fatal(err)
@@ -168,6 +174,7 @@ func TestExecutionRegistryLanguageModelCapability(t *testing.T) {
 }
 
 func TestGatedAgentBackendUsesNamedLLMAndRejectsAgentTarget(t *testing.T) {
+	t.Parallel()
 	manager, err := agent.NewProviderManager("http://localhost:11434/v1", "", nil)
 	if err != nil {
 		t.Fatalf("NewProviderManager: %v", err)
@@ -198,6 +205,7 @@ func TestGatedAgentBackendUsesNamedLLMAndRejectsAgentTarget(t *testing.T) {
 }
 
 func TestStateChangingExtraModelFanoutRejectsMixedLocalCodex(t *testing.T) {
+	t.Parallel()
 	registry := NewExecutionRegistry()
 	if err := registry.Register(fakeLanguageModelBackend{fakeExecutionBackend{name: "local", kind: execution.BackendKindLLM, caps: execution.BackendCapabilities{DirectLanguageModel: true}}}); err != nil {
 		t.Fatalf("register local: %v", err)
@@ -221,6 +229,7 @@ func TestStateChangingExtraModelFanoutRejectsMixedLocalCodex(t *testing.T) {
 }
 
 func TestExecutionRegistryRejectsDuplicateCanonicalAlias(t *testing.T) {
+	t.Parallel()
 	registry := NewExecutionRegistry()
 	if err := registry.Register(fakeExecutionBackend{name: "local", kind: execution.BackendKindLLM}); err != nil {
 		t.Fatal(err)
@@ -231,6 +240,7 @@ func TestExecutionRegistryRejectsDuplicateCanonicalAlias(t *testing.T) {
 }
 
 func TestAdmittedExecutionTargetForExtraModelUsesFrozenMixedBackendLeaf(t *testing.T) {
+	t.Parallel()
 	task := TaskDef{
 		ModelTopology: []string{"local/primary", "codex/extra"},
 		ExecutionTopology: []execution.ExecutionTarget{

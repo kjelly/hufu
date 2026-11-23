@@ -8,6 +8,7 @@ import (
 )
 
 func TestActionCatalogLintFindings(t *testing.T) {
+	t.Parallel()
 	entry := actionCatalogTestEntry
 	replace := func(old, new string) string {
 		if !strings.Contains(entry, old) {
@@ -68,6 +69,7 @@ func TestActionCatalogLintFindings(t *testing.T) {
 }
 
 func TestLoadTeamRejectsInvalidActionCatalog(t *testing.T) {
+	t.Parallel()
 	entries := strings.Replace(actionCatalogTestEntry, "side-effect: none", "side-effect: workspace_write", 1)
 	_, err := LoadTeam(writeActionCatalogTeam(t, actionCatalogTestManifest("", entries)), nil, nil, DefaultProviderRegistry)
 	if err == nil || !strings.Contains(err.Error(), "must set recovery") {
@@ -76,6 +78,7 @@ func TestLoadTeamRejectsInvalidActionCatalog(t *testing.T) {
 }
 
 func TestLintModeDropsInvalidActionCatalogEntries(t *testing.T) {
+	t.Parallel()
 	invalid := strings.Replace(actionCatalogTestEntry, "  collect-debug-bundle:", "  broken-bundle:", 1)
 	invalid = strings.Replace(invalid, "agent: runtime-engineer", "agent: ghost", 1)
 	dir := writeActionCatalogTeam(t, actionCatalogTestManifest("", actionCatalogTestEntry+invalid))
@@ -98,6 +101,7 @@ func TestLintModeDropsInvalidActionCatalogEntries(t *testing.T) {
 }
 
 func TestValidateActionCatalogPhaseAndToolSequence(t *testing.T) {
+	t.Parallel()
 	entry := func(sideEffect SideEffectClass) ActionCatalogEntry {
 		return ActionCatalogEntry{ID: "probe", Capability: "diagnostics", Type: "probe", Agent: "worker", SideEffect: sideEffect}
 	}
@@ -132,6 +136,7 @@ func TestValidateActionCatalogPhaseAndToolSequence(t *testing.T) {
 }
 
 func TestTeamLintIgnoreAcceptsActionCatalogCodes(t *testing.T) {
+	t.Parallel()
 	for _, code := range []string{
 		FindingActionCatalogIDInvalid, FindingActionCatalogEntryInvalid, FindingActionCatalogSideEffectUnsupported,
 		FindingActionCatalogRecoveryInvalid, FindingActionCatalogRecoveryRequired, FindingActionCatalogInputSchemaInvalid,

@@ -11,6 +11,7 @@ import (
 )
 
 func TestHistoricalResultGrantCycleProjection(t *testing.T) {
+	t.Parallel()
 	grant := historicalGrantEventFixture(t)
 	grant.Hash = strings.Repeat("f", 64)
 	resume := RunEvent{Type: string(EventRunStarted), RunID: "resume-invocation"}
@@ -107,6 +108,7 @@ func historicalGrantPreparedReplayFixture(t *testing.T, c *Coordinator, prepared
 }
 
 func TestHistoricalResultGrantCheckpointRecovery(t *testing.T) {
+	t.Parallel()
 	c, store, tree, grant := historicalGrantReplayFixture(t)
 	c.checkCanonicalProjectionShadow(tree, "main")
 	got := c.SessionData()
@@ -128,6 +130,7 @@ func TestHistoricalResultGrantCheckpointRecovery(t *testing.T) {
 }
 
 func TestHistoricalResultGrantIndexRequiredForRecovery(t *testing.T) {
+	t.Parallel()
 	c, store, tree, _ := historicalGrantReplayFixture(t)
 	if _, err := store.store.DB().ExecContext(t.Context(), `DELETE FROM historical_grant_cycles`); err != nil {
 		t.Fatal(err)
@@ -149,6 +152,7 @@ func TestHistoricalResultGrantIndexRequiredForRecovery(t *testing.T) {
 }
 
 func TestHistoricalResultGrantForkVisibility(t *testing.T) {
+	t.Parallel()
 	c, store, tree, grant := historicalGrantReplayFixture(t)
 	events := mustReadEvents(t, store)
 	before, err := tree.CreateBranch("before-grant", events[0].ID, store)
@@ -182,6 +186,7 @@ func TestHistoricalResultGrantForkVisibility(t *testing.T) {
 }
 
 func TestHistoricalResultGrantProjectionCannotBeForged(t *testing.T) {
+	t.Parallel()
 	c, store, tree, _ := historicalGrantReplayFixture(t)
 	canonical := ReduceToSessionData(mustReadEvents(t, store))
 	for _, field := range []string{"event", "hash", "branch", "cycle"} {
@@ -211,6 +216,7 @@ func TestHistoricalResultGrantProjectionCannotBeForged(t *testing.T) {
 }
 
 func TestHistoricalResultGrantCheckpointCannotCreateAuthority(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	c.initEventStore()
 	c.SetSessionData(&SessionData{HistoricalResultGrants: &runtimestore.HistoricalGrantCycleRef{
@@ -223,6 +229,7 @@ func TestHistoricalResultGrantCheckpointCannotCreateAuthority(t *testing.T) {
 }
 
 func TestHistoricalResultGrantActiveBranchRefresh(t *testing.T) {
+	t.Parallel()
 	c, store, tree, grant := historicalGrantReplayFixture(t)
 	if err := RefreshActiveBranchProjection(c.session.Workspace, tree, store); err != nil {
 		t.Fatal(err)
@@ -246,6 +253,7 @@ func TestHistoricalResultGrantActiveBranchRefresh(t *testing.T) {
 }
 
 func TestHistoricalResultGrantCanonicalScopeAndPolicy(t *testing.T) {
+	t.Parallel()
 	for _, failure := range []string{"workspace", "policy", "policy_after_grant", "missing_policy"} {
 		t.Run(failure, func(t *testing.T) {
 			c, original, _, grant := historicalGrantReplayFixture(t)

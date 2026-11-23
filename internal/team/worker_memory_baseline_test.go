@@ -34,6 +34,7 @@ import (
 // --- Shared memory injection baseline ---
 
 func TestBaseline_BuildMemorySuffixInjectsSharedSTM(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := SaveSTM(workspace, "# 進度\n- shared progress entry\n"); err != nil {
 		t.Fatalf("SaveSTM: %v", err)
@@ -52,6 +53,7 @@ func TestBaseline_BuildMemorySuffixInjectsSharedSTM(t *testing.T) {
 }
 
 func TestBaseline_BuildMemorySuffixInjectsSharedLTM(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := SaveLTM(workspace, "team", "# 專案慣例\n- shared ltm pattern\n"); err != nil {
 		t.Fatalf("SaveLTM: %v", err)
@@ -70,6 +72,7 @@ func TestBaseline_BuildMemorySuffixInjectsSharedLTM(t *testing.T) {
 }
 
 func TestBaseline_BuildTaskSTMContextInjectsSharedSTM(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := SaveSTM(workspace, "# 發現\n- shared finding\n\n# 決策\n- shared decision\n"); err != nil {
 		t.Fatalf("SaveSTM: %v", err)
@@ -88,6 +91,7 @@ func TestBaseline_BuildTaskSTMContextInjectsSharedSTM(t *testing.T) {
 }
 
 func TestBaseline_BuildLTMContextInjectsSharedLTM(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := SaveLTM(workspace, "team", "# 架構\n- shared architecture decision\n"); err != nil {
 		t.Fatalf("SaveLTM: %v", err)
@@ -108,6 +112,7 @@ func TestBaseline_BuildLTMContextInjectsSharedLTM(t *testing.T) {
 // --- Memory-disabled profile baseline ---
 
 func TestBaseline_FreshVerificationSuppressesAllMemory(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := SaveSTM(workspace, "# 進度\n- should not appear\n"); err != nil {
 		t.Fatalf("SaveSTM: %v", err)
@@ -134,6 +139,7 @@ func TestBaseline_FreshVerificationSuppressesAllMemory(t *testing.T) {
 }
 
 func TestBaseline_DefaultProfileDoesNotSuppressMemory(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := SaveSTM(workspace, "# 進度\n- visible under default\n"); err != nil {
 		t.Fatalf("SaveSTM: %v", err)
@@ -151,6 +157,7 @@ func TestBaseline_DefaultProfileDoesNotSuppressMemory(t *testing.T) {
 // --- Canonical context ingestion writes shared scope ---
 
 func TestBaseline_AppendCanonicalContextWritesSharedScope(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -182,6 +189,7 @@ func TestBaseline_AppendCanonicalContextWritesSharedScope(t *testing.T) {
 }
 
 func TestBaseline_AutoWriteSTMRecordsSharedScope(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -223,6 +231,7 @@ func TestBaseline_AutoWriteSTMRecordsSharedScope(t *testing.T) {
 // consequence: a fresh coordinator has no accumulated conversation history
 // that would leak across tasks.
 func TestBaseline_RetryHistoryIsTaskScoped(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}},
@@ -245,6 +254,7 @@ func TestBaseline_RetryHistoryIsTaskScoped(t *testing.T) {
 // level (tested above) since RunDirectAgent requires a provider. The
 // contract is: direct path and DAG path use the SAME shared memory source.
 func TestBaseline_DirectPathMemoryIsShared(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if err := SaveSTM(workspace, "# 進度\n- shared entry for direct path\n"); err != nil {
 		t.Fatalf("SaveSTM: %v", err)
@@ -264,6 +274,7 @@ func TestBaseline_DirectPathMemoryIsShared(t *testing.T) {
 // --- Canonical context scope has no BranchID ---
 
 func TestBaseline_CanonicalContextScopeHasNoBranchID(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -301,6 +312,7 @@ func TestBaseline_CanonicalContextScopeHasNoBranchID(t *testing.T) {
 // --- Shadow context append writes shared scope ---
 
 func TestBaseline_ShadowContextAppendWritesSharedScope(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -332,6 +344,7 @@ func TestBaseline_ShadowContextAppendWritesSharedScope(t *testing.T) {
 // enables per-worker private ingestion via SaveSessionMemory. The canonical
 // store now supports writing private items with a non-empty AgentID.
 func TestBaselineContract_PerWorkerIngestionImplemented(t *testing.T) {
+	t.Parallel()
 	repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)

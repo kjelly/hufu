@@ -10,6 +10,7 @@ import (
 )
 
 func TestEventOccurrenceQueryRebuildsAndExtendsValidatedIndex(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "indexed-run", "indexed-session")
 	if err != nil {
@@ -93,6 +94,7 @@ func (j *observationQueryJournal) QueryEvents(ctx context.Context, query EventQu
 }
 
 func TestObservationCaptureUsesOccurrenceQueryAcrossRestart(t *testing.T) {
+	t.Parallel()
 	c, ctx, item := observationFixture(t)
 	journal := &observationQueryJournal{eventStoreJournal: eventStoreJournal{store: c.eventStore}}
 	c.SetEventJournal(journal)

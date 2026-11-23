@@ -11,6 +11,7 @@ import (
 )
 
 func TestNewInvocationIDIsDistinctFromExecutionRunID(t *testing.T) {
+	t.Parallel()
 	first := NewInvocationID()
 	second := NewInvocationID()
 	runID := newExecutionRunID()
@@ -26,6 +27,7 @@ func TestNewInvocationIDIsDistinctFromExecutionRunID(t *testing.T) {
 }
 
 func TestUsageFromStepsEstimatesMissingProviderUsage(t *testing.T) {
+	t.Parallel()
 	steps := []fantasy.StepResult{{Messages: []fantasy.Message{fantasy.NewUserMessage("12345678")}}}
 	got := usageFromSteps(steps)
 	if got.TotalTokens != 2 {
@@ -46,6 +48,7 @@ func TestUsageFromStepsEstimatesMissingProviderUsage(t *testing.T) {
 // cannot look identical to unproven thrash to the run-level no-progress
 // budget (recordAttemptUsage prefers ProgressTokens over TotalTokens).
 func TestUsageWithProgressTokensAvoidsResentConversationBlowup(t *testing.T) {
+	t.Parallel()
 	attemptTokens := newAttemptBudget(500_000)
 	steps := make([]fantasy.StepResult, 35)
 	for i := range steps {
@@ -85,6 +88,7 @@ func TestUsageWithProgressTokensAvoidsResentConversationBlowup(t *testing.T) {
 // TotalTokens for callers that never compute ProgressTokens (e.g. sidecar
 // paths), preserving their existing behavior.
 func TestRecordAttemptUsagePrefersProgressTokensForNoProgressBudget(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	c.recordAttemptUsage("1", 1, ExecutionUsage{TotalTokens: 900_000, ProgressTokens: 40_000})
 	if got := c.noProgressCounters().Tokens; got != 40_000 {
@@ -99,6 +103,7 @@ func TestRecordAttemptUsagePrefersProgressTokensForNoProgressBudget(t *testing.T
 }
 
 func TestTeamDefinitionRevisionChangesWithDefinition(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: dev\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -119,6 +124,7 @@ func TestTeamDefinitionRevisionChangesWithDefinition(t *testing.T) {
 }
 
 func TestExecutionEventWritesBackendAndReadsLegacyProvider(t *testing.T) {
+	t.Parallel()
 	encoded, err := json.Marshal(ExecutionEvent{
 		Version:  executionEventSchemaVersion,
 		Backend:  "ollama",
@@ -141,6 +147,7 @@ func TestExecutionEventWritesBackendAndReadsLegacyProvider(t *testing.T) {
 }
 
 func TestLifecycleEventPayloadSerialization(t *testing.T) {
+	t.Parallel()
 	// Raw JSON test of the complete successful timeline plus failure
 	payload := LifecycleEventPayload{
 		Phase: "execute",

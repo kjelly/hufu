@@ -7,6 +7,7 @@ import (
 )
 
 func TestStreamRepetitionDetector_NormalText(t *testing.T) {
+	t.Parallel()
 	d := NewStreamRepetitionDetector()
 	chunks := []string{
 		"# Title\n\nThis is a normal paragraph discussing code review.\n",
@@ -23,6 +24,7 @@ func TestStreamRepetitionDetector_NormalText(t *testing.T) {
 }
 
 func TestStreamRepetitionDetector_SingleRuneRepetition(t *testing.T) {
+	t.Parallel()
 	d := NewStreamRepetitionDetector()
 	// Feed 50 slashes
 	if err := d.Process(strings.Repeat("/", 50)); err != nil {
@@ -43,6 +45,7 @@ func TestStreamRepetitionDetector_SingleRuneRepetition(t *testing.T) {
 }
 
 func TestStreamRepetitionDetector_ShortPatternRepetition(t *testing.T) {
+	t.Parallel()
 	d := NewStreamRepetitionDetector()
 	pattern := "/ " // 2 runes
 	// 40 repeats
@@ -62,6 +65,7 @@ func TestStreamRepetitionDetector_ShortPatternRepetition(t *testing.T) {
 }
 
 func TestStreamRepetitionDetector_PhraseRepetition(t *testing.T) {
+	t.Parallel()
 	d := NewStreamRepetitionDetector()
 	phrase := "thinking... " // 12 runes
 	for i := 0; i < 14; i++ {
@@ -80,6 +84,7 @@ func TestStreamRepetitionDetector_PhraseRepetition(t *testing.T) {
 }
 
 func TestStreamRepetitionDetector_LongPhraseRepetition(t *testing.T) {
+	t.Parallel()
 	d := NewStreamRepetitionDetector()
 	phrase := "The quick brown fox jumps over the lazy dog. " // 45 runes
 	for i := 0; i < 7; i++ {

@@ -12,6 +12,7 @@ import (
 // artifacts.
 
 func TestEventStoreReplayDeduplicatesTaskTransitions(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	first := &Coordinator{session: &TeamSession{Workspace: dir}, sessionData: NewSession(), taskTracker: NewTaskTracker()}
 	first.initEventStore()
@@ -45,6 +46,7 @@ func TestEventStoreReplayDeduplicatesTaskTransitions(t *testing.T) {
 }
 
 func TestOpenEventStoreInheritsRunAndSessionIdentity(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	es, err := NewEventStore(dir, "run-inherited", "session-inherited")
 	if err != nil {
@@ -72,6 +74,7 @@ func TestOpenEventStoreInheritsRunAndSessionIdentity(t *testing.T) {
 }
 
 func TestReplayRestoresRunAcceptanceAndArtifactState(t *testing.T) {
+	t.Parallel()
 	artifact := ArtifactRef{ID: "sha256-report", Kind: "document", Path: "report.md", SHA256: "abc", ByteSize: 6}
 	manifest := &EvidenceManifest{SchemaVersion: 1, RunID: "run-1", ArtifactRefs: []ArtifactRef{artifact}, Status: "accepted", ManifestHash: "manifest-hash"}
 	acceptance := &AcceptanceResult{State: AcceptancePassed, Passed: true, Commands: []string{"test -f report.md"}}
@@ -101,6 +104,7 @@ func TestReplayRestoresRunAcceptanceAndArtifactState(t *testing.T) {
 }
 
 func TestArtifactEventAppendFailureIsRetryable(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	es, err := NewEventStore(dir, "run-1", "session-1")
 	if err != nil {
@@ -139,6 +143,7 @@ func TestArtifactEventAppendFailureIsRetryable(t *testing.T) {
 }
 
 func TestNewRunCannotReusePreviousCompletedOutcome(t *testing.T) {
+	t.Parallel()
 	old := &RunResult{Outcome: RunOutcomeCompleted, GoalSatisfied: true}
 	c := &Coordinator{
 		session: &TeamSession{Workspace: t.TempDir()}, sessionData: &SessionData{RunResult: old},
@@ -152,6 +157,7 @@ func TestNewRunCannotReusePreviousCompletedOutcome(t *testing.T) {
 }
 
 func TestBlockingAcceptanceModeParsing(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: strict\nacceptance:\n  mode: blocking\n  commands: [true]\n"), 0o644); err != nil {
 		t.Fatal(err)

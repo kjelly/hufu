@@ -56,6 +56,9 @@ func observeContractCollectionKeys(t *testing.T, c *Coordinator, item *TodoItem,
 }
 
 func TestContractRecoveryRepairsKeyedClaimsWithinOriginalWork(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, test := range []struct{ succeeds, wrapped bool }{{true, false}, {false, false}, {true, true}, {false, true}} {
 		succeeds := test.succeeds
 		t.Run(fmt.Sprintf("success_%t_wrapped_%t", succeeds, test.wrapped), func(t *testing.T) {

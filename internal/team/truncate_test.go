@@ -6,6 +6,7 @@ import (
 )
 
 func TestTruncateAtSectionBoundaries(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		content      string
@@ -80,6 +81,7 @@ func TestTruncateAtSectionBoundaries(t *testing.T) {
 }
 
 func TestTruncateAtSectionBoundaries_PreservesMarkdown(t *testing.T) {
+	t.Parallel()
 	// Create content with clear section boundaries
 	content := `## Decisions
 - Use PostgreSQL
@@ -109,6 +111,7 @@ func TestTruncateAtSectionBoundaries_PreservesMarkdown(t *testing.T) {
 }
 
 func TestTruncateAtSectionBoundaries_EdgeCases(t *testing.T) {
+	t.Parallel()
 	t.Run("unicode characters", func(t *testing.T) {
 		content := "## 測試\n- 項目 1\n\n## Test\n- item2"
 		got := truncateAtSectionBoundaries(content, 50)

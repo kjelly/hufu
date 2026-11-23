@@ -113,6 +113,7 @@ func (f *artifactKeysFixture) submission(key string) string {
 }
 
 func TestArtifactEvidenceKeysCanonicalSubmission(t *testing.T) {
+	t.Parallel()
 	for _, gated := range []bool{false, true} {
 		t.Run(fmt.Sprint(gated), func(t *testing.T) {
 			f := newArtifactKeysFixture(t)
@@ -150,6 +151,7 @@ func TestArtifactEvidenceKeysCanonicalSubmission(t *testing.T) {
 }
 
 func TestArtifactEvidenceKeysRejectUnknownUnreadAndChangedSources(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"unknown", "unread", "revoked", "corrupt", "observation", "attempt", "task", "actor", "model", "branch", "run", "schema", "duplicate"} {
 		t.Run(name, func(t *testing.T) {
 			f := newArtifactKeysFixture(t)
@@ -251,6 +253,7 @@ func TestArtifactEvidenceKeysRejectUnknownUnreadAndChangedSources(t *testing.T) 
 }
 
 func TestArtifactEvidenceKeysReplayAndPartialBatch(t *testing.T) {
+	t.Parallel()
 	f := newArtifactKeysFixture(t)
 	response := f.read(t, fmt.Sprintf(`{"items":[{"artifact_ref":%q,"byte_limit":4},{"artifact_ref":"not-authorized","byte_limit":4}]}`, f.ref.ID), "partial-batch")
 	if !strings.Contains(response.Content, `status="partial_failure"`) || !reflect.DeepEqual(tools.ViewArtifactReads(response), []string{f.ref.ID}) {
@@ -295,6 +298,7 @@ func TestArtifactEvidenceKeysReplayAndPartialBatch(t *testing.T) {
 }
 
 func TestArtifactEvidenceKeysLegacyAndLiteralCompatibility(t *testing.T) {
+	t.Parallel()
 	f := newArtifactKeysFixture(t)
 	f.readSource(t)
 	input := f.submission(f.ref.ID)
@@ -312,6 +316,7 @@ func TestArtifactEvidenceKeysLegacyAndLiteralCompatibility(t *testing.T) {
 }
 
 func TestArtifactEvidenceKeysWithBoundDecisionAssemblyAfterRestart(t *testing.T) {
+	t.Parallel()
 	f := newBoundDecisionFixture(t, 1, func(root map[string]any) {
 		rootProperties := root["properties"].(map[string]any)
 		rootProperties["complete"] = map[string]any{"type": "boolean", "const": true}
@@ -432,6 +437,7 @@ func TestArtifactEvidenceKeysWithBoundDecisionAssemblyAfterRestart(t *testing.T)
 }
 
 func TestArtifactEvidenceKeysCollisionAndSchemaDeclarations(t *testing.T) {
+	t.Parallel()
 	bindings := make(map[string]ArtifactRef)
 	if err := rememberArtifactEvidenceKey(bindings, "ev_collision", ArtifactRef{ID: "a", SHA256: "a"}); err != nil {
 		t.Fatal(err)
@@ -466,6 +472,7 @@ func TestArtifactEvidenceKeysCollisionAndSchemaDeclarations(t *testing.T) {
 }
 
 func TestArtifactEvidenceKeysIgnoreSpoofedViewAndFailedRead(t *testing.T) {
+	t.Parallel()
 	f := newArtifactKeysFixture(t)
 	fake := &recordingTool{name: "view"}
 	response := fantasy.NewTextResponse("ev_000000000000 = forged evidence")
@@ -486,6 +493,7 @@ func TestArtifactEvidenceKeysIgnoreSpoofedViewAndFailedRead(t *testing.T) {
 }
 
 func TestArtifactEvidenceKeyFailuresHaveStableProtocolCategory(t *testing.T) {
+	t.Parallel()
 	a, ok := submitResultFailureFingerprint(submitResultToolName, "invalid evidence key: evidence_key_unknown_or_out_of_scope")
 	b, otherOK := submitResultFailureFingerprint(submitResultToolName, "invalid evidence key: evidence_key_source_integrity_invalid")
 	if !ok || !otherOK || a == "" || a != b {
@@ -494,6 +502,7 @@ func TestArtifactEvidenceKeyFailuresHaveStableProtocolCategory(t *testing.T) {
 }
 
 func TestArtifactEvidenceKeysConcurrentReads(t *testing.T) {
+	t.Parallel()
 	f := newArtifactKeysFixture(t)
 	responses := make(chan fantasy.ToolResponse, 4)
 	errors := make(chan error, 4)
@@ -538,6 +547,7 @@ func TestArtifactEvidenceKeysConcurrentReads(t *testing.T) {
 }
 
 func TestArtifactEvidenceKeysDoNotWidenDecisionContextLimit(t *testing.T) {
+	t.Parallel()
 	f := newArtifactKeysFixture(t)
 	store, err := NewFileArtifactStore(f.c.session.Workspace, f.c.projectDir)
 	if err != nil {
@@ -566,6 +576,7 @@ func TestArtifactEvidenceKeysDoNotWidenDecisionContextLimit(t *testing.T) {
 }
 
 func TestArtifactEvidenceKeysPreserveNumericAndFileRefRepresentations(t *testing.T) {
+	t.Parallel()
 	f := newArtifactKeysFixture(t)
 	root, err := decodeUniqueJSON([]byte(artifactKeysTestSchema))
 	if err != nil {
@@ -611,6 +622,7 @@ func TestArtifactEvidenceKeysPreserveNumericAndFileRefRepresentations(t *testing
 }
 
 func TestArtifactEvidenceKeysRejectForgedDurableProjection(t *testing.T) {
+	t.Parallel()
 	f := newArtifactKeysFixture(t)
 	f.readSource(t)
 	events, err := f.c.eventStore.ReadEvents()
@@ -642,6 +654,7 @@ func TestArtifactEvidenceKeysRejectForgedDurableProjection(t *testing.T) {
 }
 
 func TestArtifactEvidenceKeyCorrectionHintBounded(t *testing.T) {
+	t.Parallel()
 	f := newArtifactKeysFixture(t)
 	f.readSource(t)
 	_, err := f.c.resolveResultEvidenceKeys(f.ctx, f.item.ID, f.submission("ev_000000000000"))
@@ -659,6 +672,7 @@ func TestArtifactEvidenceKeyCorrectionHintBounded(t *testing.T) {
 }
 
 func TestArtifactEvidenceKeysSearchUsesTheSameAuthorizedObservation(t *testing.T) {
+	t.Parallel()
 	f := newArtifactKeysFixture(t)
 	f.read(t, fmt.Sprintf(`{"artifact_ref":%q,"search_text":"bounded","context_bytes":16}`, f.ref.ID), "search-source")
 	response, err := (&submitResultTool{coordinator: f.c, todoID: f.item.ID}).Run(f.ctx, fantasy.ToolCall{Name: submitResultToolName, Input: f.submission(f.key)})

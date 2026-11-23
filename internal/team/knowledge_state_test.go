@@ -12,6 +12,7 @@ import (
 )
 
 func TestClassifyKnowledgeState(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	policy := agent.DefaultMemoryLearningPolicy()
 	verified := &contextstore.ExperienceAggregate{
@@ -62,6 +63,7 @@ func TestClassifyKnowledgeState(t *testing.T) {
 }
 
 func TestResolveMemoryLearningPolicyStaleAfter(t *testing.T) {
+	t.Parallel()
 	policy, err := resolveMemoryLearningPolicy(rawMemoryLearningPolicy{StaleAfter: "48h"})
 	if err != nil {
 		t.Fatal(err)
@@ -88,6 +90,7 @@ func (r *countingExperienceRepository) ExperienceAggregate(ctx context.Context, 
 }
 
 func TestKnowledgeStateReusesRankingAggregate(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningActive)
 	counting := &countingExperienceRepository{SQLiteRepository: repo}
 	c.contextRepo = counting
@@ -137,6 +140,7 @@ func TestKnowledgeStateReusesRankingAggregate(t *testing.T) {
 }
 
 func TestComputeTaskKnowledgeCoverage(t *testing.T) {
+	t.Parallel()
 	manifest := &ContextInjectionManifest{Items: []ContextManifestItem{
 		{ID: "known", Included: true, KnowledgeState: KnowledgeKnown},
 		{ID: "assumed", Included: true, KnowledgeState: KnowledgeAssumed},
@@ -164,6 +168,7 @@ func TestComputeTaskKnowledgeCoverage(t *testing.T) {
 }
 
 func TestAttachTaskKnowledgeCoverageFailsOpen(t *testing.T) {
+	t.Parallel()
 	c, item, manifest := invariantAttestationFixture(t, "")
 	result := &TaskResult{Findings: []Finding{{Summary: "preserved"}}}
 	c.attachTaskKnowledgeCoverage(item.ID, 1, manifest.ModelExecutionID, result)
@@ -187,6 +192,7 @@ func TestAttachTaskKnowledgeCoverageFailsOpen(t *testing.T) {
 }
 
 func TestTaskKnowledgeCoverageCloneAndLegacyReplay(t *testing.T) {
+	t.Parallel()
 	original := &TaskResult{KnowledgeCoverage: &TaskKnowledgeCoverage{OutcomeCoverage: OutcomeCoverageSignal{KnownCount: 2}}}
 	cloned := cloneTaskResult(original)
 	cloned.KnowledgeCoverage.OutcomeCoverage.KnownCount = 9
@@ -215,6 +221,7 @@ func TestTaskKnowledgeCoverageCloneAndLegacyReplay(t *testing.T) {
 }
 
 func TestKnowledgeCoverageDoesNotAffectInvariantBlocking(t *testing.T) {
+	t.Parallel()
 	verification := &InvariantVerificationResult{Assessments: []InvariantAssessment{{Severity: InvariantSeverityError, Status: InvariantViolated}}}
 	before := HasBlockingInvariantAssessment(InvariantVerificationGate, verification)
 	result := &TaskResult{InvariantVerification: verification, KnowledgeCoverage: &TaskKnowledgeCoverage{InvariantCoverage: InvariantCoverageSignal{UncoveredPathCount: 99}}}

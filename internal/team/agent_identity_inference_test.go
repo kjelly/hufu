@@ -20,6 +20,7 @@ func writeInferenceAgentFile(t *testing.T, dir, filename, content string) {
 }
 
 func TestAgentIdentityInference_FilenameInfersName(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeInferenceAgentFile(t, dir, "developer.md", "---\nrole: worker\n---\nImplement the change.\n")
 
@@ -36,6 +37,7 @@ func TestAgentIdentityInference_FilenameInfersName(t *testing.T) {
 }
 
 func TestAgentIdentityInference_CoordinatorFilenameInfersCoordinatorRole(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeInferenceAgentFile(t, dir, "coordinator.md", "---\ndescription: leads the team\n---\nDelegate work and synthesize a final answer.\n")
 
@@ -49,6 +51,7 @@ func TestAgentIdentityInference_CoordinatorFilenameInfersCoordinatorRole(t *test
 }
 
 func TestAgentIdentityInference_ExplicitNameOverridesFilename(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeInferenceAgentFile(t, dir, "developer.md", "---\nname: coder\nrole: worker\n---\nImplement the change.\n")
 
@@ -62,6 +65,7 @@ func TestAgentIdentityInference_ExplicitNameOverridesFilename(t *testing.T) {
 }
 
 func TestAgentIdentityInference_ExplicitRoleOverridesCoordinatorFilename(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeInferenceAgentFile(t, dir, "coordinator.md", "---\nrole: worker\n---\nA worker that happens to be named coordinator.\n")
 
@@ -75,6 +79,7 @@ func TestAgentIdentityInference_ExplicitRoleOverridesCoordinatorFilename(t *test
 }
 
 func TestAgentIdentityInference_DuplicateInferredNameCollision(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	// Two files that both omit an explicit name: one infers "reviewer" from
 	// its own filename, the other explicitly claims that same name.
@@ -88,6 +93,7 @@ func TestAgentIdentityInference_DuplicateInferredNameCollision(t *testing.T) {
 }
 
 func TestAgentIdentityInference_MultipleCoordinatorsRejected(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeInferenceAgentFile(t, dir, "coordinator.md", "Delegate work to workers.\n")
 	writeInferenceAgentFile(t, dir, "lead.md", "---\nrole: coordinator\n---\nAlso leads the team.\n")
@@ -99,6 +105,7 @@ func TestAgentIdentityInference_MultipleCoordinatorsRejected(t *testing.T) {
 }
 
 func TestAgentIdentityInference_InvalidFilenameForInferenceRequiresExplicitName(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeInferenceAgentFile(t, dir, "2fast.md", "---\nrole: worker\n---\nContent.\n")
 

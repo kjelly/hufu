@@ -11,6 +11,7 @@ import (
 )
 
 func TestMediaProviderTransportRequiresExactCurrentDurablePermission(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"allowed", "not committed", "different invocation", "changed text", "changed capacity", "revoked lease", "cancelled", "text compatibility"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, ctx, item, request := nativeMediaProviderFixture(t)
@@ -73,6 +74,7 @@ func (j *mediaTransportReadHook) ReadEvents(ctx context.Context) ([]RunEvent, er
 }
 
 func TestMediaProviderTransportRechecksLeaseAfterJournalRead(t *testing.T) {
+	t.Parallel()
 	c, ctx, item, request := nativeMediaProviderFixture(t)
 	request.InvocationID = "transport-journal-wait"
 	admission := providerRequestAdmission{c: c}

@@ -23,6 +23,7 @@ func inlineManifestFixture(body string, versioned bool) string {
 }
 
 func TestTeamInlineAgentParity(t *testing.T) {
+	t.Parallel()
 	for _, versioned := range []bool{false, true} {
 		for _, name := range preset.Names() {
 			t.Run(fmt.Sprintf("%s/versioned=%v", name, versioned), func(t *testing.T) {
@@ -52,6 +53,7 @@ func TestTeamInlineAgentParity(t *testing.T) {
 }
 
 func TestTeamInlineMappingParity(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	fields := "preset: coding\ndescription: Implements changes\nmodel: ollama/own-model\nreasoning-effort: high\ntools:\n  allowed: [math]\n  denied: [bash]\nskills: [example]\nallowed-paths: [" + root + "]\nno-net: true\ntimeout: 35\nmax-steps: 6\nmax-retries: 0\n"
 	for _, versioned := range []bool{false, true} {
@@ -79,6 +81,7 @@ func TestTeamInlineMappingParity(t *testing.T) {
 }
 
 func TestTeamInlineCannotUndoTeamToolPolicy(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeLintTestFile(t, filepath.Join(dir, "team.yaml"), "no-net: true\ntools: {denied: [math]}\nagents:\n  worker:\n    preset: readonly\n    no-net: false\n    tools: {allowed: [fetch, math]}\n    instructions: Use `fetch` tool. Use `math` tool.\n")
 	result, err := LintTeam(dir, nil, nil, DefaultProviderRegistry)
@@ -95,6 +98,7 @@ func TestTeamInlineCannotUndoTeamToolPolicy(t *testing.T) {
 }
 
 func TestTeamInlineStrictDecoding(t *testing.T) {
+	t.Parallel()
 	invalid := []string{
 		"agents: null", "agents: []", "agents: readonly", "agents: {worker: null}", "agents: {worker: 42}", "agents: {worker: false}", "agents: {worker: []}",
 		"agents: {worker: {}}", "agents: {worker: {preset: ''}}", "agents: {worker: {preset: true}}", "agents: {worker: {preset: readonly, description: ' '}}",
@@ -127,6 +131,7 @@ func TestTeamInlineStrictDecoding(t *testing.T) {
 }
 
 func TestTeamInlineSemanticFailures(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct{ id, value, code string }{
 		{"helper", "readonly", FindingInlineAgentInvalid}, {"CoOrDiNaToR", "readonly", FindingInlineAgentInvalid}, {"orchestrator-helper", "readonly", FindingInlineAgentInvalid},
 		{"worker", "coding-reviewed", FindingInlineAgentInvalid}, {"worker", "unknown", FindingInlineAgentInvalid},
@@ -161,6 +166,7 @@ func TestTeamInlineSemanticFailures(t *testing.T) {
 }
 
 func TestTeamInlineThreeSourceComposition(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct{ manifest, file, md string }{
 		{"preset: coding-reviewed\nagents: {reviewer: review}\n", "", ""},
 		{"agents: {architect: readonly}\n", "ARCHITECT.md", "preset: readonly"},
@@ -198,6 +204,7 @@ func TestTeamInlineThreeSourceComposition(t *testing.T) {
 }
 
 func TestTeamInlineTemplateTiming(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		manifest string
 		valid    bool
@@ -234,6 +241,7 @@ func TestTeamInlineTemplateTiming(t *testing.T) {
 }
 
 func TestTeamInlineBindingsAndDefaults(t *testing.T) {
+	t.Parallel()
 	manifest := "name: inline-team\nworker-memory: {mode: session, max-items: 8}\nworker-workspace: {mode: isolated, integrate: on-verified}\nexecution-route: coding\ndelegation:\n  allowed-workers: [runtime-engineer, network-engineer, critic]\n  bind-task-goal-contracts: true\ncontracts:\n  - id: inspect\n    agent: runtime-engineer\n    goal: Inspect runtime\n    result-contract: {schema: schemas/review.json, require-structured: true}\n" + actionCatalogTestProviders + "action-catalog:\n" + actionCatalogTestEntry
 	workers := "agents:\n  runtime-engineer: readonly\n  network-engineer: readonly\n  critic: readonly\n"
 	dir := t.TempDir()
@@ -340,6 +348,7 @@ func TestTeamInlineProviderAndPolicyParity(t *testing.T) {
 }
 
 func TestTeamInlinePromptAndSkillLint(t *testing.T) {
+	t.Parallel()
 	for _, scalar := range []string{
 		"Use `not_registered` tool. Use `missing_skill` skill.",
 		"|\n      Use `not_registered` tool.\n      Use `missing_skill` skill.",
@@ -384,6 +393,7 @@ func TestTeamInlinePromptAndSkillLint(t *testing.T) {
 }
 
 func TestTeamInlineAliasPromptSource(t *testing.T) {
+	t.Parallel()
 	for _, workers := range []string{
 		"  worker:\n    preset: readonly\n    instructions: *prompt\n",
 		"  worker:\n    <<: *definition\n",
@@ -403,6 +413,7 @@ func TestTeamInlineAliasPromptSource(t *testing.T) {
 }
 
 func TestTeamInlineDecodeErrorSource(t *testing.T) {
+	t.Parallel()
 	for _, versioned := range []bool{false, true} {
 		dir := t.TempDir()
 		writeLintTestFile(t, filepath.Join(dir, "team.yaml"), inlineManifestFixture("agents:\n  worker:\n    preset: readonly\n    no-net: 'true'\n", versioned))
@@ -418,6 +429,7 @@ func TestTeamInlineDecodeErrorSource(t *testing.T) {
 }
 
 func TestTeamInlineMergePrecedence(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	manifest := "vars:\n  first: &first {preset: readonly, model: ollama/first}\n  second: &second {preset: coding, model: ollama/second}\nagents:\n  merged: {<<: [*first, *second]}\n  explicit: {<<: [*first, *second], model: ollama/explicit}\n"
 	writeLintTestFile(t, filepath.Join(dir, "team.yaml"), manifest)
@@ -434,6 +446,7 @@ func TestTeamInlineMergePrecedence(t *testing.T) {
 }
 
 func TestTeamInlineCapabilityRouting(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	manifest := `agents: {novice: readonly, expert: review, excluded: review}
 delegation:
@@ -469,6 +482,7 @@ capability-registry:
 }
 
 func TestTeamInlineMigration(t *testing.T) {
+	t.Parallel()
 	for _, agents := range []string{
 		"agents: {}\n",
 		"agents:\n  shorthand: '{@ .selected @}'\n  worker:\n    preset: readonly\n    instructions: '{@ .message @}'\n    no-net: false\n    max-retries: 0\n    tools: []\n    skills: []\n    allowed-paths: []\n",

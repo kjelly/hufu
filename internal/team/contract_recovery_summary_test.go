@@ -7,6 +7,7 @@ import (
 )
 
 func TestContractRecoveryPreviewExplainsDecisions(t *testing.T) {
+	t.Parallel()
 	c, _, source := contractRecoveryFixture(t, func(c *Coordinator) { c.acceptanceSpec = &AcceptanceSpec{RequireNoUnresolvedTasks: true} })
 	plan, err := c.AssessContractRecovery(t.Context(), source)
 	if err != nil {
@@ -96,6 +97,7 @@ func TestContractRecoveryPreviewExplainsDecisions(t *testing.T) {
 }
 
 func TestRecoveryAcceptanceItems(t *testing.T) {
+	t.Parallel()
 	spec := AcceptanceSpec{Criteria: []AcceptanceCriterion{{ID: "report"}}, Commands: []string{"private command"}, Verifications: []VerificationSpec{{Type: VerifyCommandExit}}, RequiredWorkers: []string{"reviewer"}, RequiredArtifacts: []string{"private path"}, RequireNoUnresolvedTasks: true}
 	want := []string{"criterion:report", "command[0]", "verification[0]", "required_worker:reviewer", "required_artifact[0]", "no_unresolved_tasks"}
 	if got := recoveryAcceptanceItems(spec); !reflect.DeepEqual(got, want) {

@@ -40,6 +40,7 @@ func webResearchWorkflow(t *testing.T) (*TeamSession, *runtimeWorkflow, []TaskDe
 }
 
 func TestWebResearchWorkflowRetainsSearchAndDedicatedChromeTools(t *testing.T) {
+	t.Parallel()
 	session, w, bound := webResearchWorkflow(t)
 	c := newDirectTypedCoordinator(t, "view", nil, nil)
 	c.session, c.phaseWorkflow = session, w
@@ -100,6 +101,7 @@ func TestWebResearchWorkflowRetainsSearchAndDedicatedChromeTools(t *testing.T) {
 }
 
 func TestWebResearchWorkflowRequiresBothIndependentSearchesAndRestoresAudit(t *testing.T) {
+	t.Parallel()
 	session, w, bound := webResearchWorkflow(t)
 	if err := w.requireFinished(); err == nil {
 		t.Fatal("empty research satisfied finish gate")
@@ -206,6 +208,7 @@ func TestWebResearchWorkflowRequiresBothIndependentSearchesAndRestoresAudit(t *t
 }
 
 func TestWebResearchWorkflowStopsOnUnresolvedResearch(t *testing.T) {
+	t.Parallel()
 	for _, status := range []TaskStatus{TaskError, TaskBlocked, TaskProtocolIncomplete} {
 		t.Run(string(status), func(t *testing.T) {
 			_, w, bound := webResearchWorkflow(t)
@@ -230,6 +233,7 @@ func TestWebResearchWorkflowStopsOnUnresolvedResearch(t *testing.T) {
 }
 
 func TestWebResearchWorkflowRequiresObjectiveAuditVerification(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"missing_verification", "incomplete_audit", "empty_findings", "complete_with_gaps"} {
 		t.Run(name, func(t *testing.T) {
 			session, w, bound := webResearchWorkflow(t)
@@ -283,6 +287,7 @@ func TestWebResearchWorkflowRequiresObjectiveAuditVerification(t *testing.T) {
 }
 
 func TestWebResearchSynthesisRequiresObjectiveVerification(t *testing.T) {
+	t.Parallel()
 	for _, verification := range []*VerificationResult{nil, {ExitCode: 1}, {ExitCode: 0}} {
 		_, w, bound := webResearchWorkflow(t)
 		items := []*TodoItem{

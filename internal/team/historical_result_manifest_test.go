@@ -12,6 +12,7 @@ import (
 )
 
 func TestHistoricalResultManifestComposesQueryAndSelectedViews(t *testing.T) {
+	t.Parallel()
 	c, item, input := historicalContextFixture(t)
 	compiled, _ := historicalContextManifest(t, c, item, input)
 	result, source := dependencyViewRenderFixture()
@@ -45,6 +46,7 @@ func TestHistoricalResultManifestComposesQueryAndSelectedViews(t *testing.T) {
 }
 
 func TestHistoricalResultManifestRejectsUnprovenAttribution(t *testing.T) {
+	t.Parallel()
 	for _, failure := range []string{"missing", "duplicate", "omitted", "compressed", "bytes", "tokens", "payload", "recipient", "event", "task", "policy", "legacy"} {
 		t.Run(failure, func(t *testing.T) {
 			c, item, input := historicalContextFixture(t)
@@ -95,6 +97,7 @@ func TestHistoricalResultManifestRejectsUnprovenAttribution(t *testing.T) {
 }
 
 func TestHistoricalResultContextUsesConsumerForkValidity(t *testing.T) {
+	t.Parallel()
 	c, item, input := historicalContextFixture(t)
 	rows, err := c.HistoricalTaskReader().Load(t.Context(), HistoricalTaskScope{Workspace: c.session.Workspace, Team: "test", Branch: "main"})
 	if err != nil {
@@ -148,6 +151,7 @@ func manifestHistoricalBinding(t *testing.T, manifest ContextInjectionManifest) 
 }
 
 func TestHistoricalResultContextDoesNotAutomaticallyReachAuxiliaryModels(t *testing.T) {
+	t.Parallel()
 	c, item, input := historicalContextFixture(t)
 	input.Request = c.newAuxiliaryContextRequest(item.ID, 1, item.Agent, PhaseExecute, "judge", "judge the candidate result")
 	input.Goal = input.Request.Goal

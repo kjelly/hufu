@@ -6,6 +6,7 @@ import (
 )
 
 func TestResolveTaskReferenceUsesLogicalPlanIDAfterCompletion(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	producer := tracker.TodoList().AddBatch([]TodoSpec{{PlanTaskID: "produce-workset", Agent: "producer", Desc: "produce"}})[0]
 	producer.Status = TaskDone
@@ -22,6 +23,7 @@ func TestResolveTaskReferenceUsesLogicalPlanIDAfterCompletion(t *testing.T) {
 }
 
 func TestResolveTaskReferenceRejectsAmbiguousLogicalID(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	tracker.TodoList().AddBatch([]TodoSpec{
 		{PlanTaskID: "producer", Agent: "one", Desc: "one"},

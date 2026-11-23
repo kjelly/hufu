@@ -9,6 +9,7 @@ import (
 )
 
 func TestAuxiliaryRepairPreservesAdmittedInputsBeyondDiagnosticLimit(t *testing.T) {
+	t.Parallel()
 	for _, purpose := range []string{"result_repair", "protocol_repair"} {
 		t.Run(purpose, func(t *testing.T) {
 			c, _ := newEvidenceRepairCoordinator(t, "repair-inputs")
@@ -68,6 +69,7 @@ func TestAuxiliaryRepairPreservesAdmittedInputsBeyondDiagnosticLimit(t *testing.
 }
 
 func TestAuxiliaryReviewDoesNotInheritTaskDependencies(t *testing.T) {
+	t.Parallel()
 	c, _ := newEvidenceRepairCoordinator(t, "isolated-review")
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Constraints: "PRIVATE-TASK-CONSTRAINT"}})[0]
 	ctx := withTestAuxiliaryInvocationContext(context.WithValue(t.Context(), todoIDKey{}, item.ID))

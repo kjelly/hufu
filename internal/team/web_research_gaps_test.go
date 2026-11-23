@@ -10,6 +10,7 @@ import (
 )
 
 func TestContractDataflowResearchAcceptsEmptyAndMixedFindings(t *testing.T) {
+	t.Parallel()
 	for _, external := range []bool{false, true} {
 		for _, mixed := range []bool{false, true} {
 			t.Run(fmt.Sprintf("external=%t/mixed=%t", external, mixed), func(t *testing.T) {
@@ -140,6 +141,7 @@ func TestContractDataflowResearchAcceptsEmptyAndMixedFindings(t *testing.T) {
 }
 
 func TestWebResearchUnavailableSourceCannotAuthorizeCitation(t *testing.T) {
+	t.Parallel()
 	compiled, err := compileResultContractSchema(filepath.Join(bundledTeamsDir(t), "web-research"), "schemas/research-v3.json")
 	if err != nil {
 		t.Fatal(err)

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kjelly/hufu/internal/log"
 	"github.com/kjelly/hufu/internal/media"
@@ -20,7 +21,7 @@ type codexImageProjection struct {
 	path        string
 	refs        []media.Ref
 	reservation *media.Reservation
-	release     func()
+	release     func(context.Context)
 }
 
 func codexImageProjectionHash(binding *media.TaskBinding, target string) (string, error) {
@@ -104,12 +105,15 @@ func newCodexImageProjection(ctx context.Context, c *Coordinator, request Attemp
 	files := make(map[string]os.FileInfo)
 	lease := &codexProjectionLease{base: base, root: root, directory: "input-" + strings.TrimPrefix(hash, "sha256:"), directoryInfo: directoryInfo,
 		lockPath: filepath.Join(parentPath, "media-projections", codexProjectionLockFile), files: files, maxImages: policy.Policy.Image.MaxBranchBlobs}
-	projection.release = sync.OnceFunc(func() {
-		if err := lease.close(); err != nil {
-			log.Printf("Codex projection cleanup retained copies: %v\n", err)
-		}
-		reservation.Release()
-	})
+	var releaseOnce sync.Once
+	projection.release = func(ctx context.Context) {
+		releaseOnce.Do(func() {
+			if err := lease.close(ctx); err != nil {
+				log.Printf("Codex projection cleanup retained copies: %v\n", err)
+			}
+			reservation.Release()
+		})
+	}
 	lease.consumer, err = newCodexProjectionConsumer(ctx, root, policy.Policy.Image.MaxBranchBlobs)
 	if err != nil {
 		return nil, err
@@ -234,11 +238,17 @@ func (p *codexImageProjection) Inputs(prompt string) []codexUserInput {
 }
 
 func (p *codexImageProjection) Close() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	p.close(ctx)
+}
+
+func (p *codexImageProjection) close(ctx context.Context) {
 	if p == nil {
 		return
 	}
 	if p.release != nil {
-		p.release()
+		p.release(ctx)
 		return
 	}
 	if p.root != nil {

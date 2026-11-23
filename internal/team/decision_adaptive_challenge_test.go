@@ -8,6 +8,7 @@ import (
 )
 
 func TestCriterionDispersion(t *testing.T) {
+	t.Parallel()
 	t.Run("higher spread criterion gets higher dispersion", func(t *testing.T) {
 		opinions := []DecisionOpinion{
 			{Valid: true, OptionScores: []OptionScore{{OptionID: "execute", Criteria: map[string]float64{"operability": 1, "data-integrity": 5}}}},
@@ -59,6 +60,7 @@ func TestCriterionDispersion(t *testing.T) {
 }
 
 func TestMostContestedCriterion(t *testing.T) {
+	t.Parallel()
 	if got := mostContestedCriterion(nil); got != "" {
 		t.Fatalf("mostContestedCriterion(nil) = %q, want empty", got)
 	}
@@ -75,6 +77,7 @@ func TestMostContestedCriterion(t *testing.T) {
 }
 
 func TestAdaptiveChallengePreferred(t *testing.T) {
+	t.Parallel()
 	mapping := map[string][]string{"operability": {"operations", "reliability"}}
 
 	t.Run("empty criterion ID is a no-op", func(t *testing.T) {
@@ -108,6 +111,7 @@ func TestAdaptiveChallengePreferred(t *testing.T) {
 }
 
 func TestAdaptiveChallengeRole(t *testing.T) {
+	t.Parallel()
 	role := &agent.ChallengeRolePolicy{
 		RequiredCapabilities: []string{"adversarial-analysis"},
 		AdaptiveCapabilities: map[string][]string{"operability": {"operations"}},

@@ -72,6 +72,7 @@ func (s *failOnContextManifestSessionStore) SessionData() *SessionData      { re
 func (s *failOnContextManifestSessionStore) SetSessionData(sd *SessionData) { s.sd = sd }
 
 func TestContextManifestIsContentFreeAndMergesReasons(t *testing.T) {
+	t.Parallel()
 	request := validTestContextRequest()
 	compiled := CompiledContext{
 		IncludedItems: []ContextItem{{ID: "current_task", Kind: "current_task", Content: "secret prompt body", Required: true, TokenCount: 3}, {ID: "context:memory-1", Kind: "observation", Content: "private memory body", Source: "shared_persistent", TokenCount: 4}},
@@ -109,6 +110,7 @@ func TestContextManifestIsContentFreeAndMergesReasons(t *testing.T) {
 }
 
 func TestContextManifestCompilerOmissionOverridesPriorRouterInclusion(t *testing.T) {
+	t.Parallel()
 	request := validTestContextRequest()
 	compiled := CompiledContext{OmittedItems: []ContextItem{{ID: "context:memory-1", Kind: "observation", Source: "shared_persistent", TokenCount: 5}}}
 	manifest, err := BuildContextInjectionManifest(request, compiled, []ContextRouteDecision{{ContextItemID: "memory-1", Included: true, Reason: ContextIncludedRelevant, BaseScore: .8, FinalScore: .8}}, "worker", time.Unix(100, 0), agent.DefaultMemoryLearningPolicy())
@@ -121,6 +123,7 @@ func TestContextManifestCompilerOmissionOverridesPriorRouterInclusion(t *testing
 }
 
 func TestContextManifestProjectsParentInvocationWithoutContent(t *testing.T) {
+	t.Parallel()
 	request := validTestContextRequest()
 	request.ParentTrigger = ContextTriggerRetry
 	request.ParentRequestID = "ctx-parent"
@@ -143,6 +146,7 @@ func TestContextManifestProjectsParentInvocationWithoutContent(t *testing.T) {
 }
 
 func TestMemoryManifestIsProjectionOfGeneralManifestSubset(t *testing.T) {
+	t.Parallel()
 	request := validTestContextRequest()
 	compiled := CompiledContext{IncludedItems: []ContextItem{{ID: "current_task", Kind: "current_task", Required: true, TokenCount: 3}, {ID: "context:memory-a", Kind: "pattern", Source: "shared_persistent", TokenCount: 7, BaseScore: .8, FinalScore: .9}, {ID: "context:memory-b", Kind: "observation", Source: "worker_long_term", TokenCount: 5, BaseScore: .6, FinalScore: .7}}}
 	general, err := BuildContextInjectionManifest(request, compiled, nil, "worker", time.Unix(100, 0), agent.DefaultMemoryLearningPolicy())
@@ -176,6 +180,7 @@ func TestMemoryManifestIsProjectionOfGeneralManifestSubset(t *testing.T) {
 }
 
 func TestContextManifestSummary(t *testing.T) {
+	t.Parallel()
 	manifest := ContextInjectionManifest{ModelCalled: true, Purpose: "task_execution", Items: []ContextManifestItem{{Included: true, Tokens: 7}, {Reason: ContextOmittedBudget, Tokens: 11}}}
 	summary := SummarizeContextManifests([]ContextInjectionManifest{manifest})
 	if summary.Requests != 1 || summary.ModelCalls != 1 || summary.Fallbacks != 0 || summary.Purposes["task_execution"] != 1 || summary.Included != 1 || summary.Omitted != 1 || summary.IncludedTokens != 7 || summary.OmittedTokens != 11 || summary.OmitReasons[string(ContextOmittedBudget)] != 1 {
@@ -184,6 +189,7 @@ func TestContextManifestSummary(t *testing.T) {
 }
 
 func TestContextManifestV2PreservesInvariantAttribution(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{projectDir: "/repo", session: &TeamSession{Config: agent.TeamConfig{Name: "review"}}}
 	record, err := materializeInvariantContextItem(c, InvariantDefinition{ID: "safe", Statement: "preserve behavior", Severity: InvariantSeverityWarning, AppliesTo: []string{"internal/team/"}})
 	if err != nil {
@@ -217,6 +223,7 @@ func TestContextManifestV2PreservesInvariantAttribution(t *testing.T) {
 }
 
 func TestContextManifestRejectsInvalidInvariantAttribution(t *testing.T) {
+	t.Parallel()
 	request := validTestContextRequest()
 	compiled := CompiledContext{IncludedItems: []ContextItem{{ID: "invariant:review:safe", Kind: string(contextstore.ContextInvariant), Source: repositoryInvariantSource, Content: "content", Required: true, InvariantContentHash: "invalid", InvariantSeverity: InvariantSeverityError}}}
 	if _, err := BuildContextInjectionManifest(request, compiled, nil, "worker", time.Unix(100, 0), agent.DefaultMemoryLearningPolicy()); err == nil {
@@ -225,6 +232,7 @@ func TestContextManifestRejectsInvalidInvariantAttribution(t *testing.T) {
 }
 
 func TestContextManifestLegacyV1Replays(t *testing.T) {
+	t.Parallel()
 	raw := []byte(`{"schema_version":1,"request_id":"legacy","request_hash":"hash","run_id":"run","attempt":1,"agent":"worker","phase":"EXECUTE","trigger":"task_dispatch","model_called":true,"items":[{"id":"memory","kind":"pattern","included":true,"reason":"included_relevant","tokens":1}],"fingerprint":"legacy","created_at":"2025-01-01T00:00:00Z"}`)
 	var manifest ContextInjectionManifest
 	if err := json.Unmarshal(raw, &manifest); err != nil {
@@ -239,6 +247,7 @@ func TestContextManifestLegacyV1Replays(t *testing.T) {
 }
 
 func TestToolFailureRecoveryManifestBindsCallAndRedactsInput(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
 	compiler := &mockContextCompiler{}
 	c.SetContextCompiler(compiler)
@@ -268,6 +277,7 @@ func TestToolFailureRecoveryManifestBindsCallAndRedactsInput(t *testing.T) {
 }
 
 func TestAuxiliaryCompilerIsolatesHistoryAndPersistsPurpose(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
 	c.executionRunID = "run-aux"
 	prompt, err := c.prepareAuxiliaryPrompt(withTestAuxiliaryInvocationContext(context.Background()), "guard_reviewer", "Review candidate output api_key=raw-secret")
@@ -287,6 +297,7 @@ func TestAuxiliaryCompilerIsolatesHistoryAndPersistsPurpose(t *testing.T) {
 }
 
 func TestAuxiliaryCompilerPreservesCompleteStructuredReviewPrompt(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
 	c.executionRunID = "run-large-review"
 	raw := `{"sources":"` + strings.Repeat("source evidence ", 2000) + `","candidate_response":"complete final answer at the end"}`
@@ -320,6 +331,7 @@ func TestAuxiliaryCompilerPreservesCompleteStructuredReviewPrompt(t *testing.T) 
 }
 
 func TestAuxiliaryAcceptanceReviewPreservesTerminalWorkflowPhase(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []Phase{PhaseDone, PhaseFailed} {
 		for _, purpose := range []string{"request_acceptance_review", "request_acceptance_evidence", "compactor", "final_summary_repair"} {
 			t.Run(string(phase)+"/"+purpose, func(t *testing.T) {
@@ -340,6 +352,7 @@ func TestAuxiliaryAcceptanceReviewPreservesTerminalWorkflowPhase(t *testing.T) {
 }
 
 func TestAuxiliaryCompilerUsesAlreadyBoundInvocationContext(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
 	compiler := &mockContextCompiler{}
 	c.SetContextCompiler(compiler)
@@ -372,6 +385,7 @@ func TestAuxiliaryCompilerUsesAlreadyBoundInvocationContext(t *testing.T) {
 }
 
 func TestAuxiliaryCompilerFailsClosedWithoutBoundInvocationContext(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
 	compiler := &mockContextCompiler{}
 	c.SetContextCompiler(compiler)
@@ -385,6 +399,7 @@ func TestAuxiliaryCompilerFailsClosedWithoutBoundInvocationContext(t *testing.T)
 }
 
 func TestAuxiliaryFallbackManifestDistinguishesNoModel(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
 	c.executionRunID = "run-fallback"
 	if err := c.recordAuxiliaryFallback(context.Background(), "skill_matcher", "no_selection"); err != nil {
@@ -397,6 +412,7 @@ func TestAuxiliaryFallbackManifestDistinguishesNoModel(t *testing.T) {
 }
 
 func TestAuxiliaryManifestPreservesParentInvocationIdentity(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
 	c.executionRunID = "run-parent"
 	ctx := withInvocationMetadata(withTestAuxiliaryInvocationContext(context.Background()), InvocationMetadata{
@@ -413,6 +429,7 @@ func TestAuxiliaryManifestPreservesParentInvocationIdentity(t *testing.T) {
 }
 
 func TestContextToolConsultedObservationIsDistinctAndIdempotent(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	manifest := ContextInjectionManifest{RequestID: "request-1", RunID: "run-1", TaskID: "task-1", Attempt: 1, AgentRole: "worker", Phase: PhaseExecute, Trigger: ContextTriggerTaskDispatch, Fingerprint: "manifest-1"}
 	if err := c.recordContextToolConsulted(&manifest, "a"); err != nil {
@@ -431,6 +448,7 @@ func TestContextToolConsultedObservationIsDistinctAndIdempotent(t *testing.T) {
 }
 
 func TestTodoContextManifestCheckpointClone(t *testing.T) {
+	t.Parallel()
 	list := &TodoList{items: []*TodoItem{{ID: "task-1"}}}
 	manifest := ContextInjectionManifest{RequestID: "request-1", RunID: "run-1", TaskID: "task-1", Attempt: 1, Items: []ContextManifestItem{{ID: "goal", Included: true, KnowledgeState: KnowledgeKnown}}}
 	if err := list.SetContextManifest("task-1", &manifest); err != nil {
@@ -448,6 +466,7 @@ func TestTodoContextManifestCheckpointClone(t *testing.T) {
 }
 
 func TestContextManifestEventReplay(t *testing.T) {
+	t.Parallel()
 	manifest := ContextInjectionManifest{SchemaVersion: 1, RequestID: "request-1", RequestHash: "hash", RunID: "run-1", TaskID: "task-1", Attempt: 1, Agent: "worker", Phase: PhaseExecute, Trigger: ContextTriggerTaskDispatch, Fingerprint: "fingerprint"}
 	retryManifest := manifest
 	retryManifest.RequestID = "request-2"
@@ -472,6 +491,7 @@ func TestContextManifestEventReplay(t *testing.T) {
 }
 
 func TestContextManifestKeepsConcurrentModelExecutionsDistinct(t *testing.T) {
+	t.Parallel()
 	list := &TodoList{items: []*TodoItem{{ID: "task-1"}}}
 	base := ContextInjectionManifest{SchemaVersion: 1, RequestID: "request-shared", RunID: "run-1", TaskID: "task-1", Attempt: 1, Agent: "worker", ModelExecutionID: "model-a"}
 	other := base
@@ -492,6 +512,7 @@ func TestContextManifestKeepsConcurrentModelExecutionsDistinct(t *testing.T) {
 }
 
 func TestContextManifestRecordsSkillDisclosureLevelWithoutSkillContent(t *testing.T) {
+	t.Parallel()
 	request := validTestContextRequest()
 	compiled := CompiledContext{IncludedItems: []ContextItem{{ID: "skill:review", Kind: "skill_summary", Content: "summary only", Required: true, TokenCount: 3}}}
 	manifest, err := BuildContextInjectionManifest(request, compiled, nil, "worker", time.Now(), agent.DefaultMemoryLearningPolicy())
@@ -508,6 +529,7 @@ func TestContextManifestRecordsSkillDisclosureLevelWithoutSkillContent(t *testin
 }
 
 func TestContextRoutingStatusIncludesIdentityCountsReasonsAndFallback(t *testing.T) {
+	t.Parallel()
 	var got StatusEvent
 	c := &Coordinator{reportStatus: func(event StatusEvent) { got = event }}
 	c.reportContextRouted(&ContextInjectionManifest{RequestID: "ctx-1", Attempt: 2, Trigger: ContextTriggerToolFailure, Purpose: "recovery", ModelCalled: false, Items: []ContextManifestItem{{Included: true, Tokens: 9}, {Reason: ContextOmittedPhase}, {Reason: ContextOmittedBudget}}})
@@ -519,6 +541,7 @@ func TestContextRoutingStatusIncludesIdentityCountsReasonsAndFallback(t *testing
 }
 
 func TestContextManifestPersistenceFailsBeforeDirectModelCall(t *testing.T) {
+	t.Parallel()
 	worker := &contextManifestCountingAgent{}
 	c := newDirectTerminationCoordinator(t, worker)
 	c.SetSessionStore(&failOnContextManifestSessionStore{})
@@ -535,6 +558,7 @@ func TestContextManifestPersistenceFailsBeforeDirectModelCall(t *testing.T) {
 }
 
 func TestLearningOffStillPersistsGeneralManifestOnly(t *testing.T) {
+	t.Parallel()
 	worker := &contextManifestCountingAgent{}
 	c := newDirectTerminationCoordinator(t, worker)
 	c.session.Config.MemoryLearning.Mode = agent.MemoryLearningOff

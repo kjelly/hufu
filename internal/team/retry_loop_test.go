@@ -29,6 +29,7 @@ func builtinProfile(t *testing.T, name ExecutionProfileName) ExecutionProfile {
 }
 
 func TestExecuteTaskRetryDisposition(t *testing.T) {
+	t.Parallel()
 	contractErr := withFailureClassOverride(errors.New("invalid verification contract"), FailureContract)
 	environmentErr := withFailureClassOverride(errors.New("required executable unavailable"), FailureEnvironment)
 
@@ -186,6 +187,7 @@ func TestExecuteTaskRetryDisposition(t *testing.T) {
 }
 
 func TestExecuteTaskTerminalBlockedRequiresManualCustody(t *testing.T) {
+	t.Parallel()
 	worker := scriptWorker()
 	c := newTestCoordinator(t, withWorker(worker))
 	todoID := addTodo(t, c, "do work")
@@ -237,6 +239,7 @@ func TestExecuteTaskTerminalBlockedRequiresManualCustody(t *testing.T) {
 }
 
 func TestExecuteTaskRetryIssuesFreshContextPerAttempt(t *testing.T) {
+	t.Parallel()
 	worker := scriptWorker(
 		scriptedTurn{text: "first attempt produced partial output", err: errors.New("worker failed: first attempt error")},
 		textTurn("succeeded on retry"),
@@ -277,6 +280,7 @@ func TestExecuteTaskRetryIssuesFreshContextPerAttempt(t *testing.T) {
 }
 
 func TestExecuteTaskRetryPromptCarriesPreviousAttemptEvidence(t *testing.T) {
+	t.Parallel()
 	worker := scriptWorker(
 		scriptedTurn{text: "first attempt partial output before error", err: errors.New("worker failed: execution error on first attempt")},
 		textTurn("succeeded on retry"),
@@ -304,6 +308,7 @@ func TestExecuteTaskRetryPromptCarriesPreviousAttemptEvidence(t *testing.T) {
 }
 
 func TestExecuteTaskRetryPromptIncludesVerifyCommand(t *testing.T) {
+	t.Parallel()
 	worker := scriptWorker(textTurn("work output"))
 	c := newTestCoordinator(t, withWorker(worker))
 	todoID := addTodo(t, c, "do work")
@@ -323,6 +328,7 @@ func TestExecuteTaskRetryPromptIncludesVerifyCommand(t *testing.T) {
 }
 
 func TestExecuteTaskClearsStaleVerifyResultBetweenRetries(t *testing.T) {
+	t.Parallel()
 	// Attempt 1 produces output and fails verification (exit 1). Attempt 2
 	// fails before verification, so its classification must fall back to the
 	// error text instead of inheriting attempt 1's exit code. Attempts 3 and
@@ -373,6 +379,7 @@ func TestExecuteTaskClearsStaleVerifyResultBetweenRetries(t *testing.T) {
 }
 
 func TestRecordRetrySkipsCancelledClass(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.recordRetry(FailureExecution)
 	c.recordRetry(FailureEnvironment)
@@ -386,6 +393,7 @@ func TestRecordRetrySkipsCancelledClass(t *testing.T) {
 }
 
 func TestPersistFailureExcludesCancelledFromFingerprint(t *testing.T) {
+	t.Parallel()
 	c, store := systemicCoordinator(t, nil)
 	todoID := addTodo(t, c, "do work")
 
@@ -414,6 +422,7 @@ func TestPersistFailureExcludesCancelledFromFingerprint(t *testing.T) {
 }
 
 func TestComputeEvidenceComplete(t *testing.T) {
+	t.Parallel()
 	requiresResult := TaskDef{Execution: ExecutionContract{RequiresResult: true}}
 	tests := []struct {
 		name          string
@@ -440,6 +449,7 @@ func TestComputeEvidenceComplete(t *testing.T) {
 }
 
 func TestBuildRetryContext(t *testing.T) {
+	t.Parallel()
 	const (
 		apiKey           = "sk-secret-1234567890abcdef"
 		errSecret        = "err-secret-123"
@@ -540,6 +550,7 @@ func TestBuildRetryContext(t *testing.T) {
 }
 
 func TestRetryContextRedactsCredentialPatterns(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		input  string
@@ -565,6 +576,7 @@ func TestRetryContextRedactsCredentialPatterns(t *testing.T) {
 }
 
 func TestRetryPromptHelpersRedactSecrets(t *testing.T) {
+	t.Parallel()
 	const secret = "fallback-secret-654"
 	if got := retryPartialOutput("", "previous output: token="+secret); strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED]") {
 		t.Errorf("fallback retry output was not redacted: %q", got)
@@ -644,6 +656,7 @@ func (a *sameCoordinatorConcurrentAgent) run(ctx context.Context, prompt string,
 }
 
 func TestExecuteTaskRetryPromptKeepsEvidencePerTaskUnderConcurrency(t *testing.T) {
+	t.Parallel()
 	worker := newSameCoordinatorConcurrentAgent()
 	c := newTestCoordinator(t, withWorker(worker), withTeamConfig(func(cfg *agent.TeamConfig) {
 		// Both tasks fail once with the same category; keep the shared

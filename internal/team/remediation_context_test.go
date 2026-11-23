@@ -9,6 +9,7 @@ import (
 )
 
 func TestBuildRemediationContextExtractsAndRedactsSourceEvidence(t *testing.T) {
+	t.Parallel()
 	source := &TodoItem{
 		ID:      "task-2",
 		Agent:   "reviewer",
@@ -55,12 +56,14 @@ func TestBuildRemediationContextExtractsAndRedactsSourceEvidence(t *testing.T) {
 }
 
 func TestBuildRemediationContextNilSource(t *testing.T) {
+	t.Parallel()
 	if rc := buildRemediationContext("task-1", nil); rc != nil {
 		t.Fatalf("expected nil remediation context for nil source, got %+v", rc)
 	}
 }
 
 func TestAppendRemediationContextRendersBoundedEvidence(t *testing.T) {
+	t.Parallel()
 	rc := &RemediationContext{
 		SourceTaskID:  "task-2",
 		SourceAgent:   "reviewer",
@@ -82,6 +85,7 @@ func TestAppendRemediationContextRendersBoundedEvidence(t *testing.T) {
 }
 
 func TestAppendRemediationContextNilIsNoop(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	appendRemediationContext(&b, nil)
 	if b.Len() != 0 {
@@ -94,6 +98,7 @@ func TestAppendRemediationContextNilIsNoop(t *testing.T) {
 // source task's canonical evidence to the reset ancestor, so the coder's
 // next dispatch can read it back (coordinator_task_run.go).
 func TestDAGSchedulerAttachesRemediationContextOnSemanticReset(t *testing.T) {
+	t.Parallel()
 	s, items := dagSchedulerOnFailureClassesFixture(t, []TaskFailureClass{FailureVerify}, FailureVerify)
 	items[1].TypedResult = &TaskResult{Status: "failed", Findings: []Finding{{Category: "correctness", Summary: "required check failed"}}}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -123,6 +128,7 @@ func TestDAGSchedulerAttachesRemediationContextOnSemanticReset(t *testing.T) {
 // retry mechanism buildRetryContextWithSubmittedResult already covers) does
 // not also produce a self-referential remediation context.
 func TestDAGSchedulerSelfLoopDoesNotAttachRemediationContext(t *testing.T) {
+	t.Parallel()
 	coord := &Coordinator{
 		taskTracker:   NewTaskTracker(),
 		reportStatus:  func(StatusEvent) {},
@@ -157,6 +163,7 @@ func TestDAGSchedulerSelfLoopDoesNotAttachRemediationContext(t *testing.T) {
 // durability requirement: remediation context must survive event replay
 // (e.g. after a Hufu process restart), not just live in-memory execution.
 func TestReduceToTodoListReconstructsRemediationContext(t *testing.T) {
+	t.Parallel()
 	payload, err := json.Marshal(map[string]any{
 		"id":     "coder-1",
 		"status": "pending",

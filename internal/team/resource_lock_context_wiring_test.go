@@ -9,6 +9,7 @@ import (
 )
 
 func TestDefaultContextCompilerInjectsLockedResourcesForCoordinator(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.setLoadedRequiredResources([]*LoadedResource{
 		{LockedResource: LockedResource{Name: "team-rules", Kind: agent.ResourceProjectRules, InjectInto: []string{"coordinator"}}, Content: "coordinator rules content"},
@@ -28,6 +29,7 @@ func TestDefaultContextCompilerInjectsLockedResourcesForCoordinator(t *testing.T
 // InjectInto matching is case-insensitive end-to-end through the wiring
 // (the declared "Coder" matches the worker's actual name "coder").
 func TestDefaultContextCompilerInjectsLockedResourcesForNamedWorker(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.setLoadedRequiredResources([]*LoadedResource{
 		{LockedResource: LockedResource{Name: "coder-rules", Kind: agent.ResourceProjectRules, InjectInto: []string{"Coder"}}, Content: "coder-only content"},
@@ -52,6 +54,7 @@ func TestDefaultContextCompilerInjectsLockedResourcesForNamedWorker(t *testing.T
 }
 
 func TestDefaultContextCompilerFallsBackToTaskDefAgentName(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.setLoadedRequiredResources([]*LoadedResource{
 		{LockedResource: LockedResource{Name: "helper-rules", Kind: agent.ResourceProjectRules, InjectInto: []string{"helper"}}, Content: "helper content"},
@@ -71,6 +74,7 @@ func TestDefaultContextCompilerFallsBackToTaskDefAgentName(t *testing.T) {
 // real auxiliary_context.go call site, which builds a WorkerContextInput
 // with neither AgentDef nor TaskDef.Agent set (an isolated sidecar prompt).
 func TestDefaultContextCompilerSkipsInjectionWithNoAgentIdentity(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.setLoadedRequiredResources([]*LoadedResource{
 		{LockedResource: LockedResource{Name: "team-rules", Kind: agent.ResourceProjectRules, InjectInto: []string{"coordinator", "coder"}}, Content: "should not appear"},
@@ -87,6 +91,7 @@ func TestDefaultContextCompilerSkipsInjectionWithNoAgentIdentity(t *testing.T) {
 }
 
 func TestDefaultContextCompilerLegacyTeamUnaffected(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	cc := &defaultContextCompiler{c: c}
 
@@ -113,6 +118,7 @@ func TestDefaultContextCompilerLegacyTeamUnaffected(t *testing.T) {
 // confirming the pipeline still fails closed end-to-end, not just in
 // isolation against BudgetContextItems directly.
 func TestCompileCoordinatorContextRequiredLockedResourceFailsClosedOnBudget(t *testing.T) {
+	t.Parallel()
 	input := CoordinatorContextInput{
 		ModelContext: ModelContextSpec{ContextWindow: 10, MaxOutputTokens: 1, SafetyMarginTokens: 1},
 		LockedResourceItems: LockedResourceContextItems([]*LoadedResource{

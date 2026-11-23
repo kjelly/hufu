@@ -30,6 +30,7 @@ func newTestCoordinatorForDryRun(t *testing.T, agents map[string]*agent.AgentDef
 }
 
 func TestDryRun_NoLLMCall_Structure(t *testing.T) {
+	t.Parallel()
 	agents := map[string]*agent.AgentDef{
 		"coordinator": {Name: "coordinator", Role: "coordinator", Tools: "ask_user"},
 		"developer":   {Name: "developer", Role: "worker", Tools: "read,write,bash", Skills: "code-review"},
@@ -118,6 +119,7 @@ func TestDryRun_NoLLMCall_Structure(t *testing.T) {
 }
 
 func TestDryRunUsesCanonicalExecutionTargets(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinatorForDryRun(t, map[string]*agent.AgentDef{
 		"developer": {Name: "developer", Role: "worker"},
 	}, nil, agent.TeamConfig{
@@ -139,6 +141,7 @@ func TestDryRunUsesCanonicalExecutionTargets(t *testing.T) {
 }
 
 func TestDryRun_NoLLMCall_UnmatchedPrompt(t *testing.T) {
+	t.Parallel()
 	skills := []*skill.SkillDef{
 		{Name: "code-reviewer", Description: "Use this skill to review code"},
 	}
@@ -168,6 +171,7 @@ func TestDryRun_NoLLMCall_UnmatchedPrompt(t *testing.T) {
 }
 
 func TestDryRun_NoLLMCall_EmptySession(t *testing.T) {
+	t.Parallel()
 	cfg := agent.TeamConfig{Name: "demo"}
 	c := newTestCoordinatorForDryRun(t, nil, nil, cfg)
 
@@ -192,6 +196,7 @@ func TestDryRun_NoLLMCall_EmptySession(t *testing.T) {
 // "context deadline exceeded" error, *not* the fast LLM-free completion we
 // expect.
 func TestDryRun_NoLLMCall_CompletesQuickly(t *testing.T) {
+	t.Parallel()
 	agents := map[string]*agent.AgentDef{
 		"coordinator": {Name: "coordinator", Role: "coordinator", Tools: "ask_user"},
 		"developer":   {Name: "developer", Role: "worker", Tools: "read,write,bash"},
@@ -224,6 +229,7 @@ func TestDryRun_NoLLMCall_CompletesQuickly(t *testing.T) {
 }
 
 func TestDryRun_NoLLMCall_DoesNotCreateProviderManager(t *testing.T) {
+	t.Parallel()
 	// Smoke test: even with no providerManager set on the coordinator,
 	// DryRun must not panic trying to use it.
 	cfg := agent.TeamConfig{

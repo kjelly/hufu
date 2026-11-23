@@ -8,6 +8,7 @@ import (
 )
 
 func TestMigratableLegacyExecutionTargetUsesDurableProviderBindingEvidence(t *testing.T) {
+	t.Parallel()
 	target, err := migratableLegacyExecutionTarget(&TodoItem{
 		ID:               "legacy-1",
 		Model:            "openrouter/meta/llama",
@@ -23,6 +24,7 @@ func TestMigratableLegacyExecutionTargetUsesDurableProviderBindingEvidence(t *te
 }
 
 func TestMigratableLegacyExecutionTargetIgnoresLocalBindingMarker(t *testing.T) {
+	t.Parallel()
 	target, err := migratableLegacyExecutionTarget(&TodoItem{
 		ID:              "legacy-local",
 		Model:           "qwen3:8b",
@@ -38,6 +40,7 @@ func TestMigratableLegacyExecutionTargetIgnoresLocalBindingMarker(t *testing.T) 
 }
 
 func TestHistoricalProfileEvidenceRecoversMatchingTaskRunOnly(t *testing.T) {
+	t.Parallel()
 	payload, err := json.Marshal(modelprofile.TelemetryProjection{ModelID: "meta/llama", Provider: "openrouter"})
 	if err != nil {
 		t.Fatal(err)

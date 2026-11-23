@@ -12,6 +12,7 @@ import (
 )
 
 func TestDeclaredShellTools(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		def  *agent.AgentDef
@@ -34,6 +35,7 @@ func TestDeclaredShellTools(t *testing.T) {
 }
 
 func TestArtifactScopeShellToolsFollowTheAgentGrant(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	bash := tools.NewBashTool(tools.WithWorkDir(root), tools.WithAllowedPaths([]string{root}))
 	golang := tools.NewGolangTool(tools.WithWorkDir(root))

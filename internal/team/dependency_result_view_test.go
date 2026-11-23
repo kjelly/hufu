@@ -8,6 +8,7 @@ import (
 )
 
 func TestDependencyResultViewStrictYAML(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, input string
 		invalid     bool
@@ -62,6 +63,7 @@ func TestDependencyResultViewStrictYAML(t *testing.T) {
 }
 
 func TestDependencyResultViewNormalizationDetachesPolicy(t *testing.T) {
+	t.Parallel()
 	source := &DependencyResultViewSpec{Mode: "selected", Fields: []string{"verification", "summary"}}
 	canonical, err := source.normalized()
 	if err != nil {

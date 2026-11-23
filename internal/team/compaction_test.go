@@ -15,6 +15,7 @@ import (
 )
 
 func TestStructuredSummary_RenderMarkdownAndParse(t *testing.T) {
+	t.Parallel()
 	summary := StructuredSummary{
 		Goal:                "Implement structured compaction in hufu CLI",
 		Constraints:         []string{"User correction: Do not drop tool call/result pairs"},
@@ -75,6 +76,7 @@ func TestStructuredSummary_RenderMarkdownAndParse(t *testing.T) {
 }
 
 func TestParseStructuredSummary_JSON(t *testing.T) {
+	t.Parallel()
 	jsonRaw := `{
 		"goal": "Refactor compaction",
 		"constraints": ["Must preserve failures"],
@@ -107,6 +109,7 @@ func TestParseStructuredSummary_JSON(t *testing.T) {
 }
 
 func TestAdjustBoundaryToPreserveToolPairs(t *testing.T) {
+	t.Parallel()
 	call1 := fantasy.ToolCallPart{ToolCallID: "call_1", ToolName: "view", Input: `{"file_path":"foo.go"}`}
 	res1 := fantasy.ToolResultPart{ToolCallID: "call_1", Output: fantasy.ToolResultOutputContentText{Text: "content"}}
 
@@ -143,6 +146,7 @@ func TestAdjustBoundaryToPreserveToolPairs(t *testing.T) {
 }
 
 func TestCompactionInvariants(t *testing.T) {
+	t.Parallel()
 	origGoal := "Build feature X"
 
 	callView := fantasy.ToolCallPart{ToolCallID: "c1", ToolName: "view", Input: `{"file_path":"src/main.go"}`}
@@ -221,6 +225,7 @@ func TestCompactionInvariants(t *testing.T) {
 }
 
 func TestExtractFileOperationsUsesRealToolArgumentKeys(t *testing.T) {
+	t.Parallel()
 	callView := fantasy.ToolCallPart{
 		ToolCallID: "read",
 		ToolName:   "view",
@@ -262,6 +267,7 @@ func TestExtractFileOperationsUsesRealToolArgumentKeys(t *testing.T) {
 }
 
 func TestCompactionRecord_Persistence(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	summary := StructuredSummary{
@@ -344,6 +350,7 @@ func (m *mockCompacter) CompactStructured(ctx context.Context, conversationText,
 }
 
 func TestPerformStructuredCompaction_WithMockSidecar(t *testing.T) {
+	t.Parallel()
 	mockJSON := `{
 		"goal": "Mock Goal",
 		"constraints": ["Mock Constraint"],
@@ -377,6 +384,7 @@ func TestPerformStructuredCompaction_WithMockSidecar(t *testing.T) {
 }
 
 func TestStructuredSummary_UserCorrectionsAndSourceEntryIDs(t *testing.T) {
+	t.Parallel()
 	summary := StructuredSummary{
 		Goal:            "Test new fields",
 		UserCorrections: []string{"Use v2 API"},
@@ -401,6 +409,7 @@ func TestStructuredSummary_UserCorrectionsAndSourceEntryIDs(t *testing.T) {
 }
 
 func TestValidateStructuredSummary_FiveChecks(t *testing.T) {
+	t.Parallel()
 	validSummary := &StructuredSummary{
 		Goal:              "Build system",
 		Constraints:       []string{"User correction: use gRPC"},
@@ -467,6 +476,7 @@ func TestValidateStructuredSummary_FiveChecks(t *testing.T) {
 }
 
 func TestValidateStructuredSummary_FallbackPreservesOldSummary(t *testing.T) {
+	t.Parallel()
 	prevSummary := &StructuredSummary{
 		Goal:            "Original Goal",
 		CompletedTasks:  []string{"Task 1: Done"},
@@ -498,6 +508,7 @@ func TestValidateStructuredSummary_FallbackPreservesOldSummary(t *testing.T) {
 }
 
 func TestAdjustBoundaryToPreserveToolPairs_PreventsOrphanedResults(t *testing.T) {
+	t.Parallel()
 	// Scenario: c2 call@1, orphan result c1@2, c2 result@3
 	callC2 := fantasy.ToolCallPart{ToolCallID: "c2", ToolName: "edit", Input: `{"file_path":"b.go"}`}
 	orphanC1 := fantasy.ToolResultPart{ToolCallID: "c1", Output: fantasy.ToolResultOutputContentText{Text: "old result"}}
@@ -526,6 +537,7 @@ func TestAdjustBoundaryToPreserveToolPairs_PreventsOrphanedResults(t *testing.T)
 }
 
 func TestCrossCompactionVerificationFailureFormat(t *testing.T) {
+	t.Parallel()
 	prevSummary := &StructuredSummary{
 		Goal:                "Goal",
 		VerificationResults: []string{"Verification failure: exit status 2"},
@@ -546,6 +558,7 @@ func TestCrossCompactionVerificationFailureFormat(t *testing.T) {
 }
 
 func TestCompactionRecord_PrevRecordIDLinkage(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	rec1 := CompactionRecord{
@@ -582,6 +595,7 @@ func TestCompactionRecord_PrevRecordIDLinkage(t *testing.T) {
 }
 
 func TestCompactMessages_SourceRangeIsAbsolute(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{
 		Workspace: t.TempDir(),
 		Dir:       t.TempDir(),
@@ -633,6 +647,7 @@ func TestCompactMessages_SourceRangeIsAbsolute(t *testing.T) {
 }
 
 func TestExtractFileOperations_RealToolSchema(t *testing.T) {
+	t.Parallel()
 	callView := fantasy.ToolCallPart{
 		ToolCallID: "c_view",
 		ToolName:   "view",
@@ -698,6 +713,7 @@ func TestExtractFileOperations_RealToolSchema(t *testing.T) {
 }
 
 func TestExtractFileOperations_RequiresSuccessfulResult(t *testing.T) {
+	t.Parallel()
 	call := func(id, path string) fantasy.Message {
 		return fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: id, ToolName: "write", Input: `{"file_path":"` + path + `"}`}}}
 	}
@@ -720,6 +736,7 @@ func TestExtractFileOperations_RequiresSuccessfulResult(t *testing.T) {
 }
 
 func TestIsVerificationFailure_IgnoresSuccessfulStatusText(t *testing.T) {
+	t.Parallel()
 	for _, text := range []string{"exit status 0", "no tests failed", "0 errors", "failure count: 0"} {
 		if isVerificationFailure(text) {
 			t.Errorf("successful status %q marked as failure", text)
@@ -728,6 +745,7 @@ func TestIsVerificationFailure_IgnoresSuccessfulStatusText(t *testing.T) {
 }
 
 func TestIsVerificationFailure_DoesNotMaskFailureAfterSuccessLine(t *testing.T) {
+	t.Parallel()
 	for _, text := range []string{
 		"phase 1: 0 errors\nphase 2: build failed",
 		"exit status 0\nverification failed: integration check",
@@ -739,6 +757,7 @@ func TestIsVerificationFailure_DoesNotMaskFailureAfterSuccessLine(t *testing.T) 
 }
 
 func TestCompactMessages_MergesTypedTaskResultFactsWithoutSidecar(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Workspace: t.TempDir(), Dir: t.TempDir(), Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}
 	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
@@ -786,6 +805,7 @@ func TestCompactMessages_MergesTypedTaskResultFactsWithoutSidecar(t *testing.T) 
 }
 
 func TestCompactMessages_MergesTypedTaskResultFacts_OnValidationFallback(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Workspace: t.TempDir(), Dir: t.TempDir(), Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}
 	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
@@ -858,6 +878,7 @@ func TestCompactMessages_MergesTypedTaskResultFacts_OnValidationFallback(t *test
 }
 
 func TestFormatTaskVerification_TimedOutAndNegativeExitCode(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		taskID       string
@@ -918,6 +939,7 @@ func TestFormatTaskVerification_TimedOutAndNegativeExitCode(t *testing.T) {
 }
 
 func TestIsVerificationFailure_TimeoutCancelledAndNegativeExitCode(t *testing.T) {
+	t.Parallel()
 	failCases := []string{
 		"task 1 verification \"go test\": timed out (exit status 0)",
 		"task 1 verification \"go test\": timed out",
@@ -936,6 +958,7 @@ func TestIsVerificationFailure_TimeoutCancelledAndNegativeExitCode(t *testing.T)
 }
 
 func TestMergeTypedTaskResultFacts_DoesNotMutatePrevSummary(t *testing.T) {
+	t.Parallel()
 	prevSummary := &StructuredSummary{
 		Goal:           "Initial Goal",
 		CompletedTasks: []string{"Task 1: Setup"},
@@ -962,6 +985,7 @@ func TestMergeTypedTaskResultFacts_DoesNotMutatePrevSummary(t *testing.T) {
 }
 
 func TestMergeTypedTaskResultFacts_WritesFailedVerificationsToErrorsAndFixes(t *testing.T) {
+	t.Parallel()
 	items := []*TodoItem{
 		{
 			ID:     "1",
@@ -996,6 +1020,7 @@ func TestMergeTypedTaskResultFacts_WritesFailedVerificationsToErrorsAndFixes(t *
 }
 
 func TestMergeTypedTaskResultFacts_ValidationFallback_ReconcilesCompletedTask(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Workspace: t.TempDir(), Dir: t.TempDir(), Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}
 	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
@@ -1054,6 +1079,7 @@ func TestMergeTypedTaskResultFacts_ValidationFallback_ReconcilesCompletedTask(t 
 }
 
 func TestMergeTypedTaskResultFacts_FailedTaskIDDoesNotRemoveSubstringMatches(t *testing.T) {
+	t.Parallel()
 	summary := mergeTypedTaskResultFacts(&StructuredSummary{
 		CompletedTasks: []string{
 			"Task 1: failed work",
@@ -1075,6 +1101,7 @@ func TestMergeTypedTaskResultFacts_FailedTaskIDDoesNotRemoveSubstringMatches(t *
 }
 
 func TestCompactMessages_InvalidSummaryDoesNotReplaceHistoryOrPersist(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c, err := NewCoordinator(&TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}, "", "", nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
@@ -1102,6 +1129,7 @@ func TestCompactMessages_InvalidSummaryDoesNotReplaceHistoryOrPersist(t *testing
 }
 
 func TestCompactMessagesEmbedsVerifiedToolEvidence(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c, err := NewCoordinator(&TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}, "", "", nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
@@ -1137,6 +1165,7 @@ func TestCompactMessagesEmbedsVerifiedToolEvidence(t *testing.T) {
 }
 
 func TestVerifiedToolEvidenceNormalizesBeforeAnalysisAndCapsCompleteValue(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	policy := agent.DefaultCompactionPolicy()
 	policy.MaxHistoryMessages = 40
@@ -1196,6 +1225,7 @@ func TestVerifiedToolEvidenceNormalizesBeforeAnalysisAndCapsCompleteValue(t *tes
 }
 
 func TestCompactMessagesRetainsOriginalToolPairWhenMandatoryEvidenceCannotFit(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	minimum := contextstore.ToolResultMandatoryMinimum()
 	policy := agent.DefaultCompactionPolicy()
@@ -1224,6 +1254,7 @@ func TestCompactMessagesRetainsOriginalToolPairWhenMandatoryEvidenceCannotFit(t 
 }
 
 func TestCompactMessagesRetainsOriginalWhenVerifiedBudgetCannotFit(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c, err := NewCoordinator(&TeamSession{Workspace: workspace, Dir: workspace, Config: agent.TeamConfig{Name: "test", GoalMode: "exploratory"}}, "", "", nil, nil, RoleModels{}, 8, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {

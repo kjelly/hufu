@@ -10,6 +10,7 @@ import (
 )
 
 func TestTaskDefContractSafetyFieldsDecodeFromYAML(t *testing.T) {
+	t.Parallel()
 	var task TaskDef
 	if err := yaml.Unmarshal([]byte("side_effect: none\nrecovery: reconcile\nmax_retries: 3\n"), &task); err != nil {
 		t.Fatalf("decode task contract: %v", err)
@@ -20,6 +21,7 @@ func TestTaskDefContractSafetyFieldsDecodeFromYAML(t *testing.T) {
 }
 
 func TestFanOutSourceArtifactNestedYAMLPreservesReference(t *testing.T) {
+	t.Parallel()
 	var config struct {
 		Tasks []TaskDef `yaml:"tasks"`
 	}
@@ -46,6 +48,7 @@ func TestFanOutSourceArtifactNestedYAMLPreservesReference(t *testing.T) {
 }
 
 func TestCompileInitialTaskContractsPublishesStableEffectiveIdentity(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindInitialTaskContracts: true,
 		InitialBatch:             []string{"reader"},
@@ -78,6 +81,7 @@ func TestCompileInitialTaskContractsPublishesStableEffectiveIdentity(t *testing.
 }
 
 func TestCompileInitialTaskContractsBindsInvariantVerification(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindInitialTaskContracts: true,
 		InitialBatch:             []string{"reviewer"},
@@ -95,6 +99,7 @@ func TestCompileInitialTaskContractsBindsInvariantVerification(t *testing.T) {
 }
 
 func TestCompileInitialTaskContractsBindsPartialBatchWhenExactDisabled(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindInitialTaskContracts: true,
 		InitialBatch:             []string{"reader", "probe"},
@@ -113,6 +118,7 @@ func TestCompileInitialTaskContractsBindsPartialBatchWhenExactDisabled(t *testin
 }
 
 func TestCompileTaskGoalContractsReplacesCoordinatorExecutionFields(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
 	}}, ContractTasks: []TaskDef{{
@@ -150,6 +156,7 @@ func TestCompileTaskGoalContractsReplacesCoordinatorExecutionFields(t *testing.T
 }
 
 func TestRestoreLegacyBoundInvariantVerificationRequiresMatchingContractHash(t *testing.T) {
+	t.Parallel()
 	contract := TaskDef{
 		ID: "review-workset", Agent: "reviewer",
 		InvariantVerification: InvariantVerificationReport,
@@ -189,6 +196,7 @@ func TestRestoreLegacyBoundInvariantVerificationRequiresMatchingContractHash(t *
 }
 
 func TestRestoreLegacyBoundInvariantVerificationSurvivesCanonicalProjection(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []InvariantVerificationMode{InvariantVerificationReport, InvariantVerificationGate} {
 		t.Run(string(mode), func(t *testing.T) {
 			contract := TaskDef{ID: "review", Agent: "worker", InvariantVerification: mode, Execution: ExecutionContract{RequiresResult: true}}
@@ -216,6 +224,7 @@ func TestRestoreLegacyBoundInvariantVerificationSurvivesCanonicalProjection(t *t
 }
 
 func TestCompileTaskGoalContractsBindsStaticActionAndItsIdentity(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
 	}}, ContractTasks: []TaskDef{{
@@ -238,6 +247,7 @@ func TestCompileTaskGoalContractsBindsStaticActionAndItsIdentity(t *testing.T) {
 }
 
 func TestCompileTaskGoalContractsRejectsMissingContractID(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
 	}}, ContractTasks: []TaskDef{{
@@ -254,6 +264,7 @@ func TestCompileTaskGoalContractsRejectsMissingContractID(t *testing.T) {
 }
 
 func TestCompileTaskGoalContractsReplacesCoordinatorVerificationFields(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
 	}}, ContractTasks: []TaskDef{{
@@ -287,6 +298,7 @@ func TestCompileTaskGoalContractsReplacesCoordinatorVerificationFields(t *testin
 // the dispatched task would always carry a zero-value Kind/Advances
 // regardless of what the contract declared.
 func TestCompileTaskGoalContractsBindsStaticProgressCriterionFields(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
 	}}, ContractTasks: []TaskDef{{
@@ -323,6 +335,7 @@ func TestCompileTaskGoalContractsBindsStaticProgressCriterionFields(t *testing.T
 // whatever a model-authored task guessed, the same way it already does for
 // Verify/VerifySpec.
 func TestCompileTaskGoalContractsReplacesCoordinatorProgressCriterionFields(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
 	}}, ContractTasks: []TaskDef{{
@@ -347,6 +360,7 @@ func TestCompileTaskGoalContractsReplacesCoordinatorProgressCriterionFields(t *t
 }
 
 func TestCompileTaskGoalContractsMatchesContractIDCaseInsensitively(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
 	}}, ContractTasks: []TaskDef{{
@@ -368,6 +382,7 @@ func TestCompileTaskGoalContractsMatchesContractIDCaseInsensitively(t *testing.T
 }
 
 func TestCompileTaskGoalContractsRejectsDuplicateContractIDs(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,
 	}}, ContractTasks: []TaskDef{
@@ -380,6 +395,7 @@ func TestCompileTaskGoalContractsRejectsDuplicateContractIDs(t *testing.T) {
 }
 
 func TestValidateTeamTaskContractsRejectsLegacySemanticSelector(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{
 		Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{BindTaskGoalContracts: true}},
 		Agents: map[string]*agent.AgentDef{"runner": {Name: "runner", Role: "worker"}},
@@ -397,6 +413,7 @@ func TestValidateTeamTaskContractsRejectsLegacySemanticSelector(t *testing.T) {
 }
 
 func TestValidateTeamTaskContractsRejectsMissingInitialContract(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindInitialTaskContracts: true,
 		InitialBatch:             []string{"reader"},
@@ -411,6 +428,7 @@ func TestValidateTeamTaskContractsRejectsMissingInitialContract(t *testing.T) {
 }
 
 func TestValidateTeamTaskContractsRejectsUndersizedCoordinatorRoundBudget(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Config: agent.TeamConfig{MaxRounds: 3, MinimumCoordinatorRounds: 4}}
 	findings := ValidateTeamTaskContracts(session)
 	if len(findings) != 1 || findings[0].Code != "max_rounds_below_minimum_coordinator_rounds" {
@@ -424,6 +442,7 @@ func TestValidateTeamTaskContractsRejectsUndersizedCoordinatorRoundBudget(t *tes
 }
 
 func TestEffectiveContractIdentityIsIncludedInWorkerProtocol(t *testing.T) {
+	t.Parallel()
 	instructions := resultProtocolInstructions(TaskDef{
 		ContractID:       "reader-ack-v1",
 		ContractHash:     "deadbeef",

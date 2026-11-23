@@ -29,6 +29,7 @@ func newOccurrenceTransactionCoordinator(t *testing.T) (*Coordinator, *TodoItem)
 }
 
 func TestOccurrenceTransitionRejectsStaleSubmissionBeforeProjection(t *testing.T) {
+	t.Parallel()
 	c, item := newOccurrenceTransactionCoordinator(t)
 	c.setCurrentTaskAttempt(item.ID, 1)
 	oldContext := occurrenceTestContext(c, item.ID, 1)
@@ -84,6 +85,7 @@ func TestOccurrenceTransitionRejectsStaleSubmissionBeforeProjection(t *testing.T
 }
 
 func TestStaleSubmitResultArtifactHasNoPersistenceOrPendingState(t *testing.T) {
+	t.Parallel()
 	c, item := newOccurrenceTransactionCoordinator(t)
 	path := filepath.Join(c.session.Workspace, "stale.txt")
 	if err := os.WriteFile(path, []byte("stale artifact"), 0o644); err != nil {
@@ -115,6 +117,7 @@ func TestStaleSubmitResultArtifactHasNoPersistenceOrPendingState(t *testing.T) {
 }
 
 func TestDuplicateArtifactSubmissionLeavesFirstAuthoritative(t *testing.T) {
+	t.Parallel()
 	c, item := newOccurrenceTransactionCoordinator(t)
 	firstPath := filepath.Join(c.session.Workspace, "first.txt")
 	secondPath := filepath.Join(c.session.Workspace, "second.txt")
@@ -149,6 +152,7 @@ func TestDuplicateArtifactSubmissionLeavesFirstAuthoritative(t *testing.T) {
 }
 
 func TestArtifactTransactionRollbackClearsMembershipAndRetainsCASData(t *testing.T) {
+	t.Parallel()
 	c, item := newOccurrenceTransactionCoordinator(t)
 	sharedPath := filepath.Join(c.session.Workspace, "shared.txt")
 	newPath := filepath.Join(c.session.Workspace, "new.txt")
@@ -228,6 +232,7 @@ func (s *acceptingArtifactSink) Submit(_ context.Context, _ string, _ TaskResult
 }
 
 func TestArtifactRollbackDoesNotDeleteEEXISTArtifactFromAliasStore(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	alias := filepath.Join(filepath.Dir(workspace), filepath.Base(workspace)+"-alias")
 	if err := os.Symlink(workspace, alias); err != nil {
@@ -289,6 +294,7 @@ func TestArtifactRollbackDoesNotDeleteEEXISTArtifactFromAliasStore(t *testing.T)
 }
 
 func TestSubmitResultIdentityRequiresDispatchProvenanceAndTrustedSeedIsSeparate(t *testing.T) {
+	t.Parallel()
 	c, item := newOccurrenceTransactionCoordinator(t)
 	c.setCurrentTaskAttempt(item.ID, 1)
 	tool := &submitResultTool{coordinator: c, todoID: item.ID}

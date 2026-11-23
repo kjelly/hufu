@@ -9,6 +9,7 @@ import (
 )
 
 func TestValidateStopPolicyBeforeExecute(t *testing.T) {
+	t.Parallel()
 	if err := ValidateStopPolicyBeforeExecute(StopPolicy{}); err != nil {
 		t.Fatalf("unconfigured policy rejected: %v", err)
 	}
@@ -24,6 +25,7 @@ func TestValidateStopPolicyBeforeExecute(t *testing.T) {
 
 // checkpoint-every: N means every N completed tool calls in this attempt.
 func TestShouldCheckpoint(t *testing.T) {
+	t.Parallel()
 	if ShouldCheckpoint(StopPolicy{}, 5) {
 		t.Fatal("checkpoint-every 0 should disable checkpoints")
 	}
@@ -42,6 +44,7 @@ func TestShouldCheckpoint(t *testing.T) {
 }
 
 func TestEvaluateCheckpointKillCriteria(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		criterion KillCriterion
@@ -124,6 +127,7 @@ func TestEvaluateCheckpointKillCriteria(t *testing.T) {
 
 // Resources already spent are never a reason to keep going.
 func TestCheckpointDoesNotTreatConsumptionAsProgress(t *testing.T) {
+	t.Parallel()
 	policy := StopPolicy{
 		CheckpointEvery: 1,
 		KillCriteria:    []KillCriterion{{ID: "tokens", Kind: agent.KillKindBudgetTokens, Threshold: 100}},
@@ -136,6 +140,7 @@ func TestCheckpointDoesNotTreatConsumptionAsProgress(t *testing.T) {
 
 // Two criteria firing at once always report the same one.
 func TestCheckpointCriteriaOrderIsDeterministic(t *testing.T) {
+	t.Parallel()
 	policy := StopPolicy{
 		CheckpointEvery: 1,
 		KillCriteria: []KillCriterion{
@@ -158,6 +163,7 @@ func TestCheckpointCriteriaOrderIsDeterministic(t *testing.T) {
 
 // A contradicted critical assumption takes the configured replan action.
 func TestCheckpointAssumptionContradictionUsesReplanPolicy(t *testing.T) {
+	t.Parallel()
 	state := CheckpointState{CriticalAssumptionContradicted: true, ContradictedAssumptionID: "A1"}
 
 	decision := EvaluateCheckpoint(StopPolicy{CheckpointEvery: 1}, ReplanPolicy{}, state)
@@ -176,6 +182,7 @@ func TestCheckpointAssumptionContradictionUsesReplanPolicy(t *testing.T) {
 }
 
 func TestCheckpointMaterialEvidenceChange(t *testing.T) {
+	t.Parallel()
 	replan := ReplanPolicy{OnMaterialEvidenceChanged: agent.ReplanReplan}
 	decision := EvaluateCheckpoint(StopPolicy{CheckpointEvery: 1}, replan, CheckpointState{MaterialEvidenceChanged: true})
 	if decision.Action != CheckpointReplan || decision.Reason != ReasonDecisionStale {
@@ -185,6 +192,7 @@ func TestCheckpointMaterialEvidenceChange(t *testing.T) {
 
 // An unknown side-effect state never continues and never silently retries.
 func TestCheckpointUnknownSideEffectStateStops(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{RecoveryStateComplete, RecoveryStatePartial, RecoveryStateNotStarted} {
 		decision := EvaluateCheckpoint(StopPolicy{CheckpointEvery: 1}, ReplanPolicy{}, CheckpointState{SideEffectState: state})
 		if decision.Action != CheckpointContinue {
@@ -198,6 +206,7 @@ func TestCheckpointUnknownSideEffectStateStops(t *testing.T) {
 }
 
 func TestCheckpointStopBounds(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		policy StopPolicy
@@ -219,6 +228,7 @@ func TestCheckpointStopBounds(t *testing.T) {
 
 // The whole evaluation is pure: the same state always gives the same answer.
 func TestEvaluateCheckpointIsDeterministic(t *testing.T) {
+	t.Parallel()
 	policy := StopPolicy{
 		CheckpointEvery: 1, MaxToolCalls: 20,
 		KillCriteria: []KillCriterion{

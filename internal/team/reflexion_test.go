@@ -9,6 +9,7 @@ import (
 )
 
 func TestFormatReflexionLesson(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("x", 300)
 
 	cases := []struct {
@@ -92,6 +93,7 @@ func TestFormatReflexionLesson(t *testing.T) {
 }
 
 func TestPersistReflexionLessonRequiresCanonicalContext(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(ws)
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 )
 
 func TestPrimaryDecisionOccurrenceRequiresDurableAdmission(t *testing.T) {
+	t.Parallel()
 	admitted := universalDecisionLifecycleEvents(t)[2]
 	item, err := ProjectPrimaryDecisionOccurrence(admitted)
 	if err != nil {
@@ -28,6 +29,7 @@ func TestPrimaryDecisionOccurrenceRequiresDurableAdmission(t *testing.T) {
 }
 
 func TestPrimaryDecisionOccurrenceRoundTripsProjectionAndCheckpoint(t *testing.T) {
+	t.Parallel()
 	item, err := ProjectPrimaryDecisionOccurrence(universalDecisionLifecycleEvents(t)[2])
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +61,7 @@ func TestPrimaryDecisionOccurrenceRoundTripsProjectionAndCheckpoint(t *testing.T
 }
 
 func TestPrimaryDecisionAdmissionAtomicallyCreatesTodoProjection(t *testing.T) {
+	t.Parallel()
 	events := universalDecisionLifecycleEvents(t)
 	result := reduceToTodoList(events[:3])
 	if len(result.tasks) != 1 || !IsPrimaryOccurrence(result.tasks[0]) {
@@ -70,6 +73,7 @@ func TestPrimaryDecisionAdmissionAtomicallyCreatesTodoProjection(t *testing.T) {
 }
 
 func TestSchedulerAndResumeExcludePrimaryOccurrence(t *testing.T) {
+	t.Parallel()
 	item, err := ProjectPrimaryDecisionOccurrence(universalDecisionLifecycleEvents(t)[2])
 	if err != nil {
 		t.Fatal(err)
@@ -86,6 +90,7 @@ func TestSchedulerAndResumeExcludePrimaryOccurrence(t *testing.T) {
 }
 
 func TestPrimaryOccurrenceExcludedFromSupportingStatsAndUnresolved(t *testing.T) {
+	t.Parallel()
 	primary, err := ProjectPrimaryDecisionOccurrence(universalDecisionLifecycleEvents(t)[2])
 	if err != nil {
 		t.Fatal(err)
@@ -105,6 +110,7 @@ func TestPrimaryOccurrenceExcludedFromSupportingStatsAndUnresolved(t *testing.T)
 }
 
 func TestDecisionEvidenceManifestRequiresOneTypedPrimaryProof(t *testing.T) {
+	t.Parallel()
 	primary, err := ProjectPrimaryDecisionOccurrence(universalDecisionLifecycleEvents(t)[2])
 	if err != nil {
 		t.Fatal(err)

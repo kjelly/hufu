@@ -78,6 +78,7 @@ func actionLifecycleEvents(t *testing.T, events *EventStore) []RunEvent {
 }
 
 func TestDynamicTeamRunsCatalogActionWithoutPhases(t *testing.T) {
+	t.Parallel()
 	provider := &recordingActionProvider{result: ActionResult{Outputs: map[string]any{"summary": "ok"}}}
 	session := dynamicCatalogSession(t, provider, true)
 	c, events := newDynamicCatalogCoordinator(t, session)
@@ -112,6 +113,7 @@ func TestDynamicTeamRunsCatalogActionWithoutPhases(t *testing.T) {
 }
 
 func TestDynamicTeamRejectsNonCatalogActions(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		withCatalog bool
@@ -142,6 +144,7 @@ func TestDynamicTeamRejectsNonCatalogActions(t *testing.T) {
 }
 
 func TestCatalogActionBindingCloneNormalizesProposals(t *testing.T) {
+	t.Parallel()
 	var nilBinding *CatalogActionBinding
 	if nilBinding.clone() != nil {
 		t.Fatal("clone of nil binding is not nil")
@@ -159,6 +162,7 @@ func TestCatalogActionBindingCloneNormalizesProposals(t *testing.T) {
 }
 
 func TestStaticActionAdmissionFailurePersistsTerminalOccurrence(t *testing.T) {
+	t.Parallel()
 	provider := &recordingActionProvider{result: ActionResult{}}
 	c, events := newDynamicCatalogCoordinator(t, dynamicCatalogSession(t, provider, true))
 	c.sessionData = NewSession()

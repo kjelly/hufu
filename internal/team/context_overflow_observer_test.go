@@ -63,6 +63,7 @@ func resolveOverflowObserverProfile(t *testing.T, resolver *modelprofile.Runtime
 }
 
 func TestSidecarErrorObserverRecordsOnlyProviderOverflowCapacity(t *testing.T) {
+	t.Parallel()
 	modelID := "observer-model"
 	introspector := &overflowObserverIntrospector{}
 	c, resolver := newOverflowObserverCoordinator(t, introspector)
@@ -161,6 +162,7 @@ func newSaturatedOverflowCoordinator(t *testing.T) (*Coordinator, *modelprofile.
 }
 
 func TestWorkerOverflowObservationUsesCanceledInvocationContext(t *testing.T) {
+	t.Parallel()
 	modelID := "overflow-worker-model"
 	c, resolver, introspector, activeDone := newSaturatedOverflowCoordinator(t)
 	select {
@@ -212,6 +214,7 @@ func TestWorkerOverflowObservationUsesCanceledInvocationContext(t *testing.T) {
 }
 
 func TestSidecarOverflowObserverUsesCanceledInvocationContext(t *testing.T) {
+	t.Parallel()
 	modelID := "overflow-sidecar-model"
 	c, _, introspector, activeDone := newSaturatedOverflowCoordinator(t)
 	select {
@@ -260,6 +263,7 @@ func (*cancelingSidecarGenerationAgent) Stream(context.Context, fantasy.AgentStr
 }
 
 func TestAttachedSidecarGenerationUsesCanceledContextForSaturatedOverflowObservation(t *testing.T) {
+	t.Parallel()
 	modelID := "overflow-integrated-sidecar-model"
 	c, resolver, introspector, activeDone := newSaturatedOverflowCoordinator(t)
 

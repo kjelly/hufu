@@ -27,6 +27,7 @@ func evidenceOriginBaseStore(t *testing.T) *FileArtifactStore {
 }
 
 func TestArtifactOriginMetadataRoundTripLegacyAndConflict(t *testing.T) {
+	t.Parallel()
 	store := evidenceOriginBaseStore(t)
 
 	put, err := store.Put(context.Background(), PutArtifactRequest{
@@ -104,6 +105,7 @@ func (s *evidenceOriginStore) resolverCalls() []ArtifactRef {
 }
 
 func TestResolveDecisionEvidenceUsesTrustedOriginForEveryEvidenceClass(t *testing.T) {
+	t.Parallel()
 	base := evidenceOriginBaseStore(t)
 	refs := make([]ArtifactRef, 3)
 	for i, id := range []string{"direct", "base-rate", "assumption"} {
@@ -155,6 +157,7 @@ func TestResolveDecisionEvidenceUsesTrustedOriginForEveryEvidenceClass(t *testin
 }
 
 func TestResolveDecisionEvidenceFailsClosedOnTrustedOriginResolverError(t *testing.T) {
+	t.Parallel()
 	base := evidenceOriginBaseStore(t)
 	put, err := base.Put(context.Background(), PutArtifactRequest{ID: "resolver-error", Kind: "evidence", Path: "evidence.json", Content: []byte("evidence")})
 	if err != nil {
@@ -173,6 +176,7 @@ func TestResolveDecisionEvidenceFailsClosedOnTrustedOriginResolverError(t *testi
 }
 
 func TestTrustedGroupingSurvivesReplayWithoutAdvisoryParentPromotion(t *testing.T) {
+	t.Parallel()
 	original := []EvidenceProvenance{
 		{SourceID: "https://publisher.example.test/a", SourceType: EvidenceSourceURL, ContentHash: "same", ParentSourceIDs: []string{"root"}, DeclaredParentSourceIDs: []string{"forged"}},
 		{SourceID: "https://mirror.example.test/b", SourceType: EvidenceSourceURL, ContentHash: "same"},
@@ -218,6 +222,7 @@ func (s *evidenceOriginPutRecorder) putRequests() []PutArtifactRequest {
 }
 
 func TestReferenceEvidencePublisherDoesNotPromoteAdvisorySourceToArtifactOrigin(t *testing.T) {
+	t.Parallel()
 	store := &evidenceOriginPutRecorder{ArtifactStore: evidenceOriginBaseStore(t)}
 	draft := validReferenceDraft()
 	draft.Entries[0].Source.URL = "https://model-declared.example/source"

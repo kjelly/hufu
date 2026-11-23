@@ -11,6 +11,7 @@ import (
 )
 
 func TestPrimaryEvidenceCollectionIsDeterministicRedactedAndContinuesAfterOverflow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := newPrimaryEvidenceTestStore(t)
 	policyRef := putPrimaryEvidenceTestDecisionRef(t, store, "redaction-policy", "application/json", []byte(`{"version":1}`))
@@ -66,6 +67,7 @@ func TestPrimaryEvidenceCollectionIsDeterministicRedactedAndContinuesAfterOverfl
 }
 
 func TestPrimaryEvidenceMandatoryOverflowFailsClosed(t *testing.T) {
+	t.Parallel()
 	store := newPrimaryEvidenceTestStore(t)
 	policyRef := putPrimaryEvidenceTestDecisionRef(t, store, "redaction-policy", "application/json", []byte(`{}`))
 	limitsRef := putPrimaryEvidenceTestDecisionRef(t, store, "evidence-limits", "application/json", []byte(`{}`))
@@ -84,6 +86,7 @@ func TestPrimaryEvidenceMandatoryOverflowFailsClosed(t *testing.T) {
 }
 
 func TestPrimaryEvidenceSourceAdapterRejectsDuplicateJSONKeys(t *testing.T) {
+	t.Parallel()
 	store := newPrimaryEvidenceTestStore(t)
 	record := primaryEvidenceTestRecord(t, store, "source-duplicate", "application/json", []byte(`{"value":1,"value":2}`), "fact", "event-1", 1)
 	_, err := PrimaryEvidenceCandidatesFromSources(context.Background(), store, []PrimaryEvidenceSourceRecord{record})
@@ -93,6 +96,7 @@ func TestPrimaryEvidenceSourceAdapterRejectsDuplicateJSONKeys(t *testing.T) {
 }
 
 func TestPrimaryEvidenceLongLineBecomesMetadataOnly(t *testing.T) {
+	t.Parallel()
 	store := newPrimaryEvidenceTestStore(t)
 	policyRef := putPrimaryEvidenceTestDecisionRef(t, store, "redaction-policy", "application/json", []byte(`{}`))
 	limitsRef := putPrimaryEvidenceTestDecisionRef(t, store, "evidence-limits", "application/json", []byte(`{}`))
@@ -113,6 +117,7 @@ func TestPrimaryEvidenceLongLineBecomesMetadataOnly(t *testing.T) {
 }
 
 func TestPrimaryEvidenceUnknownProvenanceDoesNotMeetMinimum(t *testing.T) {
+	t.Parallel()
 	store := newPrimaryEvidenceTestStore(t)
 	policyRef := putPrimaryEvidenceTestDecisionRef(t, store, "redaction-policy", "application/json", []byte(`{}`))
 	limitsRef := putPrimaryEvidenceTestDecisionRef(t, store, "evidence-limits", "application/json", []byte(`{}`))
@@ -131,6 +136,7 @@ func TestPrimaryEvidenceUnknownProvenanceDoesNotMeetMinimum(t *testing.T) {
 }
 
 func TestPrimaryEvidenceFailedAssertionIsMandatoryNegativeEvidence(t *testing.T) {
+	t.Parallel()
 	store := newPrimaryEvidenceTestStore(t)
 	policyRef := putPrimaryEvidenceTestDecisionRef(t, store, "redaction-policy", "application/json", []byte(`{}`))
 	limitsRef := putPrimaryEvidenceTestDecisionRef(t, store, "evidence-limits", "application/json", []byte(`{}`))
@@ -155,6 +161,7 @@ func TestPrimaryEvidenceFailedAssertionIsMandatoryNegativeEvidence(t *testing.T)
 }
 
 func TestPrimaryEvidenceRejectsInvalidBaseRateAndCircularParents(t *testing.T) {
+	t.Parallel()
 	store := newPrimaryEvidenceTestStore(t)
 	policyRef := putPrimaryEvidenceTestDecisionRef(t, store, "redaction-policy", "application/json", []byte(`{}`))
 	limitsRef := putPrimaryEvidenceTestDecisionRef(t, store, "evidence-limits", "application/json", []byte(`{}`))
@@ -192,6 +199,7 @@ func TestPrimaryEvidenceRejectsInvalidBaseRateAndCircularParents(t *testing.T) {
 }
 
 func TestAdaptPrimaryDecisionEvidenceNamespacesFactsAndResolvesViews(t *testing.T) {
+	t.Parallel()
 	store := newPrimaryEvidenceTestStore(t)
 	policyRef := putPrimaryEvidenceTestDecisionRef(t, store, "redaction-policy", "application/json", []byte(`{}`))
 	limitsRef := putPrimaryEvidenceTestDecisionRef(t, store, "evidence-limits", "application/json", []byte(`{}`))

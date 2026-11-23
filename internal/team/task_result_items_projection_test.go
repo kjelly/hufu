@@ -17,6 +17,7 @@ func itemsStatusAssertion(pointer string) TaskResultAssertion {
 }
 
 func TestSubmitResultItemsProjectionRejectsBeforeCommit(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	c.executionRunID = "run-items"
 	c.taskTracker = NewTaskTracker()
@@ -36,6 +37,7 @@ func TestSubmitResultItemsProjectionRejectsBeforeCommit(t *testing.T) {
 }
 
 func TestTaskResultItemsProjectionSemantics(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, source string
 		valid        bool
@@ -81,6 +83,7 @@ func TestTaskResultItemsProjectionSemantics(t *testing.T) {
 }
 
 func TestTaskResultItemsProjectionRejectsMalformedPolicies(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		edit func(map[string]any)
@@ -106,6 +109,7 @@ func TestTaskResultItemsProjectionRejectsMalformedPolicies(t *testing.T) {
 }
 
 func TestTaskResultItemsProjectionContractAndPersistence(t *testing.T) {
+	t.Parallel()
 	const source = `type: task_result_assert
 task-result-assertions:
   - pointer: /status

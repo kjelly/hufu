@@ -10,6 +10,7 @@ import (
 )
 
 func TestDelegatedImageInputsBindOrderedSourcesBeforeTaskCreation(t *testing.T) {
+	t.Parallel()
 	c, ctx, _ := coordinatorMetadataFixture(t, "https://fixture.invalid/v1", nil)
 	selectors := []media.ImageInputSelector{{TurnID: "native-invocation", PartIndex: 2}, {TurnID: "native-invocation", PartIndex: 1}, {TurnID: "native-invocation", PartIndex: 2}}
 	original := []TaskDef{{Agent: "worker", Goal: "inspect selected images", ImageInputs: selectors}}
@@ -55,6 +56,7 @@ func TestDelegatedImageInputsBindOrderedSourcesBeforeTaskCreation(t *testing.T) 
 }
 
 func TestDelegatedImageInputsRejectSourcesOutsideCallerGrant(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"no scope", "unknown turn", "text part", "unavailable index", "stale lease", "runtime binding override"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, ctx, _ := coordinatorMetadataFixture(t, "https://fixture.invalid/v1", nil)
@@ -84,6 +86,7 @@ func TestDelegatedImageInputsRejectSourcesOutsideCallerGrant(t *testing.T) {
 }
 
 func TestWorkerImageDelegationCannotExpandItsParentInput(t *testing.T) {
+	t.Parallel()
 	c, ctx, parent, _ := nativeMediaProviderFixture(t)
 	_ = admittedMediaTask(t, c, ctx, "another-turn")
 	allowed := media.ImageInputSelector{TurnID: parent.MediaBinding.Selections[0].TurnID, PartIndex: parent.MediaBinding.Selections[0].PartIndex}

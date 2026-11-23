@@ -8,6 +8,7 @@ import (
 )
 
 func TestExecutionPolicyDifferences(t *testing.T) {
+	t.Parallel()
 	frozen := &ExecutionPolicySnapshot{
 		Version: executionPolicySnapshotVersion, TeamMaxConcurrent: 2,
 		Backends:          []ExecutionBackendPolicySnapshot{{Backend: "remote", MaxConcurrent: 3, IdentityHash: "old-provider-identity"}},
@@ -129,6 +130,7 @@ func TestExecutionPolicyDifferences(t *testing.T) {
 }
 
 func TestExecutionPolicyDifferencesSliceRepresentation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		before  *ExecutionPolicySnapshot
@@ -177,6 +179,7 @@ func TestExecutionPolicyDifferencesSliceRepresentation(t *testing.T) {
 }
 
 func TestExecutionPolicyDifferencesRedactsEntryIdentity(t *testing.T) {
+	t.Parallel()
 	current := &ExecutionPolicySnapshot{MCPWorkerPolicies: []ExecutionMCPWorkerPolicySnapshot{{Server: "https://user:private-password@example.test"}}}
 	got := executionPolicyDifferences(&ExecutionPolicySnapshot{}, current)
 	if strings.Contains(got, "private-password") || !strings.Contains(got, "mcp_worker_policies") {
@@ -185,6 +188,7 @@ func TestExecutionPolicyDifferencesRedactsEntryIdentity(t *testing.T) {
 }
 
 func TestExecutionPolicyDifferencesBoundsOutput(t *testing.T) {
+	t.Parallel()
 	frozen := &ExecutionPolicySnapshot{}
 	current := &ExecutionPolicySnapshot{}
 	for i := range maxExecutionPolicyDifferences + 3 {
@@ -200,6 +204,7 @@ func TestExecutionPolicyDifferencesBoundsOutput(t *testing.T) {
 }
 
 func TestExecutionPolicySnapshotDriftDiagnosticPreservesAdmission(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	first := newExecutionPolicySnapshotCoordinator(t, workspace, 2, 3)
 	if err := first.FreezeExecutionPolicyAtStartup(); err != nil {
@@ -241,6 +246,7 @@ func TestExecutionPolicySnapshotDriftDiagnosticPreservesAdmission(t *testing.T) 
 }
 
 func TestExecutionPolicySnapshotDriftDiagnosticUsesCompatibilityRules(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	first := newExecutionPolicySnapshotCoordinator(t, workspace, 2, 3)
 	delete(first.session.Agents, "codex-worker")
@@ -286,6 +292,7 @@ func TestExecutionPolicySnapshotDriftDiagnosticUsesCompatibilityRules(t *testing
 }
 
 func TestExecutionPolicySnapshotLiveDriftDiagnostic(t *testing.T) {
+	t.Parallel()
 	c := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 3)
 	frozen := c.ExecutionPolicySnapshot()
 	c.maxConcurrent = 4

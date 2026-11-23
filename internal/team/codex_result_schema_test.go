@@ -21,6 +21,7 @@ import (
 // values, forbids unknown fields, and never exposes a trusted Hufu field
 // (§14.5).
 func TestCodexOutputSchemaMatchesWorkerResultProposal(t *testing.T) {
+	t.Parallel()
 	schema := codexWorkerResultProposalSchema()
 	if schema["additionalProperties"] != false {
 		t.Fatalf("schema additionalProperties = %v, want false", schema["additionalProperties"])
@@ -91,6 +92,7 @@ func TestCodexOutputSchemaMatchesWorkerResultProposal(t *testing.T) {
 // schema and the decoder are two separate boundaries; both must agree before
 // a grounded review task can satisfy its /files_read verifier.
 func TestCodexFilesReadProposalDecodes(t *testing.T) {
+	t.Parallel()
 	proposal, err := DecodeWorkerResultProposal([]byte(`{"status":"success","summary":"review complete","files_read":["internal/team/coordinator.go"]}`))
 	if err != nil {
 		t.Fatalf("DecodeWorkerResultProposal: %v", err)
@@ -101,6 +103,7 @@ func TestCodexFilesReadProposalDecodes(t *testing.T) {
 }
 
 func TestCodexHufuCodeReviewPromptDefersToExternalFilesReadSchema(t *testing.T) {
+	t.Parallel()
 	_, sourceFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
@@ -170,6 +173,7 @@ func TestCodexHufuCodeReviewPromptDefersToExternalFilesReadSchema(t *testing.T) 
 }
 
 func TestNamedLLMResultProtocolRemainsLocal(t *testing.T) {
+	t.Parallel()
 	registry := NewExecutionRegistry()
 	if err := registry.Register(fakeLanguageModelBackend{fakeExecutionBackend{
 		name: "openrouter", kind: execution.BackendKindLLM,
@@ -237,6 +241,7 @@ func runCodexTurnWithOptions(t *testing.T, finalOutput string, options codexTurn
 // without any decodable proposal becomes a typed CodexProtocolIncompleteError
 // — never a silent success and never a crash.
 func TestCodexMissingProposalIsProtocolIncomplete(t *testing.T) {
+	t.Parallel()
 	result, err := runCodexTurnWithFinalOutput(t, "")
 	var protoErr *CodexProtocolIncompleteError
 	if !errors.As(err, &protoErr) {
@@ -252,6 +257,7 @@ func TestCodexMissingProposalIsProtocolIncomplete(t *testing.T) {
 // has no slot for) is treated exactly like a missing one — it never reaches
 // the point of being usable as a TaskResult.
 func TestCodexInvalidProposalDoesNotBecomeTaskResult(t *testing.T) {
+	t.Parallel()
 	forged := `{"status":"success","summary":"done","task_id":"forged-task"}`
 	result, err := runCodexTurnWithFinalOutput(t, forged)
 	var protoErr *CodexProtocolIncompleteError
@@ -272,6 +278,7 @@ func TestCodexInvalidProposalDoesNotBecomeTaskResult(t *testing.T) {
 // notifications, only turn/completed matters, and the final proposal always
 // comes from that notification's own embedded turn items (§13.4).
 func TestCodexTerminalReadWinsOverDroppedActivityNotification(t *testing.T) {
+	t.Parallel()
 	noise := []fakeCodexNotification{
 		{Method: "item/started", Params: rawJSON(t, map[string]any{"unexpected": "shape"})},
 		{Method: "item/commandExecution/outputDelta", Params: rawJSON(t, "not even an object")},
@@ -287,6 +294,7 @@ func TestCodexTerminalReadWinsOverDroppedActivityNotification(t *testing.T) {
 }
 
 func TestCodexActivitySummaryIsSafeAndUseful(t *testing.T) {
+	t.Parallel()
 	activity, ok := codexActivityForNotification(CodexNotification{
 		Method: "item/started",
 		Params: rawJSON(t, map[string]any{
@@ -305,6 +313,7 @@ func TestCodexActivitySummaryIsSafeAndUseful(t *testing.T) {
 }
 
 func TestCodexActivityDetailIncludesUsefulBoundedContentAndRedactsSecrets(t *testing.T) {
+	t.Parallel()
 	activity, ok := codexActivityForNotification(CodexNotification{
 		Method: "item/completed",
 		Params: rawJSON(t, map[string]any{
@@ -331,6 +340,7 @@ func TestCodexActivityDetailIncludesUsefulBoundedContentAndRedactsSecrets(t *tes
 }
 
 func TestCodexDetailedActivitySurfacesDeltasOnlyWhenRequested(t *testing.T) {
+	t.Parallel()
 	notification := CodexNotification{
 		Method: "item/commandExecution/outputDelta",
 		Params: rawJSON(t, map[string]any{"delta": "go test: PASS"}),
@@ -345,6 +355,7 @@ func TestCodexDetailedActivitySurfacesDeltasOnlyWhenRequested(t *testing.T) {
 }
 
 func TestCodexDetailedTurnReportsFinalResponse(t *testing.T) {
+	t.Parallel()
 	var activities []codexTurnActivity
 	result, err := runCodexTurnWithOptions(t, validProposalJSON(`"details":"review complete"`), codexTurnOptions{
 		DetailedOutput: true,
@@ -364,6 +375,7 @@ func TestCodexDetailedTurnReportsFinalResponse(t *testing.T) {
 }
 
 func TestCodexTurnRejectsUnsupportedReasoningEffortBeforeRPC(t *testing.T) {
+	t.Parallel()
 	server := startFakeCodexServer(t, nil)
 	defer server.Client.Close()
 

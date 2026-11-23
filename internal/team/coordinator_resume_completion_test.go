@@ -12,6 +12,7 @@ import (
 )
 
 func TestResumePreservesWatchdogCancellation(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	session := NewSession()
 	session.Tasks = []*TodoItem{
@@ -34,6 +35,7 @@ func TestResumePreservesWatchdogCancellation(t *testing.T) {
 }
 
 func TestResumeDoesNotLaunchTaskWithUnacceptedDependency(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name       string
 		evidence   bool
@@ -76,6 +78,7 @@ func TestResumeDoesNotLaunchTaskWithUnacceptedDependency(t *testing.T) {
 }
 
 func TestRunStopsAfterRecoveryRequiresOperator(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	c.session.Agents["coordinator"] = &agent.AgentDef{Name: "coordinator", Role: "coordinator"}
 	session := NewSession()
@@ -119,6 +122,7 @@ func TestRunStopsAfterRecoveryRequiresOperator(t *testing.T) {
 }
 
 func TestOperatorBlockedResumeCompletion(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"needs_human", "retry", "replan", "reconcile", "pending", "done", "unclassified", "cancelled"} {
 		t.Run(mode, func(t *testing.T) {
 			c := newTestCoordinator(t)

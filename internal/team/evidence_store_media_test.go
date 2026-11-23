@@ -37,6 +37,7 @@ func mediaStoreDirectory(t *testing.T) string {
 }
 
 func TestMediaArtifactStore(t *testing.T) {
+	t.Parallel()
 	workspace := mediaStoreDirectory(t)
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
@@ -116,6 +117,7 @@ func TestMediaArtifactStore(t *testing.T) {
 }
 
 func TestMediaArtifactStoreRejectsConflicts(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"mime", "data", "metadata", "namespace", "file-symlink", "source-symlink"} {
 		t.Run(scenario, func(t *testing.T) {
 			workspace := mediaStoreDirectory(t)
@@ -185,6 +187,7 @@ func TestMediaArtifactStoreRejectsConflicts(t *testing.T) {
 }
 
 func TestMediaPublicationWithoutOccurrenceGrantsNoTaskOwnership(t *testing.T) {
+	t.Parallel()
 	workspace := mediaStoreDirectory(t)
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
@@ -225,6 +228,7 @@ func TestMediaPublicationWithoutOccurrenceGrantsNoTaskOwnership(t *testing.T) {
 }
 
 func TestMediaReaderRetainsReservationUntilClosed(t *testing.T) {
+	t.Parallel()
 	workspace := mediaStoreDirectory(t)
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
@@ -257,6 +261,7 @@ func TestMediaReaderRetainsReservationUntilClosed(t *testing.T) {
 }
 
 func TestMediaStoreRespectsAggregateReadBudget(t *testing.T) {
+	t.Parallel()
 	workspace := mediaStoreDirectory(t)
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
@@ -296,6 +301,7 @@ func TestMediaStoreRespectsAggregateReadBudget(t *testing.T) {
 }
 
 func TestMediaReservedReaderUsesBundleCreditAndVerifiesContent(t *testing.T) {
+	t.Parallel()
 	for _, variant := range []string{"valid", "metadata conflict", "corrupt content"} {
 		t.Run(variant, func(t *testing.T) {
 			workspace := mediaStoreDirectory(t)
@@ -342,6 +348,7 @@ func TestMediaReservedReaderUsesBundleCreditAndVerifiesContent(t *testing.T) {
 }
 
 func TestTaskArtifactOpenerRefusesNativeMedia(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	if _, err := c.openArtifactRef(t.Context(), media.ContentID("digest", "image/png")); err == nil {
 		t.Fatal("text artifact opener accepted native media")

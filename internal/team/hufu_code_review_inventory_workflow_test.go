@@ -24,6 +24,9 @@ import (
 const offlineReviewScope = `{"kind":"last_n","count":1,"history":"first_parent","head":"HEAD"}`
 
 func TestHufuCodeReviewCompletesReportFromAcceptedInventory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	// Two critiques distinguish charging once per batch from charging per task.
 	t.Run("accepted report under the default task budget", func(t *testing.T) { runOfflineReviewReport(t, "", 2) })
 	t.Run("blocked report", func(t *testing.T) { runOfflineReviewReport(t, "The assigned snapshot evidence is incomplete.", 1) })

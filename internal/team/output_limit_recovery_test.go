@@ -20,6 +20,7 @@ func finishedStep(reason fantasy.FinishReason, toolCall bool) fantasy.StepResult
 }
 
 func TestStallContinuationPromptNamesOutputLimitTruncation(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		steps       []fantasy.StepResult
@@ -47,6 +48,7 @@ func TestStallContinuationPromptNamesOutputLimitTruncation(t *testing.T) {
 }
 
 func TestProtocolRepairInstructionsCorrectOnlyARejectedSubmission(t *testing.T) {
+	t.Parallel()
 	const correction = "Correct the rejected fields"
 	cases := []struct {
 		name     string
@@ -134,6 +136,7 @@ func lastUserText(t *testing.T, messages []fantasy.Message) string {
 }
 
 func TestStalledWorkerContinuationNamesOutputLimit(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		reason fantasy.FinishReason
@@ -169,6 +172,7 @@ func TestStalledWorkerContinuationNamesOutputLimit(t *testing.T) {
 }
 
 func TestProtocolRepairPromptForOutputLimitedWorker(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		reason      fantasy.FinishReason

@@ -71,6 +71,7 @@ func newDrainedWorkflowWrapUp(t *testing.T) (*Coordinator, *EventStore) {
 }
 
 func TestGracefulWorkflowFinishPersistsCancellationAndCompletedEvidence(t *testing.T) {
+	t.Parallel()
 	for _, acknowledged := range []bool{false, true} {
 		t.Run(map[bool]string{false: "operator_request", true: "acknowledged"}[acknowledged], func(t *testing.T) {
 			c, store := newDrainedWorkflowWrapUp(t)
@@ -138,6 +139,10 @@ func TestGracefulWorkflowFinishPersistsCancellationAndCompletedEvidence(t *testi
 }
 
 func TestGracefulWorkflowWrapUpFinalizesEveryCoordinatorBoundary(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, name := range []string{"before_model", "model_entry", "continuation_entry", "stream_eof", "recovery", "direct_agent", "cancelled_context"} {
 		t.Run(name, func(t *testing.T) {
 			c, _ := newDrainedWorkflowWrapUp(t)
@@ -173,6 +178,7 @@ func TestGracefulWorkflowWrapUpFinalizesEveryCoordinatorBoundary(t *testing.T) {
 }
 
 func TestGracefulWorkflowWrapUpDuringCoordinatorContinuation(t *testing.T) {
+	t.Parallel()
 	for _, stopOnCall := range []int{1, 6} {
 		t.Run(map[int]string{1: "continuation", 6: "final_summary"}[stopOnCall], func(t *testing.T) {
 			c, store := newDrainedWorkflowWrapUp(t)
@@ -204,6 +210,7 @@ func TestGracefulWorkflowWrapUpDuringCoordinatorContinuation(t *testing.T) {
 }
 
 func TestGracefulWorkflowWrapUpPreservesStallCause(t *testing.T) {
+	t.Parallel()
 	c, _ := newDrainedWorkflowWrapUp(t)
 	ctx, cancel := context.WithCancelCause(t.Context())
 	cancel(ErrInvocationStalled)
@@ -213,6 +220,7 @@ func TestGracefulWorkflowWrapUpPreservesStallCause(t *testing.T) {
 }
 
 func TestGracefulWorkflowWrapUpStopsCoordinatorBeforeAnotherModelStep(t *testing.T) {
+	t.Parallel()
 	c, _ := newDrainedWorkflowWrapUp(t)
 	script := &finishStopScriptAgent{
 		tool:   &recordingTool{name: "team_info", resp: fantasy.NewTextResponse("observed")},
@@ -233,6 +241,7 @@ func TestGracefulWorkflowWrapUpStopsCoordinatorBeforeAnotherModelStep(t *testing
 }
 
 func TestWorkflowWrapUpBoundariesPreserveVerificationAndWorkerDrain(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"pending", "unrequested", "budget", "blocked_stop", "verified", "acceptance_recovery", "no_progress"} {
 		t.Run(name, func(t *testing.T) {
 			c, _ := newDrainedWorkflowWrapUp(t)
@@ -260,6 +269,7 @@ func TestWorkflowWrapUpBoundariesPreserveVerificationAndWorkerDrain(t *testing.T
 }
 
 func TestDeterministicFinishRequiresWorkflowVerification(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t, withTeamConfig(func(cfg *agent.TeamConfig) { cfg.AllowFreeTextResults = true }))
 	c.phaseWorkflow = &runtimeWorkflow{enabled: true, state: PhaseVerify, results: map[Phase]PhaseResult{}}
 	id := addTodo(t, c, "prepared")

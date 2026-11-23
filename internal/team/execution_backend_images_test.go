@@ -8,6 +8,7 @@ import (
 )
 
 func TestNativeImageBackendCapabilityIsExplicit(t *testing.T) {
+	t.Parallel()
 	if (execution.BackendCapabilities{}).NativeImageInput || new(AgentExecutionBackend).Capabilities().NativeImageInput {
 		t.Fatal("unknown or external backend claimed native image transport")
 	}

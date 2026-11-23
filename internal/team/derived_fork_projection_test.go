@@ -8,6 +8,7 @@ import (
 )
 
 func TestDerivedForkReplaysIdenticalChildPolicySnapshot(t *testing.T) {
+	t.Parallel()
 	f, ops := derivedForkPreparationFixture(t)
 	policy := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 3).ExecutionPolicySnapshot()
 	payload, err := json.Marshal(policy)
@@ -36,6 +37,7 @@ func TestDerivedForkReplaysIdenticalChildPolicySnapshot(t *testing.T) {
 }
 
 func TestRefreshDerivedForkRetainsPendingTerminalCommit(t *testing.T) {
+	t.Parallel()
 	f, ops := derivedForkPreparationFixture(t)
 	result, err := ops.ForkNewTask(t.Context(), "investigation", "main")
 	if err != nil {
@@ -71,6 +73,7 @@ func TestRefreshDerivedForkRetainsPendingTerminalCommit(t *testing.T) {
 }
 
 func TestDerivedForkResetsExecutableProjectionAndPreservesParent(t *testing.T) {
+	t.Parallel()
 	f, ops := derivedForkPreparationFixture(t)
 	compaction := testCompactionState(t, f.control)
 	attachCompactionEventStore(t, f.control, "main", newTestCoordinator(t), compaction)
@@ -126,6 +129,7 @@ func TestDerivedForkResetsExecutableProjectionAndPreservesParent(t *testing.T) {
 }
 
 func TestDerivedForkLineageRequiresCompletePublicationAndOriginalSources(t *testing.T) {
+	t.Parallel()
 	f, ops := derivedForkPreparationFixture(t)
 	result, err := ops.ForkNewTask(t.Context(), "investigation", "main")
 	if err != nil {

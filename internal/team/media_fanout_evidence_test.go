@@ -12,6 +12,7 @@ import (
 )
 
 func TestNativeMediaFanoutCompletionRequiresEveryAcceptedLeaf(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	primary, next := execution.ExecutionTarget{Backend: "fixture", Model: "vision"}, execution.ExecutionTarget{Backend: "fixture", Model: "next"}
 	base := TodoItem{ID: "task", Agent: "worker", Retries: 1, MediaInputDigest: "ordered-image-digest",
@@ -89,6 +90,7 @@ func TestNativeMediaFanoutCompletionRequiresEveryAcceptedLeaf(t *testing.T) {
 }
 
 func TestNativeMediaAcceptedLeafPayloadRequiresOriginalContractAndHash(t *testing.T) {
+	t.Parallel()
 	ref := ResultContractRef{ID: "observations.schema.json", SchemaSHA256: "frozen-schema", RequireStructured: true}
 	value := []byte(`{"observation":"original finding"}`)
 	digest := sha256.Sum256(value)

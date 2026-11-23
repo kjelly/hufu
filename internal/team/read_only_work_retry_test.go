@@ -390,6 +390,9 @@ func TestContractRecoveryReadOnlyWorkRetry(t *testing.T) {
 }
 
 func TestContractRecoveryReadOnlyWorkRetryResumesWithFreshDecisions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, committed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("committed_%t", committed), func(t *testing.T) { testReadOnlyWorkRetryContinuation(t, committed) })
 	}

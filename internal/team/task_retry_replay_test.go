@@ -6,6 +6,7 @@ import (
 )
 
 func TestWorkerRetryLifecycleMatchesReplay(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	c.executionRunID = ""
 	store, err := NewEventStore(c.session.Workspace, "retry-run", "retry-session")
@@ -49,6 +50,7 @@ func TestWorkerRetryLifecycleMatchesReplay(t *testing.T) {
 }
 
 func TestTaskTransitionKeySeparatesOccurrenceLeases(t *testing.T) {
+	t.Parallel()
 	item := &TodoItem{ID: "task", Status: TaskInProgress, OccurrenceRevision: 1, DispatchID: "old"}
 	first := taskTransitionEventKey(item)
 	item.OccurrenceRevision++
@@ -61,6 +63,7 @@ func TestTaskTransitionKeySeparatesOccurrenceLeases(t *testing.T) {
 }
 
 func TestReplayRetryStartRequiresNewAttemptLease(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		prior    TaskStatus

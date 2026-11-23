@@ -23,6 +23,7 @@ func writeWorksetManifest(t *testing.T, workspace string, content string) string
 }
 
 func TestStructuredFanOutUsesValidatedManifestBindings(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	c.executionRunID = "run-1"
 	manifestPath := writeWorksetManifest(t, c.session.Workspace, `{"schema_version":1,"items":[{"key":"alpha","bindings":{"name":"alpha","input":"a.txt"},"touched_paths":["internal/team/z.go","internal/team/a.go","internal/team/z.go"]},{"key":"beta","bindings":{"name":"beta","input":"b.txt"},"touched_paths":["cmd/hufu/main.go"]}]}`)
@@ -59,6 +60,7 @@ func TestStructuredFanOutUsesValidatedManifestBindings(t *testing.T) {
 }
 
 func TestTaskGoalContractCarriesArtifactFanOutBeforeExpansion(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{
 		Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{BindTaskGoalContracts: true}},
 		ContractTasks: []TaskDef{{
@@ -76,6 +78,7 @@ func TestTaskGoalContractCarriesArtifactFanOutBeforeExpansion(t *testing.T) {
 }
 
 func TestTaskGoalInvariantContractPropagatesThroughFanOutAndSubmission(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	writeWorksetManifest(t, workspace, `{"schema_version":1,"items":[{"key":"one","bindings":{"key":"one"}}]}`)
 	session := &TeamSession{
@@ -116,6 +119,7 @@ func TestTaskGoalInvariantContractPropagatesThroughFanOutAndSubmission(t *testin
 }
 
 func TestStructuredFanOutRejectsInvalidManifestAtomically(t *testing.T) {
+	t.Parallel()
 	for name, content := range map[string]string{
 		"zero-byte source": "",
 		"duplicate key":    `{"schema_version":1,"items":[{"key":"same","bindings":{"x":"1"}},{"key":"same","bindings":{"x":"2"}}]}`,
@@ -136,6 +140,7 @@ func TestStructuredFanOutRejectsInvalidManifestAtomically(t *testing.T) {
 }
 
 func TestStructuredFanOutAcceptsProducerManifestV2(t *testing.T) {
+	t.Parallel()
 	manifest, err := decodeWorksetManifest([]byte(`{"schema_version":2,"scope":{"satisfied":true},"items":[{"key":"one","bindings":{"x":"1"}}]}`))
 	if err != nil {
 		t.Fatalf("decode v2 workset manifest: %v", err)
@@ -146,6 +151,7 @@ func TestStructuredFanOutAcceptsProducerManifestV2(t *testing.T) {
 }
 
 func TestStructuredFanOutResolvesOpaqueSourceArtifactAndInputIntegrity(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	c.executionRunID = "run-1"
 	workspace := c.session.Workspace
@@ -225,6 +231,7 @@ func TestStructuredFanOutResolvesOpaqueSourceArtifactAndInputIntegrity(t *testin
 }
 
 func TestWorksetReceiptBindsEveryChildAndReplays(t *testing.T) {
+	t.Parallel()
 	source := ArtifactRef{ID: "artifact-1", SHA256: strings.Repeat("a", 64), RunID: "run-1", TaskID: "prepare", Attempt: 1, Agent: "producer"}
 	tasks := []TaskDef{
 		{WorksetBinding: &WorksetBinding{WorksetID: "workset-1", ParentTaskID: "prepare", ItemKey: "a", SourceArtifactID: source.ID, SourceSHA256: source.SHA256, SourceArtifact: source}},
@@ -247,6 +254,7 @@ func TestWorksetReceiptBindsEveryChildAndReplays(t *testing.T) {
 }
 
 func TestStructuredWorksetRejectsInvalidTouchedPath(t *testing.T) {
+	t.Parallel()
 	for _, touchedPath := range []string{"*", "../escape.go", `/absolute.go`, `internal\\team\\file.go`} {
 		manifestBytes, err := json.Marshal(WorksetManifest{SchemaVersion: WorksetSchemaVersion, Items: []WorksetItem{{Key: "one", TouchedPaths: []string{touchedPath}}}})
 		if err != nil {
@@ -262,6 +270,7 @@ func TestStructuredWorksetRejectsInvalidTouchedPath(t *testing.T) {
 // artifact-backed path is covered by workset_legacy_compare_test.go) but the
 // policy lint must flag it as deprecated without blocking the team.
 func TestLegacyTSVFanOutEmitsWarningOnlyDeprecation(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{ContractTasks: []TaskDef{{
 		ID:     "legacy",
 		FanOut: &FanOutSpec{Source: "inputs/items.tsv", GoalTemplate: "process {item}"},

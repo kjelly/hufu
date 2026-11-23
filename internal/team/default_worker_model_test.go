@@ -8,6 +8,7 @@ import (
 )
 
 func TestDefaultWorkerModelPrefersTeamRoute(t *testing.T) {
+	t.Parallel()
 	route := &ExecutionRouteDefinition{Name: "review", Candidates: []execution.ExecutionTarget{
 		{Backend: "ollama", Model: "primary"}, {Backend: "ollama", Model: "fallback"},
 	}}

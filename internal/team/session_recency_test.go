@@ -7,6 +7,7 @@ import (
 )
 
 func TestSessionRecency_Entries41_80_200(t *testing.T) {
+	t.Parallel()
 	counts := []int{41, 80, 200}
 
 	for _, count := range counts {
@@ -69,6 +70,7 @@ func TestSessionRecency_Entries41_80_200(t *testing.T) {
 }
 
 func TestResumedAndUninterruptedSessionEquivalentContext(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 
 	// 1. Construct uninterrupted session data with 200 entries

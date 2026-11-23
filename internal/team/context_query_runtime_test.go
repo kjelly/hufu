@@ -14,6 +14,7 @@ import (
 )
 
 func TestContextQueryRuntimeStagesSharedAndPrivateWithoutAnotherPrimary(t *testing.T) {
+	t.Parallel()
 	c, input, ctx := queryRuntimeFixture(t)
 	c.contextRepo = frozenQueryRuntimeRepository(t, c.contextRepo, input)
 	timings := &queryRuntimeTimings{Repository: c.contextRepo}
@@ -62,6 +63,7 @@ func TestContextQueryRuntimeStagesSharedAndPrivateWithoutAnotherPrimary(t *testi
 }
 
 func TestContextQueryRuntimePersistentOwnerDeliveryIsRequired(t *testing.T) {
+	t.Parallel()
 	// Session records have intentional tier precedence. Seed only shared and
 	// persistent records to test owner delivery at the unchanged four-item cap.
 	c, input, ctx := queryRuntimeFixtureForTiers(t, "shared", "persistent")
@@ -106,6 +108,7 @@ func TestContextQueryRuntimePersistentOwnerDeliveryIsRequired(t *testing.T) {
 }
 
 func TestContextQueryRuntimeEligibilityDeadlineRollsBackAllSources(t *testing.T) {
+	t.Parallel()
 	c, input, ctx := queryRuntimeFixture(t)
 	repo := &queryEligibilityDeadline{queryRuntimeFrozenRepository: frozenQueryRuntimeRepository(t, c.contextRepo, input)}
 	c.contextRepo = repo
@@ -139,6 +142,7 @@ func (r *queryEligibilityDeadline) IterateAgentActivations(ctx context.Context, 
 // either a complete active transaction or exact, attributed legacy rollback;
 // the deterministic test above requires the active branch for all three scopes.
 func TestContextQueryRuntimeSQLiteHonorsActiveOrCompleteDeadlineRollback(t *testing.T) {
+	t.Parallel()
 	c, input, ctx := queryRuntimeFixture(t)
 	var work contextstore.QueryWork
 	ctx = contextstore.WithQueryWorkObserver(ctx, func(_ context.Context, item contextstore.QueryWork) {
@@ -176,6 +180,7 @@ func TestContextQueryRuntimeSQLiteHonorsActiveOrCompleteDeadlineRollback(t *test
 }
 
 func TestContextQueryRuntimeRestrictedAncestorPreservesEntirePrivateBundle(t *testing.T) {
+	t.Parallel()
 	c, input, ctx := queryRuntimeFixture(t)
 	input.WorkerMemory.querySnapshot.sources[0].RestrictedLineage = true
 	guard := &queryPrivateIterateGuard{Repository: c.contextRepo}
@@ -199,6 +204,7 @@ func TestContextQueryRuntimeRestrictedAncestorPreservesEntirePrivateBundle(t *te
 }
 
 func TestContextQueryRuntimeEligibilityFailureRetainsAllLegacySources(t *testing.T) {
+	t.Parallel()
 	c, input, ctx := queryRuntimeFixture(t)
 	c.contextRepo = &queryEligibilityFailure{Repository: c.contextRepo}
 	selected, attribution, err := c.evaluateWorkerContextQueries(ctx, input)
@@ -216,6 +222,7 @@ func TestContextQueryRuntimeEligibilityFailureRetainsAllLegacySources(t *testing
 }
 
 func TestContextQueryRuntimeOuterCancellationStopsBeforeSelection(t *testing.T) {
+	t.Parallel()
 	c, input, ctx := queryRuntimeFixture(t)
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
@@ -225,6 +232,7 @@ func TestContextQueryRuntimeOuterCancellationStopsBeforeSelection(t *testing.T) 
 }
 
 func TestContextQueryRuntimeCandidateLimitDoesNotReuseLegacyLineageOverfetch(t *testing.T) {
+	t.Parallel()
 	c, input, _ := queryRuntimeFixture(t)
 	private := input.WorkerMemory.querySnapshot
 	before := private.sources[0].Request.Limit

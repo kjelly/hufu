@@ -7,6 +7,7 @@ import (
 )
 
 func TestResumeSourceSelectsCanonicalBranchWithoutFallback(t *testing.T) {
+	t.Parallel()
 	workspace, tree, store := branchSwitchFixture(t)
 	item := &TodoItem{ID: "4", Agent: "producer", Status: TaskDone, Desc: "original accepted result"}
 	raw, err := json.Marshal(taskTransitionPayload(item))

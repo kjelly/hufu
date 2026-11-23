@@ -10,6 +10,7 @@ import (
 )
 
 func TestPlanRevisionValidatorRejectsUnsafePlans(t *testing.T) {
+	t.Parallel()
 	fp := "acceptance-fingerprint"
 	tests := []struct {
 		name   string
@@ -42,6 +43,7 @@ func TestPlanRevisionValidatorRejectsUnsafePlans(t *testing.T) {
 }
 
 func TestPlanDiffRemapsAndRejectsOmittedOnFailureTargets(t *testing.T) {
+	t.Parallel()
 	parent := []TaskDef{
 		{ID: "unchanged", Agent: "worker", Goal: "unchanged"},
 		{ID: "target", Agent: "worker", Goal: "target"},
@@ -70,6 +72,7 @@ func TestPlanDiffRemapsAndRejectsOmittedOnFailureTargets(t *testing.T) {
 func intPtrForPlanTest(value int) *int { return &value }
 
 func TestPersistPlanRevisionRejectsInvalidOnFailureBeforeReview(t *testing.T) {
+	t.Parallel()
 	c := newPlanGateCoordinator()
 	revision := PlanRevision{
 		ID: "invalid-on-failure", Goal: "repair", AcceptanceFingerprint: AcceptanceFingerprint(nil, ""),
@@ -82,6 +85,7 @@ func TestPersistPlanRevisionRejectsInvalidOnFailureBeforeReview(t *testing.T) {
 }
 
 func TestPlanRevisionValidatorRejectsParallelResourceConflict(t *testing.T) {
+	t.Parallel()
 	err := ValidatePlanRevision(PlanRevision{ID: "plan", Goal: "repair", AcceptanceFingerprint: "fp", TaskDAG: []TaskDef{
 		{Agent: "a", Goal: "one", ResourceClaims: []string{"db"}},
 		{Agent: "b", Goal: "two", ResourceClaims: []string{"db"}},
@@ -92,6 +96,7 @@ func TestPlanRevisionValidatorRejectsParallelResourceConflict(t *testing.T) {
 }
 
 func TestPlanRevisionBuildsDiffAndReplays(t *testing.T) {
+	t.Parallel()
 	packet := DiagnosticPacket{ID: "diag-1", TaskID: "task-1", Hypotheses: []RepairHypothesis{{ID: "hyp-1"}}}
 	fp := AcceptanceFingerprint(nil, "")
 	first, err := NewPlanRevision(nil, packet, "repair goal", "keep acceptance", []TaskDef{{Agent: "worker", Goal: "first"}}, fp)
@@ -146,6 +151,7 @@ func TestPlanRevisionBuildsDiffAndReplays(t *testing.T) {
 }
 
 func TestNewPlanRevisionIDsAuthorizeOmittedDependencyAfterTodoReplay(t *testing.T) {
+	t.Parallel()
 	packet := DiagnosticPacket{ID: "diag-default-id"}
 	fp := AcceptanceFingerprint(nil, "")
 	first, err := NewPlanRevision(nil, packet, "repair", "", []TaskDef{{Agent: "worker", Goal: "base", Verify: "test -f output"}}, fp)
@@ -187,6 +193,7 @@ func TestNewPlanRevisionIDsAuthorizeOmittedDependencyAfterTodoReplay(t *testing.
 }
 
 func TestNewPlanRevisionRejectsDuplicateTaskIDs(t *testing.T) {
+	t.Parallel()
 	_, err := NewPlanRevision(nil, DiagnosticPacket{ID: "diag-duplicate"}, "repair", "", []TaskDef{
 		{ID: "same", Agent: "worker", Goal: "one"},
 		{ID: "same", Agent: "worker", Goal: "two"},
@@ -197,6 +204,7 @@ func TestNewPlanRevisionRejectsDuplicateTaskIDs(t *testing.T) {
 }
 
 func TestBuildPlanDiffDetectsSemanticChangesWithStableTaskID(t *testing.T) {
+	t.Parallel()
 	base := []TaskDef{
 		{ID: "setup", Agent: "worker", Goal: "prepare"},
 		{ID: "build", Agent: "worker", Goal: "build", Verify: "test -f output", Requires: []string{"bash"}, DependsOn: []int{0}},
@@ -252,6 +260,7 @@ func newPlanGateCoordinator() *Coordinator {
 }
 
 func TestPersistPlanRevisionUsesProductionAcceptanceAuthorizationAndBudget(t *testing.T) {
+	t.Parallel()
 	fp := AcceptanceFingerprint(nil, "")
 	newRevision := func(task TaskDef, acceptance string) PlanRevision {
 		return PlanRevision{ID: task.Goal, Goal: "repair", AcceptanceFingerprint: acceptance, TaskDAG: []TaskDef{task}}
@@ -297,6 +306,7 @@ func TestPersistPlanRevisionUsesProductionAcceptanceAuthorizationAndBudget(t *te
 }
 
 func TestPlanDiffRejectsUnfinishedOmittedDependency(t *testing.T) {
+	t.Parallel()
 	parent := []TaskDef{{Agent: "worker", Goal: "unchanged"}, {Agent: "worker", Goal: "old", DependsOn: []int{0}}}
 	revision := PlanRevision{ID: "plan-dependency", Goal: "repair", AcceptanceFingerprint: "fp", TaskDAG: []TaskDef{
 		parent[0], {Agent: "worker", Goal: "modified", DependsOn: []int{0}},
@@ -313,6 +323,7 @@ func TestPlanDiffRejectsUnfinishedOmittedDependency(t *testing.T) {
 }
 
 func TestPersistPlanRevisionDeepCopiesCallerOwnedData(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	es, err := NewEventStore(dir, "run-1", "session-1")
 	if err != nil {
@@ -353,6 +364,7 @@ func TestPersistPlanRevisionDeepCopiesCallerOwnedData(t *testing.T) {
 }
 
 func TestExecutePlanRevisionCannotBypassProductionGates(t *testing.T) {
+	t.Parallel()
 	c := newPlanGateCoordinator()
 	task := TaskDef{Agent: "worker", Goal: "execute"}
 	revision := PlanRevision{ID: "execute-gate", Goal: "repair", AcceptanceFingerprint: "caller-fingerprint", Review: PlanReviewResult{Status: "approved"}, TaskDAG: []TaskDef{task}, DAGDiff: PlanDiff{Added: []PlanTaskChange{{ID: taskRevisionID(task)}}}}
@@ -365,6 +377,7 @@ func TestExecutePlanRevisionCannotBypassProductionGates(t *testing.T) {
 }
 
 func TestPlanRevisionCompletionEvidenceIsCoordinatorOwned(t *testing.T) {
+	t.Parallel()
 	c := newPlanGateCoordinator()
 	c.taskTracker = NewTaskTracker()
 	c.taskTracker.TodoList().Restore([]*TodoItem{
@@ -379,6 +392,7 @@ func TestPlanRevisionCompletionEvidenceIsCoordinatorOwned(t *testing.T) {
 }
 
 func TestPlanTaskIDFlowsThroughTodoExecutionAndReplay(t *testing.T) {
+	t.Parallel()
 	tl := NewTaskTracker().TodoList()
 	item := tl.AddBatch([]TodoSpec{{PlanTaskID: "plan-build", Agent: "worker", Desc: "build"}})[0]
 	if item.ID == item.PlanTaskID || item.PlanTaskID != "plan-build" {
@@ -394,6 +408,7 @@ func TestPlanTaskIDFlowsThroughTodoExecutionAndReplay(t *testing.T) {
 }
 
 func TestPlanRevisionReviewUsesCompletedOmittedDependencyEvidence(t *testing.T) {
+	t.Parallel()
 	c := newPlanGateCoordinator()
 	c.taskTracker = NewTaskTracker()
 	c.taskTracker.TodoList().Restore([]*TodoItem{{
@@ -426,6 +441,7 @@ func TestPlanRevisionReviewUsesCompletedOmittedDependencyEvidence(t *testing.T) 
 }
 
 func TestPlanRevisionApprovalCannotBeForgedOrStale(t *testing.T) {
+	t.Parallel()
 	c := newPlanGateCoordinator()
 	fp := AcceptanceFingerprint(nil, "")
 	task := TaskDef{ID: "task-1", Agent: "worker", Goal: "approved task"}
@@ -452,6 +468,7 @@ func TestPlanRevisionApprovalCannotBeForgedOrStale(t *testing.T) {
 }
 
 func TestPlanRevisionReviewRejectsAndReplaysAcrossRestart(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	es, err := NewEventStore(dir, "run-review", "session-review")
 	if err != nil {
@@ -522,6 +539,7 @@ func TestPlanRevisionReviewRejectsAndReplaysAcrossRestart(t *testing.T) {
 }
 
 func TestPlanRevisionReviewerToolsDoNotExecuteTasks(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		pendingPlans:    map[string]*PlanEntry{"revision": {TodoID: "revision", PlanRevisionID: "revision", Status: "submitted"}},
 		approvedOutputs: make(map[string]string),

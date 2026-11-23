@@ -18,6 +18,7 @@ func writeTeamManifest(t *testing.T, dir, content string) {
 }
 
 func TestLegacyFlatTeamStillLoads(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTeamManifest(t, dir, `name: legacy-team
 description: A legacy flat manifest with no apiVersion envelope
@@ -44,6 +45,7 @@ max-rounds: 7
 }
 
 func TestV1Alpha1TeamLoads(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTeamManifest(t, dir, `apiVersion: hufu.io/v1alpha1
 kind: AgentTeam
@@ -77,6 +79,7 @@ spec:
 }
 
 func TestTeamManifestVarsBootstrapTemplates(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		manifest string
@@ -136,6 +139,7 @@ spec:
 }
 
 func TestTeamManifestVarsBootstrapFailsClosed(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		manifest string
@@ -156,6 +160,7 @@ func TestTeamManifestVarsBootstrapFailsClosed(t *testing.T) {
 }
 
 func TestUnknownAPIVersionFailsClosed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTeamManifest(t, dir, `apiVersion: hufu.io/v99
 kind: AgentTeam
@@ -178,6 +183,7 @@ spec:
 }
 
 func TestUnknownKindFails(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTeamManifest(t, dir, `apiVersion: hufu.io/v1alpha1
 kind: NotAgentTeam
@@ -200,6 +206,7 @@ spec:
 }
 
 func TestV1Alpha1RejectsUnknownField(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTeamManifest(t, dir, `apiVersion: hufu.io/v1alpha1
 kind: AgentTeam
@@ -219,6 +226,7 @@ spec:
 }
 
 func TestV1Alpha1RejectsAdvancedNamespace(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTeamManifest(t, dir, `apiVersion: hufu.io/v1alpha1
 kind: AgentTeam
@@ -240,6 +248,7 @@ spec:
 }
 
 func TestManifestMetadataNameMismatchFails(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTeamManifest(t, dir, `apiVersion: hufu.io/v1alpha1
 kind: AgentTeam
@@ -260,6 +269,7 @@ spec:
 }
 
 func TestAdvancedNamespaceConflictStillFails(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTeamManifest(t, dir, `name: legacy-advanced-conflict
 workflow:
@@ -278,6 +288,7 @@ advanced:
 }
 
 func TestLegacyAndV1Alpha1NormalizeIdentically(t *testing.T) {
+	t.Parallel()
 	legacyDir := t.TempDir()
 	writeTeamManifest(t, legacyDir, `name: equivalence-team
 description: same content, two schemas
@@ -344,6 +355,7 @@ spec:
 }
 
 func TestTeamCostPolicyLegacyAndV1Alpha1NormalizeIdentically(t *testing.T) {
+	t.Parallel()
 	manifests := []string{
 		`name: cost-team
 cost:
@@ -379,6 +391,7 @@ spec:
 }
 
 func TestTeamCostPolicyRejectsUnknownAndNumericFields(t *testing.T) {
+	t.Parallel()
 	for _, costBlock := range []string{
 		"  max-run-usd: 1.50\n",
 		"  mystery: true\n",
@@ -399,6 +412,7 @@ func TestTeamCostPolicyRejectsUnknownAndNumericFields(t *testing.T) {
 // hufu.io/v1alpha1 team's `spec.tasks:` silently resolved to zero tasks
 // instead of failing loudly or resolving correctly.
 func TestV1Alpha1TeamTasksResolve(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTeamManifest(t, dir, `apiVersion: hufu.io/v1alpha1
 kind: AgentTeam

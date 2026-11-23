@@ -22,6 +22,7 @@ func toolResultMsg(id, text string) fantasy.Message {
 }
 
 func TestMessageTextSize(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		msg  fantasy.Message
@@ -44,6 +45,7 @@ func TestMessageTextSize(t *testing.T) {
 }
 
 func TestCapStepMessages(t *testing.T) {
+	t.Parallel()
 	bigResult := strings.Repeat("a", 60000)
 
 	t.Run("under budget returns nil", func(t *testing.T) {
@@ -94,6 +96,7 @@ func TestCapStepMessages(t *testing.T) {
 }
 
 func TestSqueezeTextKeepsHeadAndTail(t *testing.T) {
+	t.Parallel()
 	s := strings.Repeat("H", 500) + strings.Repeat("T", 500)
 	got := squeezeText(s, 100)
 	if !strings.HasPrefix(got, "H") || !strings.HasSuffix(got, "T") {
@@ -105,6 +108,7 @@ func TestSqueezeTextKeepsHeadAndTail(t *testing.T) {
 }
 
 func TestCompactToolResultTextPreservesMiddleDiagnostic(t *testing.T) {
+	t.Parallel()
 	input := strings.Repeat("ordinary output\n", 4_000) + "COMPILER ERROR E1234: internal failure\n" + strings.Repeat("ordinary output\n", 4_000)
 	got := compactToolResultText(input, 1_000)
 	if !strings.Contains(got, "COMPILER ERROR E1234") {
@@ -113,6 +117,7 @@ func TestCompactToolResultTextPreservesMiddleDiagnostic(t *testing.T) {
 }
 
 func TestSqueezeMessagePreservesStructuredErrorInAnyLanguage(t *testing.T) {
+	t.Parallel()
 	text := strings.Repeat("一般輸出\n", 1000) + "無法讀取指定檔案"
 	msg := fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
 		fantasy.ToolResultPart{Output: fantasy.ToolResultOutputContentError{Error: errors.New(text)}},

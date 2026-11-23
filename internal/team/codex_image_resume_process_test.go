@@ -23,6 +23,9 @@ const codexImageRecoveryHome = "HUFU_TEST_CODEX_IMAGE_RECOVERY_HOME"
 // projection and session survive only on disk. A different process resumes
 // from the canonical CAS, including when the projection copy was reclaimed.
 func TestCodexNativeImageResumeInNewProcess(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	if mode := os.Getenv(codexImageRecoveryMode); mode != "" {
 		root, home := os.Getenv(codexImageRecoveryRoot), os.Getenv(codexImageRecoveryHome)
 		digest := sha256.Sum256(mediaStorePNG(t))
@@ -118,6 +121,7 @@ func TestCodexNativeImageResumeInNewProcess(t *testing.T) {
 	}
 	for _, scenario := range []string{"matching", "missing", "tampered"} {
 		t.Run(scenario, func(t *testing.T) {
+			t.Parallel()
 			root, home := mediaStoreDirectory(t), mediaStoreDirectory(t)
 			runCodexImageRecoveryProcess(t, "prepare", root, home)
 			checkpoint := LoadSession(filepath.Join(root, "control"))

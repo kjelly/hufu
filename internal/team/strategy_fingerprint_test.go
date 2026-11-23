@@ -29,6 +29,7 @@ func strategyTestReceipt(tools ...string) *ExecutionReceipt {
 // TestMateriallyDifferentStrategy covers which changes between a failed
 // attempt and its replacement count as a different strategy.
 func TestMateriallyDifferentStrategy(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		// edit changes the candidate (and its receipt) relative to the failed task.
@@ -119,6 +120,7 @@ func TestMateriallyDifferentStrategy(t *testing.T) {
 // TestStrategyFingerprintExcludesSecrets keeps goal text, arguments, file
 // paths, and credentials out of the recorded fingerprint.
 func TestStrategyFingerprintExcludesSecrets(t *testing.T) {
+	t.Parallel()
 	item := strategyTestItem()
 	item.Goal = "Deploy with token sk-live-SECRETVALUE"
 	item.Constraints = "use password hunter2"
@@ -139,6 +141,7 @@ func TestStrategyFingerprintExcludesSecrets(t *testing.T) {
 // TestStrategyFingerprintReplayStable recomputes the fingerprint from a todo
 // and receipt that went through their durable JSON form.
 func TestStrategyFingerprintReplayStable(t *testing.T) {
+	t.Parallel()
 	item, receipt := strategyTestItem(), strategyTestReceipt("view", "bash", "submit_result")
 	item.ExecutionRoute = &ExecutionRouteBinding{Name: "fast", Candidates: []execution.ExecutionTarget{item.ExecutionTarget, {Backend: "ollama", Model: "glm"}}}
 	item.DynamicToolAuthorization = &DynamicToolAuthorizationSnapshot{Version: 1, Targets: []FrozenDynamicToolTarget{{Name: "search"}}, StaticToolCeiling: []string{"bash", "view"}}

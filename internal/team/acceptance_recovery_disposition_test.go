@@ -8,6 +8,7 @@ import (
 )
 
 func TestAcceptanceRecoveryRespectsWorkerDisposition(t *testing.T) {
+	t.Parallel()
 	for _, disposition := range []RetryDisposition{ReconcileOnly, NeedsHuman, ReplanRequired, RetryWorker} {
 		t.Run(string(disposition), func(t *testing.T) {
 			c := newDoneWorkflowCoordinator(t)
@@ -57,6 +58,7 @@ func TestAcceptanceRecoveryRespectsWorkerDisposition(t *testing.T) {
 }
 
 func TestAcceptanceRecoveryIgnoresVerifiedResolution(t *testing.T) {
+	t.Parallel()
 	c, original, replacement := verifiedResolutionFixture(t)
 	original.FailureEvent.RetryDisposition = ReconcileOnly
 	if err := c.CommitTaskResolution(t.Context(), original.ID, &TaskResolution{

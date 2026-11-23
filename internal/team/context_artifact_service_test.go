@@ -111,6 +111,7 @@ func readWholeArtifact(t *testing.T, c *Coordinator, ctx context.Context, id str
 }
 
 func TestContextArtifactPublishAndScopedRead(t *testing.T) {
+	t.Parallel()
 	f := newContextArtifactFixture(t, testContextArtifactPolicy())
 	svc := f.c.newContextArtifactService(f.task.ID, TaskDef{})
 	if svc == nil {
@@ -215,6 +216,7 @@ func TestContextArtifactPublishAndScopedRead(t *testing.T) {
 }
 
 func TestContextArtifactEligibility(t *testing.T) {
+	t.Parallel()
 	policy := testContextArtifactPolicy()
 	cases := []struct {
 		name    string
@@ -245,6 +247,7 @@ func TestContextArtifactEligibility(t *testing.T) {
 }
 
 func TestContextArtifactCountLimitIsPerAttempt(t *testing.T) {
+	t.Parallel()
 	f := newContextArtifactFixture(t, testContextArtifactPolicy())
 	svc := f.c.newContextArtifactService(f.task.ID, TaskDef{})
 	content := syntheticToolOutput(5000, 0)
@@ -260,6 +263,7 @@ func TestContextArtifactCountLimitIsPerAttempt(t *testing.T) {
 }
 
 func TestContextArtifactFailuresFallBackWithoutReference(t *testing.T) {
+	t.Parallel()
 	content := syntheticToolOutput(5000, 0)
 	t.Run("store unavailable", func(t *testing.T) {
 		f := newContextArtifactFixture(t, testContextArtifactPolicy())
@@ -297,6 +301,7 @@ func TestContextArtifactFailuresFallBackWithoutReference(t *testing.T) {
 }
 
 func TestContextArtifactServiceCreationConditions(t *testing.T) {
+	t.Parallel()
 	policy := testContextArtifactPolicy()
 	f := newContextArtifactFixture(t, policy)
 	if f.c.newContextArtifactService(f.task.ID, TaskDef{}) == nil {
@@ -353,6 +358,7 @@ func TestContextArtifactServiceCreationConditions(t *testing.T) {
 }
 
 func TestContextArtifactConcurrentPublications(t *testing.T) {
+	t.Parallel()
 	policy := testContextArtifactPolicy()
 	policy.MaxArtifactsPerAttempt = 32
 	f := newContextArtifactFixture(t, policy)
@@ -375,6 +381,7 @@ func TestContextArtifactConcurrentPublications(t *testing.T) {
 }
 
 func TestContextArtifactPreviewSplit(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		content string

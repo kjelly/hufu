@@ -9,6 +9,7 @@ import (
 )
 
 func TestNativeMediaRouteRequiresFrozenWorkerBinding(t *testing.T) {
+	t.Parallel()
 	primary := execution.ExecutionTarget{Backend: "fixture", Model: "vision"}
 	route := &ExecutionRouteBinding{Name: "vision-route", Candidates: []execution.ExecutionTarget{primary, {Backend: "fixture", Model: "next"}}, FallbackOn: []ProviderFailureClass{ProviderRateLimited}}
 	route.Digest = executionRouteDigest(route.Name, route.Candidates, route.FallbackOn)
@@ -43,6 +44,7 @@ func TestNativeMediaRouteRequiresFrozenWorkerBinding(t *testing.T) {
 }
 
 func TestNativeMediaAttemptTargetFollowsCommittedFallbackAndRetry(t *testing.T) {
+	t.Parallel()
 	targets := []execution.ExecutionTarget{{Backend: "fixture", Model: "first"}, {Backend: "fixture", Model: "second"}, {Backend: "fixture", Model: "third"}}
 	route := &ExecutionRouteBinding{Name: "vision-route", Candidates: targets, FallbackOn: []ProviderFailureClass{ProviderRateLimited}}
 	encode := func(value any) []byte {

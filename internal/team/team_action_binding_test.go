@@ -32,6 +32,7 @@ func testCatalogBinding() *CatalogActionBinding {
 }
 
 func TestCatalogActionBindingSurvivesDurableRoundTrip(t *testing.T) {
+	t.Parallel()
 	provider := &envRecordingActionProvider{}
 	c, events := newDynamicCatalogCoordinator(t, dynamicCatalogSession(t, provider, true))
 	binding := testCatalogBinding()
@@ -89,6 +90,7 @@ func TestCatalogActionBindingSurvivesDurableRoundTrip(t *testing.T) {
 }
 
 func TestCatalogActionBindingNormalizesEmptyProposalIDs(t *testing.T) {
+	t.Parallel()
 	provider := &envRecordingActionProvider{}
 	c, _ := newDynamicCatalogCoordinator(t, dynamicCatalogSession(t, provider, true))
 	binding := testCatalogBinding()
@@ -105,6 +107,7 @@ func TestCatalogActionBindingNormalizesEmptyProposalIDs(t *testing.T) {
 }
 
 func TestNonCatalogTasksKeepTheirDurableShape(t *testing.T) {
+	t.Parallel()
 	item := todoItemFromSpec(TodoSpec{Agent: "worker", Goal: "work", Desc: "work"}, "1")
 	payload, err := json.Marshal(taskTransitionPayload(item))
 	if err != nil {
@@ -142,6 +145,7 @@ func TestNonCatalogTasksKeepTheirDurableShape(t *testing.T) {
 }
 
 func TestCatalogInvocationIDEnvironment(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		id   string
 		want bool
@@ -155,6 +159,7 @@ func TestCatalogInvocationIDEnvironment(t *testing.T) {
 }
 
 func TestCatalogActionIntegrityStopsDriftBeforeTheProvider(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*TeamSession, *TaskDef)

@@ -11,6 +11,7 @@ import (
 )
 
 func TestExecuteTasksResolvesInitialStaticRuntimeContextBeforeTodoCreation(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{BindInitialTaskContracts: true, InitialBatch: []string{"worker"}})
 	c.session.Workspace = t.TempDir()
 	c.session.ContractTasks = []TaskDef{{
@@ -59,6 +60,7 @@ func runtimeOutputRefFixture(t *testing.T) (*Coordinator, *TodoItem) {
 }
 
 func TestRuntimeOutputRefsAreReceiptVerifiedAndPreserveLiteralTokens(t *testing.T) {
+	t.Parallel()
 	c, item := runtimeOutputRefFixture(t)
 	resolved, err := c.resolveFactRefs([]TaskDef{{
 		Goal: "Inspect {observation}", Constraints: "{suffix}", FactRefs: []FactRef{
@@ -72,6 +74,7 @@ func TestRuntimeOutputRefsAreReceiptVerifiedAndPreserveLiteralTokens(t *testing.
 }
 
 func TestRuntimeOutputRefsFailClosedForUnavailableOrUntrustedSources(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"pending", "model", "digest", "receipt", "snapshot", "old_run", "missing_output", "ambiguous", "mixed_selectors"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, item := runtimeOutputRefFixture(t)
@@ -108,6 +111,7 @@ func TestRuntimeOutputRefsFailClosedForUnavailableOrUntrustedSources(t *testing.
 }
 
 func TestStaticRuntimeContextSurvivesResolutionAndRebinding(t *testing.T) {
+	t.Parallel()
 	c, _ := runtimeOutputRefFixture(t)
 	c.session.Config.Delegation = agent.DelegationPolicy{BindTaskGoalContracts: true}
 	c.session.ContractTasks = []TaskDef{{
@@ -138,6 +142,7 @@ func TestStaticRuntimeContextSurvivesResolutionAndRebinding(t *testing.T) {
 }
 
 func TestInitialStaticRuntimeContextSurvivesResolutionAndRebinding(t *testing.T) {
+	t.Parallel()
 	c, _ := runtimeOutputRefFixture(t)
 	c.session.Config.Delegation = agent.DelegationPolicy{BindInitialTaskContracts: true, InitialBatch: []string{"consumer"}}
 	c.session.ContractTasks = []TaskDef{{
@@ -159,6 +164,7 @@ func TestInitialStaticRuntimeContextSurvivesResolutionAndRebinding(t *testing.T)
 }
 
 func TestHufuCodeReviewSynthesisReceivesCompactPrepareStatusWithoutCoordinatorConstraints(t *testing.T) {
+	t.Parallel()
 	c, item := runtimeOutputRefFixture(t)
 	loaded := loadHufuCodeReviewTeam(t)
 	c.session.Config = loaded.Config

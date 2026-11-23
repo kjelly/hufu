@@ -355,6 +355,9 @@ func TestResultCollectionDefaultDryRunMakesNoProviderOrWorkerCalls(t *testing.T)
 }
 
 func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, scenario := range []string{"valid", "string_refs", "unknown", "corrupt", "runtime_owned", "runtime_full_id", "runtime_full_typo", "runtime_key_typo", "runtime_repeated_typo", "runtime_typo_corrupt", "runtime_typo_receipt", "runtime_review_typo", "runtime_documentation_typo", "runtime_supplement_typo", "runtime_documentation_empty", "runtime_full_repeated_typo", "runtime_review_invariant_typo", "runtime_review_invariant_foreign_typo"} {
 		t.Run(scenario, func(t *testing.T) {
 			var workCalls, collectionCalls atomic.Int32

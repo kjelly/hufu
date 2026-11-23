@@ -83,6 +83,7 @@ func setInventoryTestOutput(t *testing.T, c *Coordinator, item *TodoItem, all, r
 }
 
 func TestHufuCodeReviewInventoryDispatch(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name string
 		want string
@@ -160,6 +161,10 @@ func TestHufuCodeReviewInventoryDispatch(t *testing.T) {
 }
 
 func TestContractDataflowInventoryWorkflow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, scenario := range []string{"accepted report", "empty critique inventory", "failed prerequisite", "checkpoint paused critique", "failed durable critique prefix"} {
 		t.Run(scenario, func(t *testing.T) { runInventoryWorkflow(t, scenario) })
 	}

@@ -204,6 +204,7 @@ func writeDecisionFixture(t *testing.T, judgeModel string) string {
 // declares is resolvable. A fixture that only parsed in a struct literal would
 // prove nothing about authored configuration.
 func TestDecisionV1FixtureLoadsAllProfiles(t *testing.T) {
+	t.Parallel()
 	dir := writeDecisionFixture(t, "fixture-judge-model")
 	session, err := LoadTeam(dir, nil, nil, NewProviderRegistry())
 	if err != nil {
@@ -255,6 +256,7 @@ func TestDecisionV1FixtureLoadsAllProfiles(t *testing.T) {
 // The fixture agent's per-tool recovery contract survives the loader, so the
 // commit gate reads what the operator authored.
 func TestDecisionV1FixtureAgentDeclaresToolRecovery(t *testing.T) {
+	t.Parallel()
 	dir := writeDecisionFixture(t, "fixture-judge-model")
 	session, err := LoadTeam(dir, nil, nil, NewProviderRegistry())
 	if err != nil {

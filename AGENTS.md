@@ -35,6 +35,9 @@ mise exec -- go test -p 2 ./internal/inspect -run TestBindReadTarget
 ```
 
 The project defaults to `GOMAXPROCS=4`; Go build/test/vet tasks retain `-p 2`.
+Parallel test execution (`-parallel`) within packages must be strictly bounded
+by the CPU count (`runtime.NumCPU()`, `nproc`, or at most `GOMAXPROCS=4`) to
+prevent memory saturation.
 Run heavyweight validation tasks sequentially, not as parallel mise tasks.
 
 ### Codex build-cache lifecycle

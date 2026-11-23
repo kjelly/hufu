@@ -11,6 +11,7 @@ import (
 )
 
 func TestDirectMediaInvocationRejectsUnknownImageCapabilityWithCanonicalEvidence(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	path := filepath.Join(c.projectDir, "input.png")
 	if err := os.WriteFile(path, mediaStorePNG(t), 0o600); err != nil {
@@ -38,6 +39,7 @@ func TestDirectMediaInvocationRejectsUnknownImageCapabilityWithCanonicalEvidence
 }
 
 func TestDirectMediaInvocationPreCancelledRequestDoesNotIngestImages(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -53,6 +55,7 @@ func TestDirectMediaInvocationPreCancelledRequestDoesNotIngestImages(t *testing.
 }
 
 func TestDirectMediaInvocationRejectsEmptyBundleBeforeTaskCreation(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	_, err := c.RunDirectAgentWithMedia(t.Context(), "worker", "describe image", MediaTurnRequest{})
 	requireMediaCode(t, err, media.BindingConflict)

@@ -120,6 +120,7 @@ func TestWorkerRecallTracesAttributionAndEmbedsGoalOnly(t *testing.T) {
 }
 
 func TestSummarizeSemanticRetrievalTraces(t *testing.T) {
+	t.Parallel()
 	trace := func(run, task, source, route string, mode contextstore.RetrievalMode, fallback contextstore.SemanticFallbackReason, latency, queue, embed int64, truncated bool) contextstore.SemanticRetrievalTrace {
 		return contextstore.SemanticRetrievalTrace{
 			RunID: run, TaskID: task, Attempt: 1, Source: source, Route: route, Mode: mode, FallbackReason: fallback,
@@ -163,6 +164,7 @@ func TestSummarizeSemanticRetrievalTraces(t *testing.T) {
 }
 
 func TestPercentileMillis(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		values     []int64
 		percentile int
@@ -217,6 +219,7 @@ func TestFinishSemanticRunRecordsTheRunOnly(t *testing.T) {
 }
 
 func TestSemanticRuntimeStatusSince(t *testing.T) {
+	t.Parallel()
 	base := SemanticRuntimeStatus{Queries: 4, SemanticResults: 3, RoutedLexical: 2, Warmups: 1, Fallbacks: map[string]int{"embedding_warming": 1}}
 	now := SemanticRuntimeStatus{State: "ready", Queries: 7, SemanticResults: 5, RoutedLexical: 2, RoutedSemantic: 3, Warmups: 1, Refreshes: 2,
 		Fallbacks: map[string]int{"embedding_warming": 1, "embedding_busy": 1}}
@@ -228,6 +231,7 @@ func TestSemanticRuntimeStatusSince(t *testing.T) {
 }
 
 func TestReadSemanticRetrievalTracesSkipsBrokenLines(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	lines := strings.Join([]string{
 		`{"trace_id":"a","run_id":"run-1","mode":"active","route":"semantic","fallback_reason":"none"}`,

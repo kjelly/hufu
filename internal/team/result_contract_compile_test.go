@@ -36,6 +36,7 @@ const reviewResultSchema = `{
 }`
 
 func TestCompileResultContractSchemaAcceptsSelfContainedDraft2020(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeResultContractSchema(t, dir, "schemas/review.json", reviewResultSchema)
 	compiled, err := compileResultContractSchema(dir, " ./schemas/review.json ")
@@ -65,6 +66,7 @@ func TestCompileResultContractSchemaAcceptsSelfContainedDraft2020(t *testing.T) 
 }
 
 func TestCompileResultContractSchemaRejectsUnsafeSchemas(t *testing.T) {
+	t.Parallel()
 	outside := t.TempDir()
 	writeResultContractSchema(t, outside, "outside.json", `{"type":"object"}`)
 	tests := []struct {
@@ -127,6 +129,7 @@ func resultContractSession(t *testing.T, defs ...*agent.AgentDef) *TeamSession {
 }
 
 func TestCompileTeamResultContractsBindsAgentsAndStaticTasks(t *testing.T) {
+	t.Parallel()
 	reviewer := &agent.AgentDef{Name: "Reviewer", Role: "worker", ResultContract: &agent.ResultContractSpec{Schema: "schemas/review.json", RequireStructured: true}}
 	coder := &agent.AgentDef{Name: "coder", Role: "worker"}
 	session := resultContractSession(t, reviewer, coder)
@@ -158,6 +161,7 @@ func TestCompileTeamResultContractsBindsAgentsAndStaticTasks(t *testing.T) {
 }
 
 func TestCompileTeamResultContractsRejectsUnsupportedCombinations(t *testing.T) {
+	t.Parallel()
 	spec := func() *agent.ResultContractSpec { return &agent.ResultContractSpec{Schema: "schemas/review.json"} }
 	tests := []struct {
 		name  string
@@ -198,6 +202,7 @@ func TestCompileTeamResultContractsRejectsUnsupportedCombinations(t *testing.T) 
 }
 
 func TestLoadTeamBindsResultContracts(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte("name: contract-team\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -223,6 +228,7 @@ func TestLoadTeamBindsResultContracts(t *testing.T) {
 }
 
 func TestAgentFrontmatterParsesResultContract(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeAgentFile(t, dir, "reviewer.md", "name: reviewer\nresult-contract:\n  schema: schemas/review.json\n  require-structured: true", "Review.")
 	def, err := parseAgentFile(filepath.Join(dir, "reviewer.md"), nil)
@@ -239,6 +245,7 @@ func TestAgentFrontmatterParsesResultContract(t *testing.T) {
 }
 
 func TestAdmittedResultContractPrecedence(t *testing.T) {
+	t.Parallel()
 	staticRef := &ResultContractRef{ID: "schemas/final.json", SchemaSHA256: "static"}
 	agentRef := ResultContractRef{ID: "schemas/review.json", SchemaSHA256: "agent", RequireStructured: true}
 	def := &agent.AgentDef{Name: "Reviewer"}
@@ -266,6 +273,7 @@ func TestAdmittedResultContractPrecedence(t *testing.T) {
 }
 
 func TestDecodeModelTaskDefsRejectsResultContractFields(t *testing.T) {
+	t.Parallel()
 	tests := []string{
 		`{"tasks":[{"agent":"worker","goal":"x","result_contract":{"id":"a"}}]}`,
 		`{"tasks":[{"agent":"worker","goal":"x","Result-Contract":{"schema":"a"}}]}`,
@@ -284,6 +292,7 @@ func TestDecodeModelTaskDefsRejectsResultContractFields(t *testing.T) {
 }
 
 func TestEffectiveContractHashIncludesStaticResultContract(t *testing.T) {
+	t.Parallel()
 	base := TaskDef{ID: "review", Agent: "reviewer"}
 	withContract := base
 	withContract.ResultContractSpec = &agent.ResultContractSpec{Schema: "schemas/review.json"}
@@ -308,6 +317,7 @@ func TestEffectiveContractHashIncludesStaticResultContract(t *testing.T) {
 }
 
 func TestResultContractRefIsDurable(t *testing.T) {
+	t.Parallel()
 	ref := &ResultContractRef{ID: "schemas/review.json", SchemaSHA256: strings.Repeat("a", 64), RequireStructured: true}
 	list := NewTaskTracker().TodoList()
 	item := list.AddBatch([]TodoSpec{{Agent: "worker", Desc: "review", ResultContract: ref, ExecutionTarget: execution.ExecutionTarget{Backend: "ollama", Model: "m"}}})[0]
@@ -345,6 +355,7 @@ func TestResultContractRefIsDurable(t *testing.T) {
 }
 
 func TestExecutionPolicySnapshotPinsResultContracts(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{
 		AgentResultContracts: map[string]ResultContractRef{"reviewer": {ID: "schemas/review.json", SchemaSHA256: "b"}},
 		ContractTasks:        []TaskDef{{ID: "final", ResultContract: &ResultContractRef{ID: "schemas/final.json", SchemaSHA256: "a", RequireStructured: true}}},
@@ -368,6 +379,7 @@ func TestExecutionPolicySnapshotPinsResultContracts(t *testing.T) {
 }
 
 func TestDecisionRoleBindingRejectsResultContractAgent(t *testing.T) {
+	t.Parallel()
 	if err := decisionRoleResultContractIneligibility("judge", &agent.AgentDef{Name: "judge", ResultContract: &agent.ResultContractSpec{Schema: "x.json"}}); err == nil {
 		t.Fatal("a result-contract agent was eligible for a decision role")
 	}
@@ -377,6 +389,7 @@ func TestDecisionRoleBindingRejectsResultContractAgent(t *testing.T) {
 }
 
 func TestCompileTeamExposesAgentResultContract(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte("name: explain-team\n"), 0o644); err != nil {
 		t.Fatal(err)

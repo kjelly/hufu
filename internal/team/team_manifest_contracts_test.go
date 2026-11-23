@@ -12,6 +12,7 @@ import (
 )
 
 func TestCanonicalContractAliasParity(t *testing.T) {
+	t.Parallel()
 	for _, phases := range []bool{false, true} {
 		var baseline []TaskDef
 		var compiledBaseline []EffectiveTaskContract
@@ -53,6 +54,7 @@ func TestCanonicalContractAliasParity(t *testing.T) {
 }
 
 func TestManifestContractDeclarationsFailClosed(t *testing.T) {
+	t.Parallel()
 	for _, input := range []string{
 		"contracts: []\ntasks: []\n", "contracts: null\ntasks: null\n",
 		"contracts: []\ntasks: null\n", "contracts: null\ntasks: []\n",
@@ -82,6 +84,7 @@ func TestManifestContractDeclarationsFailClosed(t *testing.T) {
 }
 
 func TestContractCollectionsYAMLMergeAndAliases(t *testing.T) {
+	t.Parallel()
 	for _, input := range []string{
 		"vars:\n  base: &base\n    contracts:\n" + indentContractFixture(contractAliasFixture, 6) + "<<: *base\n",
 		"vars:\n  list: &list\n" + indentContractFixture(contractAliasFixture, 4) + "contracts: *list\n",
@@ -96,6 +99,7 @@ func TestContractCollectionsYAMLMergeAndAliases(t *testing.T) {
 }
 
 func TestContractLintSourceProjectionAndDeprecation(t *testing.T) {
+	t.Parallel()
 	for _, format := range []struct {
 		key, path           string
 		versioned, advanced bool
@@ -146,6 +150,7 @@ func TestContractLintSourceProjectionAndDeprecation(t *testing.T) {
 }
 
 func TestCanonicalContractsMigrationPreview(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{
 		contractManifestFixture("tasks", false, false, false), contractManifestFixture("tasks", false, true, true),
 		contractManifestFixture("tasks", true, false, true), contractManifestFixture("contracts", true, false, false),
@@ -206,6 +211,7 @@ func TestCanonicalContractsMigrationPreview(t *testing.T) {
 }
 
 func TestCanonicalContractsMigrationRejectsUnrenderedTypedTemplate(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	source := "name: templated\ntasks:\n  - agent: worker\n    max_retries: '{@ .retries @}'\n"
 	writeTeamManifest(t, dir, source)

@@ -18,6 +18,7 @@ import (
 // profile: that would let an LLM lower configured rigor. The field is
 // json:"-" for exactly this reason (spec §9, acceptance test 7).
 func TestTaskPayloadCannotSetDecisionProfile(t *testing.T) {
+	t.Parallel()
 	payloads := []string{
 		`{"agent":"worker","goal":"do it","decision_profile":"off"}`,
 		`{"agent":"worker","goal":"do it","decision-profile":"off"}`,
@@ -36,6 +37,7 @@ func TestTaskPayloadCannotSetDecisionProfile(t *testing.T) {
 
 // The field must still be settable from static team configuration.
 func TestTaskYAMLCanSetDecisionProfile(t *testing.T) {
+	t.Parallel()
 	var task TaskDef
 	if err := yaml.Unmarshal([]byte("agent: worker\ngoal: do it\ndecision-profile: high-stakes\n"), &task); err != nil {
 		t.Fatalf("yaml decode: %v", err)
@@ -48,6 +50,7 @@ func TestTaskYAMLCanSetDecisionProfile(t *testing.T) {
 // A marshalled TaskDef must not leak the field into the coordinator-visible
 // JSON surface either.
 func TestTaskMarshalOmitsDecisionProfile(t *testing.T) {
+	t.Parallel()
 	data, err := json.Marshal(TaskDef{Agent: "worker", Goal: "do it", DecisionProfile: "high-stakes"})
 	if err != nil {
 		t.Fatal(err)
@@ -117,6 +120,7 @@ func fullDecisionRecord() DecisionRecord {
 // Persisted decision state must serialize deterministically: replay and hash
 // chains depend on byte-stable encodings (spec §35, Phase 0 acceptance 4).
 func TestDecisionRecordSerializationIsDeterministic(t *testing.T) {
+	t.Parallel()
 	record := fullDecisionRecord()
 
 	first, err := json.Marshal(record)
@@ -149,6 +153,7 @@ func TestDecisionRecordSerializationIsDeterministic(t *testing.T) {
 // A zero-valued record must encode to a compact object: absent decision state
 // must not bloat every persisted session.
 func TestZeroDecisionRecordEncodesCompactly(t *testing.T) {
+	t.Parallel()
 	data, err := json.Marshal(DecisionRecord{})
 	if err != nil {
 		t.Fatal(err)
@@ -159,6 +164,7 @@ func TestZeroDecisionRecordEncodesCompactly(t *testing.T) {
 }
 
 func TestDecisionRecordSchemaVersion(t *testing.T) {
+	t.Parallel()
 	var r DecisionRecord
 	if err := r.ValidateSchemaVersion(); err == nil {
 		t.Fatal("zero version accepted")
@@ -177,6 +183,7 @@ func TestDecisionRecordSchemaVersion(t *testing.T) {
 }
 
 func TestDecisionOptionKind(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		kind  DecisionOptionKind
 		valid bool
@@ -202,6 +209,7 @@ func TestDecisionOptionKind(t *testing.T) {
 }
 
 func TestAssumptionStatusHelpers(t *testing.T) {
+	t.Parallel()
 	if got := (DecisionAssumption{}).EffectiveStatus(); got != AssumptionUnknown {
 		t.Fatalf("EffectiveStatus() = %q, want %q", got, AssumptionUnknown)
 	}
@@ -224,6 +232,7 @@ func TestAssumptionStatusHelpers(t *testing.T) {
 // A team.yaml written before this feature existed must load with decision
 // support inert (spec §8 compatibility requirement).
 func TestParseTeamYMLWithoutDecisionBlock(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: legacy\nmax-rounds: 4\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -245,6 +254,7 @@ func TestParseTeamYMLWithoutDecisionBlock(t *testing.T) {
 }
 
 func TestParseTeamYMLDecisionBlock(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `name: gated
 decision:
@@ -286,6 +296,7 @@ decision:
 }
 
 func TestParseTeamYMLRejectsInvalidDecisionBlock(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `decision:
   default-profile: standard
@@ -308,6 +319,7 @@ func TestParseTeamYMLRejectsInvalidDecisionBlock(t *testing.T) {
 }
 
 func TestParseTeamYMLRejectsUnknownDecisionField(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `decision:
   default-profile: standard
@@ -326,6 +338,7 @@ func TestParseTeamYMLRejectsUnknownDecisionField(t *testing.T) {
 // discipline.routing.capability-aware (plan.md Stage 8) must round-trip
 // through the strict team.yaml decoder like every other discipline field.
 func TestParseTeamYMLDecisionRoutingCapabilityAware(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `name: routed
 decision:
@@ -353,6 +366,7 @@ decision:
 // capability-registry (plan.md Stage 8) is a maintainer-authored, team-level
 // trust source, independent of whether decision profiles are configured.
 func TestParseTeamYMLCapabilityRegistry(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `name: routed
 capability-registry:
@@ -377,6 +391,7 @@ capability-registry:
 // A malformed declaration must fail team load, not fail silently the first
 // time a routing decision happens to consult it.
 func TestParseTeamYMLRejectsInvalidCapabilityRegistry(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `capability-registry:
   reviewer:

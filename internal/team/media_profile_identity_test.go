@@ -7,6 +7,7 @@ import (
 )
 
 func TestMediaProfileMatchesTargetPreservesProviderNamespace(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name, profile, backend, model string
 		matches                       bool

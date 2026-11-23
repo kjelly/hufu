@@ -7,6 +7,7 @@ import (
 )
 
 func TestContextQueryResolverUsesAcceptedCurrentRunDependenciesOnly(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{executionRunID: "run", taskTracker: NewTaskTracker()}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "source"}, {Agent: "worker", Desc: "foreign"}, {Agent: "worker", Desc: "pending"}, {Agent: "worker", Desc: "consumer"}})
 	for index, source := range items[:3] {
@@ -37,6 +38,7 @@ func TestContextQueryResolverUsesAcceptedCurrentRunDependenciesOnly(t *testing.T
 }
 
 func TestContextQueryResolverRequiresExactWorksetPathsAndReceipt(t *testing.T) {
+	t.Parallel()
 	_, c, producer, store := newWorksetArtifactFixture(t)
 	paths := []string{"ledger/State.go", "ledger/state.go"}
 	data, err := json.Marshal(WorksetManifest{SchemaVersion: worksetSchemaVersion3, Items: []WorksetItem{{Key: "one", TouchedPaths: paths}}})

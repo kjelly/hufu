@@ -47,6 +47,7 @@ func runMemoryQuery(t *testing.T, c *Coordinator, todoID string) fantasy.ToolRes
 // The coordinator-wide scope returned only "shared" here: the worker's own
 // private memory was unreachable.
 func TestWorkerMemoryQueryUsesTheWorkerScope(t *testing.T) {
+	t.Parallel()
 	c, criticID := newWorkerMemoryQueryCoordinator(t, agent.WorkerMemorySession)
 	response := runMemoryQuery(t, c, criticID)
 	if response.IsError {
@@ -65,6 +66,7 @@ func TestWorkerMemoryQueryUsesTheWorkerScope(t *testing.T) {
 }
 
 func TestWorkerMemoryQueryHonorsMemoryPolicyAndIdentity(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		mode    agent.WorkerMemoryMode
@@ -88,6 +90,7 @@ func TestWorkerMemoryQueryHonorsMemoryPolicyAndIdentity(t *testing.T) {
 }
 
 func TestScopedMemoryQueryIsAllowedOnlyForUnboundWorkers(t *testing.T) {
+	t.Parallel()
 	memoryQuery := &canonicalMemoryQueryTool{}
 	def := &agent.AgentDef{Name: "critic", Tools: "view"}
 	cases := []struct {
@@ -110,6 +113,7 @@ func TestScopedMemoryQueryIsAllowedOnlyForUnboundWorkers(t *testing.T) {
 }
 
 func TestLegacyMemoryMutationArtifactPolicy(t *testing.T) {
+	t.Parallel()
 	for _, tool := range []fantasy.AgentTool{&memorySaveLTMWrapper{}, &stmWriteTool{}, &ltmUpdateTool{}} {
 		t.Run(tool.Info().Name, func(t *testing.T) {
 			def := &agent.AgentDef{Name: "worker", Tools: tool.Info().Name}

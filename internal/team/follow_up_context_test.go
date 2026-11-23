@@ -28,6 +28,7 @@ func appendPriorReport(t *testing.T, c *Coordinator, report string) RunEvent {
 }
 
 func TestPreviousResponsePreservesReportWithNativeVerificationDuration(t *testing.T) {
+	t.Parallel()
 	finished := RunEvent{ID: "completed-report", Type: string(EventRunFinished),
 		Payload: []byte(`{"outcome":"completed","response":"complete verified response","acceptance":{"verification_evidence":[{"duration":1500000000}]}}`)}
 	item, err := PreviousResponseContextItem(finished)
@@ -59,6 +60,7 @@ func followUpWorkerInput(c *Coordinator, name string, phase Phase, trigger Conte
 }
 
 func TestFollowUpWorkerReceivesCompleteReportAcrossDispatchRetryAndResume(t *testing.T) {
+	t.Parallel()
 	c := completedCycleCoordinator(t)
 	c.session.Config.Delegation.ShareRequestWith = []string{"preparer", "verifier"}
 	// Exceed the old request/auxiliary limits, with a distinct final finding.
@@ -124,6 +126,7 @@ func TestFollowUpWorkerReceivesCompleteReportAcrossDispatchRetryAndResume(t *tes
 }
 
 func TestFollowUpReportCannotBeSilentlyTruncatedOrOmitted(t *testing.T) {
+	t.Parallel()
 	c := completedCycleCoordinator(t)
 	c.session.Config.Delegation.ShareRequestWith = []string{"preparer"}
 	appendPriorReport(t, c, strings.Repeat("complete report evidence\n", 2000))
@@ -141,6 +144,7 @@ func TestFollowUpReportCannotBeSilentlyTruncatedOrOmitted(t *testing.T) {
 }
 
 func TestFollowUpReportHonorsWorkerAndAuxiliaryBoundaries(t *testing.T) {
+	t.Parallel()
 	c := completedCycleCoordinator(t)
 	c.session.Config.Delegation.ShareRequestWith = []string{"preparer"}
 	if _, err := c.beginFollowUpWorkflow(t.Context(), "follow up"); err != nil {
@@ -179,6 +183,7 @@ func TestFollowUpReportHonorsWorkerAndAuxiliaryBoundaries(t *testing.T) {
 }
 
 func TestPreviousWorkflowResponseStopsAtCycleAndBranchBoundaries(t *testing.T) {
+	t.Parallel()
 	response := func(id, text string) RunEvent {
 		data, err := json.Marshal(RunFinishedEventPayload{Outcome: RunOutcomeCompleted, Response: text})
 		if err != nil {
@@ -216,6 +221,7 @@ func TestPreviousWorkflowResponseStopsAtCycleAndBranchBoundaries(t *testing.T) {
 }
 
 func TestPreviousWorkflowResponsePrefersCompletedReportOverFailedResume(t *testing.T) {
+	t.Parallel()
 	encode := func(value any) []byte {
 		b, err := json.Marshal(value)
 		if err != nil {

@@ -27,6 +27,7 @@ func (f *conceptOllama) queryCount() int {
 }
 
 func TestResolveSemanticRoute(t *testing.T) {
+	t.Parallel()
 	const (
 		legacy = contextstore.FusionLegacy
 		score  = contextstore.FusionScoreNormalized
@@ -59,6 +60,7 @@ func TestResolveSemanticRoute(t *testing.T) {
 }
 
 func TestPersistentRankingRoutesOnSemanticQuery(t *testing.T) {
+	t.Parallel()
 	router := &stubSemanticRouter{}
 	lane := &persistentSemanticLane{Vector: &trackingVectorSearcher{}, Mode: contextstore.RetrievalActive, Router: router, Fusion: contextstore.FusionScoreNormalized}
 	in := persistentRankingInput{Query: "goal\nphase: execute", SemanticQuery: "goal", Semantic: lane, Ranking: MemoryRuntimeRankingPolicy{Fusion: contextstore.FusionLegacy}}

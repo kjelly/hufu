@@ -13,6 +13,7 @@ import (
 )
 
 func TestMCPActionResultContract(t *testing.T) {
+	t.Parallel()
 	text := func(value string) mcp.RuntimeToolContent { return mcp.RuntimeToolContent{Type: "text", Text: value} }
 	oversized := strings.Repeat("x", maxMCPActionResultBytes+1)
 	tests := []struct {
@@ -65,6 +66,7 @@ func TestMCPActionResultContract(t *testing.T) {
 }
 
 func TestMCPActionReceiptPinsTheBoundDescriptor(t *testing.T) {
+	t.Parallel()
 	fake := newMCPActionFake(collectDebugTool("v1"))
 	c, _, provider := newMCPCatalogActionRuntime(t, fake, true)
 	if _, err := runMCPCatalogAction(c, `{"service":"api"}`); err != nil {
@@ -83,6 +85,7 @@ func TestMCPActionReceiptPinsTheBoundDescriptor(t *testing.T) {
 }
 
 func TestMCPActionFailsInvalidResultsAfterTheCall(t *testing.T) {
+	t.Parallel()
 	summarySchema := &RunInputSchema{Type: "object", Properties: map[string]RunInputSchema{"summary": {Type: "string"}}, RequiredProperties: []string{"summary"}}
 	resultSchema := &RunInputSchema{Type: "object", Properties: map[string]RunInputSchema{"result": {Type: "string"}}, RequiredProperties: []string{"result"}}
 	tests := []struct {
@@ -126,6 +129,7 @@ func TestMCPActionFailsInvalidResultsAfterTheCall(t *testing.T) {
 }
 
 func TestCompletedMCPActionIsNotReplayedOnResume(t *testing.T) {
+	t.Parallel()
 	fake := newMCPActionFake(collectDebugTool("v1"))
 	c, _, _ := newMCPCatalogActionRuntime(t, fake, true)
 	task, item := addCatalogActionTodo(c, mcpCatalogActionTask(`{"service":"api"}`))

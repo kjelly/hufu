@@ -37,6 +37,7 @@ func commitmentCoordinator(t *testing.T, def *agent.AgentDef) *Coordinator {
 }
 
 func TestResolveToolRecoveryPrefersTaskOverAgentPerField(t *testing.T) {
+	t.Parallel()
 	def := deployerAgent()
 	def.ToolRecovery["bash"] = agent.ToolRecoveryDecl{
 		CompensateTool: "delete-bridge", IdempotencyKey: "agent-key", ReconcileTool: "agent-probe",
@@ -88,6 +89,7 @@ func TestResolveToolRecoveryPrefersTaskOverAgentPerField(t *testing.T) {
 // absence is rejected. The spec reaching the gate is the invoked tool's, not
 // a task-wide constant.
 func TestCommitGateRequireRollbackUsesInvokedToolContract(t *testing.T) {
+	t.Parallel()
 	def := deployerAgent()
 	c := commitmentCoordinator(t, def)
 	task := mutatingTask()
@@ -114,6 +116,7 @@ func TestCommitGateRequireRollbackUsesInvokedToolContract(t *testing.T) {
 // Acceptance: commitment is evaluated at the true mutation boundary. A
 // read-only observation must never be mistaken for committed execution.
 func TestCommitGateSkipsReadOnlyObservation(t *testing.T) {
+	t.Parallel()
 	def := deployerAgent()
 	c := commitmentCoordinator(t, def)
 	journal := c.eventJournal.(*memoryJournal)
@@ -150,6 +153,7 @@ func TestCommitGateSkipsReadOnlyObservation(t *testing.T) {
 // Acceptance: a rollback path the worker could not take is rejected before
 // execution, not accepted as a rollback that does not exist.
 func TestArmDisciplineRejectsUninvocableCompensateTool(t *testing.T) {
+	t.Parallel()
 	def := deployerAgent()
 	def.ToolRecovery = map[string]agent.ToolRecoveryDecl{
 		"bash": {CompensateTool: "tool-the-agent-cannot-call"},
@@ -172,6 +176,7 @@ func TestArmDisciplineRejectsUninvocableCompensateTool(t *testing.T) {
 }
 
 func TestValidateToolRecoveryRejectsUnusableDeclarations(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		decls map[string]agent.ToolRecoveryDecl
@@ -208,6 +213,7 @@ func TestValidateToolRecoveryRejectsUnusableDeclarations(t *testing.T) {
 }
 
 func TestAgentCanInvokeReadsTheAgentToolSet(t *testing.T) {
+	t.Parallel()
 	def := &agent.AgentDef{Tools: "bash,view,-write", MCPTools: map[string]agent.MCPToolConfig{"mcp_probe": {}}}
 	for _, tc := range []struct {
 		tool string

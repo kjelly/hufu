@@ -12,6 +12,7 @@ import (
 )
 
 func TestTaskResultReducerPreservesTypedSharedMemoryKinds(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -54,6 +55,7 @@ func TestTaskResultReducerPreservesTypedSharedMemoryKinds(t *testing.T) {
 }
 
 func TestTaskResultReducerUsesProgressOnlyForUntypedOutput(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -69,6 +71,7 @@ func TestTaskResultReducerUsesProgressOnlyForUntypedOutput(t *testing.T) {
 }
 
 func TestTaskResultReducerKeepsDistinctProvenanceForSameContentAcrossTasks(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -101,6 +104,7 @@ func TestTaskResultReducerKeepsDistinctProvenanceForSameContentAcrossTasks(t *te
 }
 
 func TestTaskResultReducerPopulatesArtifactAndVerificationEvidence(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -149,6 +153,7 @@ func hasEvidenceType(evidence []contextstore.EvidenceRef, typ, ref string) bool 
 }
 
 func TestRecordVerificationFailureWritesContextError(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {

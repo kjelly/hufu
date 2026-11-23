@@ -10,6 +10,7 @@ import (
 )
 
 func TestCompareCanonicalProjectionMatchesCurrentTaskEvent(t *testing.T) {
+	t.Parallel()
 	for _, status := range []TaskStatus{TaskProtocolIncomplete, TaskVerifying, TaskDone} {
 		for _, activeFailure := range []bool{false, true} {
 			t.Run(string(status)+"/"+map[bool]string{false: "cleared", true: "active"}[activeFailure], func(t *testing.T) {
@@ -47,6 +48,7 @@ func TestCompareCanonicalProjectionMatchesCurrentTaskEvent(t *testing.T) {
 }
 
 func TestCompareCanonicalProjectionReportsMismatch(t *testing.T) {
+	t.Parallel()
 	live := NewSession()
 	live.Tasks = []*TodoItem{{ID: "task-1", Agent: "worker", Desc: "checkpoint", Status: TaskDone}}
 	events := []RunEvent{{SchemaVersion: eventStoreSchemaVersion, Type: string(EventTaskCompleted), TaskID: "task-1", Payload: []byte(`{"id":"task-1","status":"done","agent":"worker","desc":"different"}`)}}
@@ -56,6 +58,7 @@ func TestCompareCanonicalProjectionReportsMismatch(t *testing.T) {
 }
 
 func TestInitEventStoreMarksCanonicalProjectionMismatchForRecovery(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -91,6 +94,7 @@ func taskTransitionPayloadJSON(item *TodoItem) ([]byte, error) {
 }
 
 func TestInitEventStoreMarksCorruptedHashChainForRecovery(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -127,6 +131,7 @@ func TestInitEventStoreMarksCorruptedHashChainForRecovery(t *testing.T) {
 }
 
 func TestInitEventStoreRebuildsEmptyCheckpointFromEventStore(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -169,6 +174,7 @@ func TestInitEventStoreRebuildsEmptyCheckpointFromEventStore(t *testing.T) {
 }
 
 func TestInitEventStoreRepairsStaleCheckpointAfterCrash(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -218,6 +224,7 @@ func TestInitEventStoreRepairsStaleCheckpointAfterCrash(t *testing.T) {
 }
 
 func TestInitEventStoreBranchLineageReplay(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	st := NewSessionTree()
 	st.Branches["feature"] = &SessionBranch{
@@ -268,6 +275,7 @@ func TestInitEventStoreBranchLineageReplay(t *testing.T) {
 }
 
 func TestInitEventStore_MalformedSessionTreeMarksRecoveryRequired(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -302,6 +310,7 @@ func TestInitEventStore_MalformedSessionTreeMarksRecoveryRequired(t *testing.T) 
 }
 
 func TestRunAndRunDirectAgent_RecoveryRequiredDeniesAdmissionAndMakesNoCalls(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -356,6 +365,7 @@ func TestRunAndRunDirectAgent_RecoveryRequiredDeniesAdmissionAndMakesNoCalls(t *
 }
 
 func TestInitEventStore_NonPrefixTaskStateRejectsRecovery(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -404,6 +414,7 @@ func TestInitEventStore_NonPrefixTaskStateRejectsRecovery(t *testing.T) {
 }
 
 func TestTwoBranchIdempotencyAndMemoryReplayIsolation(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	st := NewSessionTree()
 	st.Branches["feature"] = &SessionBranch{
@@ -484,6 +495,7 @@ func TestTwoBranchIdempotencyAndMemoryReplayIsolation(t *testing.T) {
 }
 
 func TestContinueWithPrompt_RecoveryRequiredDeniesAdmissionAndMakesNoCalls(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{
@@ -513,6 +525,7 @@ func TestContinueWithPrompt_RecoveryRequiredDeniesAdmissionAndMakesNoCalls(t *te
 }
 
 func TestBeginExecutionRun_InvalidWorkspaceMarksRecoveryRequiredAndDeniesAdmission(t *testing.T) {
+	t.Parallel()
 	invalidWorkspace := "/dev/null/impossible/workspace"
 	c := &Coordinator{
 		session: &TeamSession{
@@ -543,6 +556,7 @@ func TestBeginExecutionRun_InvalidWorkspaceMarksRecoveryRequiredAndDeniesAdmissi
 }
 
 func TestCompareCanonicalProjection_RejectsTypedResultMismatch(t *testing.T) {
+	t.Parallel()
 	item1 := &TodoItem{
 		ID:     "task-1",
 		Agent:  "worker",
@@ -572,6 +586,7 @@ func TestCompareCanonicalProjection_RejectsTypedResultMismatch(t *testing.T) {
 }
 
 func TestCompareCanonicalProjection_RejectsReceiptProducerMismatch(t *testing.T) {
+	t.Parallel()
 	item1 := &TodoItem{
 		ID:     "task-1",
 		Agent:  "worker",
@@ -607,6 +622,7 @@ func TestCompareCanonicalProjection_RejectsReceiptProducerMismatch(t *testing.T)
 }
 
 func TestInitEventStoreRepairsLiveTodoListAndDelegationPolicy(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	policy := agent.DelegationPolicy{
 		InitialBatch:             []string{"worker"},

@@ -26,6 +26,7 @@ func (e *gatewayTypedTestExecutor) ExecuteAuthorizedToolResult(_ context.Context
 }
 
 func TestDynamicToolGatewayPublishesTypedResultAfterAuthorization(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"published", "unsupported", "denied", "changed", "missing", "publication failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			c := newDirectTypedCoordinator(t, "view", nil, nil)

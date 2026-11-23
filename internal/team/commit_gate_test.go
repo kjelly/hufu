@@ -26,6 +26,7 @@ func mutatingTask() TaskDef {
 
 // A task whose side effect is not guarded is not the commit gate's business.
 func TestCommitGateOnlyGuardsConfiguredClasses(t *testing.T) {
+	t.Parallel()
 	policy := CommitGatePolicy{RequireVerification: true, RequireEvidence: true, RequireReconcile: true}
 
 	for _, class := range []SideEffectClass{SideEffectNone, SideEffectWorkspaceWrite} {
@@ -55,6 +56,7 @@ func TestCommitGateOnlyGuardsConfiguredClasses(t *testing.T) {
 }
 
 func TestCommitGatePrerequisites(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		policy  CommitGatePolicy
@@ -150,6 +152,7 @@ func TestCommitGatePrerequisites(t *testing.T) {
 // The gate reports every unsatisfied prerequisite so an operator fixes the
 // contract once rather than iterating.
 func TestCommitGateReportsAllMissingPrerequisites(t *testing.T) {
+	t.Parallel()
 	task := TaskDef{ID: "t1", SideEffect: SideEffectInfraMutation}
 	decision := EvaluateCommitGate(CommitGateInput{
 		Task: task,
@@ -169,6 +172,7 @@ func TestCommitGateReportsAllMissingPrerequisites(t *testing.T) {
 // A compensating tool satisfies require-rollback: this repo has no rollback
 // recovery policy, only ToolRecoverySpec.CompensateTool (spec §30.1).
 func TestCommitGateRollbackUsesCompensateTool(t *testing.T) {
+	t.Parallel()
 	decision := EvaluateCommitGate(CommitGateInput{
 		Task:         mutatingTask(),
 		Policy:       CommitGatePolicy{RequireRollback: true},

@@ -12,6 +12,7 @@ import (
 )
 
 func TestResultCollectionRecoveryPreservesDownstreamAndAcceptanceGates(t *testing.T) {
+	t.Parallel()
 	for _, artifactPresent := range []bool{false, true} {
 		t.Run(fmt.Sprint("artifact_present_", artifactPresent), func(t *testing.T) {
 			c, id, original := blockedRecoveryFixture(t, `{"status":"success","summary":"original limitation retained for downstream"}`, true, RepairFailureSource)

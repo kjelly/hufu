@@ -10,6 +10,10 @@ import (
 )
 
 func TestResumePreflightChecksActiveCheckpointProjection(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, name := range []string{"matched", "empty", "prefix", "progress_mismatch", "result_mismatch", "recorded_resolved", "unrecorded", "wrong_reason", "unrelated_barrier", "pending_terminal", "inactive_branch"} {
 		t.Run(name, func(t *testing.T) {
 			c, f, source := metadataContractRecoveryFixture(t)
@@ -111,6 +115,7 @@ func TestResumePreflightChecksActiveCheckpointProjection(t *testing.T) {
 }
 
 func TestResumePreflightClearsProvenRedundantFailureOutputMismatch(t *testing.T) {
+	t.Parallel()
 	c := newFailureOutputCoordinator(t)
 	items, err := c.CommitTaskCreation(t.Context(), []TodoSpec{{Agent: "worker", Desc: "preserve sealed work"}})
 	if err != nil {
@@ -162,6 +167,7 @@ func TestResumePreflightClearsProvenRedundantFailureOutputMismatch(t *testing.T)
 }
 
 func TestResultCollectionRecoveryPreviewRejectsCheckpointDrift(t *testing.T) {
+	t.Parallel()
 	c, source, id := contractCollectionFixture(t, researchCollectionResponse(t, 14), SideEffectNone)
 	if source.activeBranch != source.BranchID {
 		t.Fatal("fixture must select the active branch")

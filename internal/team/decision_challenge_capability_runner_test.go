@@ -130,6 +130,7 @@ func TestChallengeRoleCapabilityRouting_HardProviderFloorUsesCanonicalProvider(t
 }
 
 func TestChallengerOrdinal(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		id      string
 		want    int

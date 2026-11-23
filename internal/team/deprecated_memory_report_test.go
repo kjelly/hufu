@@ -7,6 +7,7 @@ import (
 )
 
 func TestDeprecatedMemoryToolEventAndReportAreContentFree(t *testing.T) {
+	t.Parallel()
 	es, err := NewEventStore(t.TempDir(), "run-1", "session-1")
 	if err != nil {
 		t.Fatal(err)
@@ -41,6 +42,7 @@ func TestDeprecatedMemoryToolEventAndReportAreContentFree(t *testing.T) {
 // policy-deny events must not surface when the active runID is the
 // zero-call run, and the prior runID must still produce its full counts.
 func TestDeprecatedMemoryToolReportFiltersByRunID(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 
 	// First run writes one success, one fail-closed, and one policy-deny
@@ -123,6 +125,7 @@ func TestDeprecatedMemoryToolReportFiltersByRunID(t *testing.T) {
 // DeprecatedMemoryToolReport must return it once no active run is in
 // scope.
 func TestDeprecatedMemoryToolReportPostRunSnapshot(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	es, err := NewEventStore(workspace, "run-A", "session-shared")
 	if err != nil {
@@ -175,6 +178,7 @@ func TestDeprecatedMemoryToolReportPostRunSnapshot(t *testing.T) {
 // of the prior run, --report must still surface the most recent run's
 // counts by rehydrating from the workspace event log.
 func TestDeprecatedMemoryToolReportRehydratesFromDiskWhenNoSnapshot(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 
 	// First-run writes compatibility observations into the shared JSONL.
@@ -245,6 +249,7 @@ func TestDeprecatedMemoryToolReportRehydratesFromDiskWhenNoSnapshot(t *testing.T
 // that move the snapshot out of the deferred close or drop the
 // captureCompletedRunDeprecatedReport call.
 func TestDeprecatedMemoryToolReportFullBeginToDeferredCloseLifecycle(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session: &TeamSession{Workspace: workspace},
@@ -356,6 +361,7 @@ func TestDeprecatedMemoryToolReportFullBeginToDeferredCloseLifecycle(t *testing.
 // captureCompletedRunDeprecatedReport lifecycle so this regression
 // guards the production close path too, not just the snapshot unit.
 func TestDeprecatedMemoryToolReportZeroUseRunDoesNotInheritPriorRun(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 
 	// Run A: full beginExecutionRun lifecycle with one alias call.

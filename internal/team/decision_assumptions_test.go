@@ -32,6 +32,7 @@ func armedAssumptionCoordinator(t *testing.T) (*Coordinator, *memoryJournal) {
 // Only supported and contradicted are reportable. `unknown` is the absence of a
 // check and `stale` is the runtime's own conclusion (spec §18.1).
 func TestValidCheckStatus(t *testing.T) {
+	t.Parallel()
 	for status, want := range map[string]bool{
 		AssumptionSupported:    true,
 		AssumptionContradicted: true,
@@ -47,6 +48,7 @@ func TestValidCheckStatus(t *testing.T) {
 }
 
 func TestApplyAssumptionChecks(t *testing.T) {
+	t.Parallel()
 	c, journal := armedAssumptionCoordinator(t)
 
 	applied, err := c.ApplyAssumptionChecks(context.Background(), "todo-1", []AssumptionCheck{
@@ -77,6 +79,7 @@ func TestApplyAssumptionChecks(t *testing.T) {
 // A reporter may report on the assumptions a decision rests on, not invent new
 // ones after the fact.
 func TestApplyAssumptionChecksRejectsUndeclaredAssumptions(t *testing.T) {
+	t.Parallel()
 	c, _ := armedAssumptionCoordinator(t)
 	_, err := c.ApplyAssumptionChecks(context.Background(), "todo-1", []AssumptionCheck{
 		{AssumptionID: "A9", Status: AssumptionSupported},
@@ -87,6 +90,7 @@ func TestApplyAssumptionChecksRejectsUndeclaredAssumptions(t *testing.T) {
 }
 
 func TestApplyAssumptionChecksRejectsUnreportableStatus(t *testing.T) {
+	t.Parallel()
 	c, _ := armedAssumptionCoordinator(t)
 	for _, status := range []string{AssumptionUnknown, AssumptionStale, "maybe"} {
 		_, err := c.ApplyAssumptionChecks(context.Background(), "todo-1", []AssumptionCheck{
@@ -99,6 +103,7 @@ func TestApplyAssumptionChecksRejectsUnreportableStatus(t *testing.T) {
 }
 
 func TestApplyAssumptionChecksRejectsUnknownSource(t *testing.T) {
+	t.Parallel()
 	c, _ := armedAssumptionCoordinator(t)
 	_, err := c.ApplyAssumptionChecks(context.Background(), "todo-1", []AssumptionCheck{
 		{AssumptionID: "A1", Status: AssumptionSupported},
@@ -112,6 +117,7 @@ func TestApplyAssumptionChecksRejectsUnknownSource(t *testing.T) {
 // the same status; callers can retry the complete claim once, but may not
 // smuggle two claims under one transition boundary.
 func TestApplyAssumptionChecksIsIdempotent(t *testing.T) {
+	t.Parallel()
 	c, journal := armedAssumptionCoordinator(t)
 	check := []AssumptionCheck{{AssumptionID: "A1", Status: AssumptionSupported}}
 
@@ -129,6 +135,7 @@ func TestApplyAssumptionChecksIsIdempotent(t *testing.T) {
 // A task with no armed decision has nothing to check against, and reporting
 // against it is a no-op rather than an error.
 func TestApplyAssumptionChecksWithoutADecisionIsANoOp(t *testing.T) {
+	t.Parallel()
 	c := disciplineCoordinator(t)
 	applied, err := c.ApplyAssumptionChecks(context.Background(), "todo-unarmed", []AssumptionCheck{
 		{AssumptionID: "A1", Status: AssumptionSupported},
@@ -139,6 +146,7 @@ func TestApplyAssumptionChecksWithoutADecisionIsANoOp(t *testing.T) {
 }
 
 func TestApplyAssumptionChecksFailsClosedWithoutJournal(t *testing.T) {
+	t.Parallel()
 	c, _ := armedAssumptionCoordinator(t)
 	c.eventJournal = nil
 	if _, err := c.ApplyAssumptionChecks(context.Background(), "todo-1", []AssumptionCheck{{
@@ -151,6 +159,7 @@ func TestApplyAssumptionChecksFailsClosedWithoutJournal(t *testing.T) {
 // A declared verification is an assumption source independent of what the
 // worker says about its own work (spec §18.1 source 2).
 func TestAssumptionChecksFromVerification(t *testing.T) {
+	t.Parallel()
 	spec := &VerificationSpec{Type: agent.VerifyCommandExit, AssumptionRefs: []string{"A1", " A2 ", "  "}}
 	if err := ValidateVerificationAssumptionRefs(spec); err == nil {
 		t.Fatal("blank verification assumption reference was accepted")
@@ -190,6 +199,7 @@ func TestAssumptionChecksFromVerification(t *testing.T) {
 // A worker reporting a check must be able to invalidate the decision its own
 // task runs under — that is the whole point of the source.
 func TestVerificationSourceDrivesTheCheckpoint(t *testing.T) {
+	t.Parallel()
 	c, journal := armedAssumptionCoordinator(t)
 
 	checks := AssumptionChecksFromVerification(
@@ -211,6 +221,7 @@ func TestVerificationSourceDrivesTheCheckpoint(t *testing.T) {
 }
 
 func TestDisciplineTodoIDFrom(t *testing.T) {
+	t.Parallel()
 	ctx := context.WithValue(context.Background(), todoIDKey{}, "todo-from-context")
 	if got := disciplineTodoIDFrom(ctx, TaskDef{ID: "t1"}); got != "todo-from-context" {
 		t.Fatalf("disciplineTodoIDFrom = %q, want the context value", got)
@@ -225,6 +236,7 @@ func TestDisciplineTodoIDFrom(t *testing.T) {
 
 // The operator source works after the run that formed the decision has exited.
 func TestOperatorAssumptionCheckThroughTheIndex(t *testing.T) {
+	t.Parallel()
 	index := newIndex(t)
 	journal := &memoryJournal{}
 	index.SetJournal(journal)
@@ -282,6 +294,7 @@ func TestOperatorAssumptionCheckThroughTheIndex(t *testing.T) {
 }
 
 func TestProjectDecisionReplaysAssumptionTransitionAndInvalidation(t *testing.T) {
+	t.Parallel()
 	j := &memoryJournal{}
 	record := &DecisionRecord{SchemaVersion: 1, ID: "dec-replay", Assumptions: []DecisionAssumption{{ID: "A1", Critical: true}}}
 	if err := appendDecisionEvent(context.Background(), j, agent.EventDecisionFinalized, decisionEvent{
@@ -310,6 +323,7 @@ func TestProjectDecisionReplaysAssumptionTransitionAndInvalidation(t *testing.T)
 }
 
 func TestDecisionIndexRebuildFromCanonicalJournal(t *testing.T) {
+	t.Parallel()
 	index := newIndex(t)
 	j := &memoryJournal{}
 	record := &DecisionRecord{SchemaVersion: 1, ID: "dec-rebuild", RunID: "run-1", TaskID: "task-1",

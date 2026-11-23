@@ -20,6 +20,7 @@ func (s recallErrorWorkerMemoryService) Recall(context.Context, WorkerMemoryReca
 }
 
 func TestWorkerMemoryCancellationStopsDirectDispatch(t *testing.T) {
+	t.Parallel()
 	worker := &contextManifestCountingAgent{}
 	c := newDirectTerminationCoordinator(t, worker)
 	def := c.agentPool.(*mockAgentPool).resolveDef
@@ -40,6 +41,7 @@ func TestWorkerMemoryCancellationStopsDirectDispatch(t *testing.T) {
 }
 
 func TestWorkerMemoryDegradationSurvivesQuerySelection(t *testing.T) {
+	t.Parallel()
 	repo := wp3SetupRepo(t)
 	scope := contextstore.Scope{ProjectID: "p", TeamID: "team", SessionID: "sess", BranchID: "main", AgentID: "worker-a"}
 	persistent := scope

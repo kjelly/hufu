@@ -92,6 +92,7 @@ func policyDecisionEvents(t *testing.T, events *EventStore) []map[string]any {
 }
 
 func TestMCPCatalogActionRunsThroughTheActionLifecycle(t *testing.T) {
+	t.Parallel()
 	fake := newMCPActionFake(collectDebugTool("v1"))
 	var sent map[string]any
 	fake.setHandler(func(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -120,6 +121,7 @@ func TestMCPCatalogActionRunsThroughTheActionLifecycle(t *testing.T) {
 }
 
 func TestMCPCatalogActionRejectsBeforeCallingTheTool(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		bind    bool
@@ -163,6 +165,7 @@ func TestMCPCatalogActionRejectsBeforeCallingTheTool(t *testing.T) {
 }
 
 func TestMCPActionExecuteRequiresRuntimeIdentityAndAuthorizer(t *testing.T) {
+	t.Parallel()
 	fake := newMCPActionFake(collectDebugTool("v1"))
 	c, _, provider := newMCPCatalogActionRuntime(t, fake, true)
 	action := Action{Capability: "diagnostics", Type: "collect", Payload: `{"service":"api"}`}
@@ -215,6 +218,7 @@ func TestMCPActionTimeoutIsClassifiedAsTimeout(t *testing.T) {
 }
 
 func TestMCPStaticWorkflowActionRuns(t *testing.T) {
+	t.Parallel()
 	fake := newMCPActionFake(collectDebugTool("v1"))
 	c, session := newCommandActionCoordinator(t, []string{"/bin/false"}, "run-mcp-static")
 	session.Config.Capabilities.Required = []string{"diagnostics"}
@@ -233,6 +237,7 @@ func TestMCPStaticWorkflowActionRuns(t *testing.T) {
 }
 
 func TestForceMCPKeepsCommandActionProviders(t *testing.T) {
+	t.Parallel()
 	c, _ := newCommandActionCoordinator(t, []string{"/bin/sh", "-c", `printf '{"outputs":{"summary":"ok"}}'`}, "run-force-mcp")
 	c.forceMCP = true
 	task := TaskDef{Agent: "executor", Goal: "apply", Phase: PhaseExecute, Action: &Action{Capability: "structured-actions", Type: "apply"}}

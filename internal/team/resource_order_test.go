@@ -98,6 +98,7 @@ func TestSerializedMutationsDoNotInheritFailure(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration: mise run test-integration")
 	}
+	t.Parallel()
 	tests := []struct {
 		name        string
 		retries     int
@@ -177,6 +178,7 @@ func TestSerializedMutationsDoNotInheritFailure(t *testing.T) {
 // for a free slot: a failed sibling must release the slot instead of leaving
 // it to be stranded as if a dependency had failed.
 func TestIndependentTaskStartsAfterASiblingFails(t *testing.T) {
+	t.Parallel()
 	c := newResourceOrderCoordinator(t, 1, 0)
 	worker := &scriptedResultAgent{c: c, script: map[string]string{"first": failedResult}}
 	c.workerAgentOverride = worker
@@ -195,6 +197,7 @@ func TestIndependentTaskStartsAfterASiblingFails(t *testing.T) {
 // longer start because a declared dependency of it did not complete. The
 // resource lease alone cannot enforce this while the predecessor waits.
 func TestOrderPredecessorSettlement(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		predecessor TaskStatus
@@ -232,6 +235,7 @@ func TestOrderPredecessorSettlement(t *testing.T) {
 // empty slice while the durable occurrence rebuilds nil, and the scheduler
 // contract check rejected the whole batch.
 func TestExplicitEmptyListsMatchTheDurableOccurrence(t *testing.T) {
+	t.Parallel()
 	c := newResourceOrderCoordinator(t, 2, 0)
 	worker := &scriptedResultAgent{c: c}
 	c.workerAgentOverride = worker
@@ -252,6 +256,7 @@ func TestExplicitEmptyListsMatchTheDurableOccurrence(t *testing.T) {
 // and round counts used to stay behind, so dispatching the same task again
 // was refused as a duplicate.
 func TestFailedBatchDoesNotBlockRedispatch(t *testing.T) {
+	t.Parallel()
 	c := newResourceOrderCoordinator(t, 2, 0)
 	worker := &scriptedResultAgent{c: c}
 	c.workerAgentOverride = worker

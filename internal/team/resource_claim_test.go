@@ -7,6 +7,7 @@ import (
 )
 
 func TestResourceClaimModes(t *testing.T) {
+	t.Parallel()
 	read := []ResourceClaim{{Resource: "repo", Mode: ResourceRead}}
 	if claimsConflict(read, read) {
 		t.Fatal("read/read claims must be compatible")
@@ -23,6 +24,7 @@ func TestResourceClaimModes(t *testing.T) {
 }
 
 func TestDAGSchedulerResourceConflict(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{maxConcurrent: 2}
 	tasks := []TaskDef{
 		{Resources: []ResourceClaim{{Resource: "vm", Mode: ResourceExclusive}}},
@@ -40,6 +42,7 @@ func TestDAGSchedulerResourceConflict(t *testing.T) {
 }
 
 func TestWorkspaceResourceClaimNormalization(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		resource string
@@ -72,6 +75,7 @@ func TestWorkspaceResourceClaimNormalization(t *testing.T) {
 }
 
 func TestNewWorkspacePathResourceClaim(t *testing.T) {
+	t.Parallel()
 	claim, err := NewWorkspacePathResourceClaim("docs/", "")
 	if err != nil {
 		t.Fatalf("NewWorkspacePathResourceClaim: %v", err)
@@ -86,6 +90,7 @@ func TestNewWorkspacePathResourceClaim(t *testing.T) {
 }
 
 func TestNormalizeResourceClaimsCoalescesStrongestMode(t *testing.T) {
+	t.Parallel()
 	claims, err := normalizeResourceClaims([]ResourceClaim{
 		{Resource: "workspace:path:docs/", Mode: ResourceRead},
 		{Resource: "repo", Mode: ResourceRead},
@@ -105,6 +110,7 @@ func TestNormalizeResourceClaimsCoalescesStrongestMode(t *testing.T) {
 }
 
 func TestWorkspaceResourceClaimHierarchy(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		left  ResourceClaim
@@ -130,6 +136,7 @@ func TestWorkspaceResourceClaimHierarchy(t *testing.T) {
 }
 
 func TestValidateResourceClaimsRejectsMalformedClaim(t *testing.T) {
+	t.Parallel()
 	for _, task := range []TaskDef{
 		{Resources: []ResourceClaim{{Resource: "workspace:other:x", Mode: ResourceRead}}},
 		{Resources: []ResourceClaim{{Resource: "repo", Mode: ResourceClaimMode("shared")}}},
@@ -144,6 +151,7 @@ func TestValidateResourceClaimsRejectsMalformedClaim(t *testing.T) {
 // exclusive whole-root claim and read-only tasks hold a read claim. This is
 // why DAG-scheduled writers never run concurrently.
 func TestWholeRootClaimsSerializeWriters(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		effect SideEffectClass
 		mode   ResourceClaimMode

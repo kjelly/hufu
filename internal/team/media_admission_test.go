@@ -129,6 +129,7 @@ func requireMediaCode(t *testing.T, err error, code media.Code) {
 }
 
 func TestMediaInputAdmission(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	task := admittedMediaTask(t, c, ctx, "turn")
@@ -194,6 +195,7 @@ func TestMediaInputAdmission(t *testing.T) {
 }
 
 func TestMediaPolicyFreezesIdentity(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	base := c.executionPolicy.snapshot
 	c.session.MediaPolicy.AllowedTargets = []media.Target{{Backend: "fixture", ProviderKey: "fixture", Model: "vision", ImageTokenUpperBound: 16384}}
@@ -234,6 +236,7 @@ func TestMediaPolicyFreezesIdentity(t *testing.T) {
 }
 
 func TestMediaInputCommitFailureDoesNotAdmitOrDeleteContent(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	task := admittedMediaTask(t, c, ctx, "first")
@@ -287,6 +290,7 @@ func (j mediaAppendFailure) AppendAtHead(ctx context.Context, e RunEvent, head s
 }
 
 func TestMediaInputReconcilesUncertainCommit(t *testing.T) {
+	t.Parallel()
 	for _, afterCommit := range []bool{false, true} {
 		t.Run(map[bool]string{false: "before-commit", true: "after-commit"}[afterCommit], func(t *testing.T) {
 			c := newMediaPolicyCoordinator(t)
@@ -329,6 +333,7 @@ func TestMediaInputReconcilesUncertainCommit(t *testing.T) {
 }
 
 func TestSingleTaskMediaOfflineBoundary(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	worker := scriptWorker()
 	c.workerAgentOverride = worker

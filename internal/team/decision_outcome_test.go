@@ -6,6 +6,7 @@ import (
 )
 
 func TestValidOutcome(t *testing.T) {
+	t.Parallel()
 	for _, value := range []string{OutcomeSucceeded, OutcomeFailed, OutcomeMixed, OutcomeSuperseded, OutcomeUnresolved} {
 		if !ValidOutcome(value) {
 			t.Errorf("ValidOutcome(%q) = false", value)
@@ -19,6 +20,7 @@ func TestValidOutcome(t *testing.T) {
 }
 
 func TestValidateOutcome(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		outcome DecisionOutcomeRecord
@@ -76,6 +78,7 @@ func TestValidateOutcome(t *testing.T) {
 // (spec §49.2). It is deliberately narrow: evidence must resolve against real
 // bytes, and an assertion is never enough.
 func TestVerifyOutcomeEvidence(t *testing.T) {
+	t.Parallel()
 	store := NewArtifactResolver([]ArtifactRef{
 		{ID: "a", SHA256: "h1", Path: "reports/lag.json"},
 		{ID: "b", SHA256: "h2", Path: "reports/cost.json"},
@@ -159,6 +162,7 @@ func TestVerifyOutcomeEvidence(t *testing.T) {
 
 // Verification must not depend on the order digests were cited in.
 func TestVerifyOutcomeEvidenceIsOrderIndependent(t *testing.T) {
+	t.Parallel()
 	store := NewArtifactResolver([]ArtifactRef{{SHA256: "h1"}, {SHA256: "h2"}})
 	forward := DecisionOutcomeRecord{
 		DecisionID: "dec-1", ResolvedOutcome: OutcomeSucceeded,
@@ -182,6 +186,7 @@ func TestVerifyOutcomeEvidenceIsOrderIndependent(t *testing.T) {
 }
 
 func TestWorkspaceArtifactsMissingStore(t *testing.T) {
+	t.Parallel()
 	artifacts, err := WorkspaceArtifacts(t.TempDir())
 	if err != nil {
 		t.Fatalf("WorkspaceArtifacts = %v, want an empty store to read as empty", err)

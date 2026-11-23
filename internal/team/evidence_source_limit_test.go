@@ -23,6 +23,7 @@ func completedEvidenceSources(c *Coordinator, count int) []string {
 }
 
 func TestEvidenceSourceLimitIsBoundedAndKeepsDefault(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	ids := completedEvidenceSources(c, 12)
 	for _, tc := range []struct {
@@ -56,6 +57,7 @@ func TestEvidenceSourceLimitIsBoundedAndKeepsDefault(t *testing.T) {
 }
 
 func TestEvidenceSourceLimitIsConfigurationOwnedAndDurable(t *testing.T) {
+	t.Parallel()
 	var declared TaskDef
 	if err := yaml.Unmarshal([]byte("id: merge\nagent: writer\nexecution:\n  requires-evidence: true\n  max-evidence-sources: 12\n"), &declared); err != nil {
 		t.Fatal(err)

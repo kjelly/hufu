@@ -28,6 +28,7 @@ func beginRequestRevisionFixture(t *testing.T, c *Coordinator) context.Context {
 }
 
 func TestRequestAcceptanceRevisesInventedRestrictionsBeforeFreezing(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	const request = "Compare the reasoning in the two source documents"
 	extractions, audits := 0, 0
@@ -103,6 +104,7 @@ func TestRequestAcceptanceRevisesInventedRestrictionsBeforeFreezing(t *testing.T
 }
 
 func TestRequestAcceptanceCandidateRevisionIsBounded(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"unchanged", "still rejected", "drops material", "shared validation budget"} {
 		t.Run(scenario, func(t *testing.T) {
 			c := requestAcceptanceFixture(t)

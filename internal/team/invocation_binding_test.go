@@ -10,6 +10,7 @@ import (
 )
 
 func TestInvocationBindingFencesAllProviderAdmissionStates(t *testing.T) {
+	t.Parallel()
 	ctx := WithInvocationBinding(t.Context(), func(context.Context, InvocationIdentity) error { return nil })
 	binding, err := claimInvocationBinding(ctx)
 	if err != nil {
@@ -51,6 +52,7 @@ func newBindingTestCoordinator(t *testing.T) *Coordinator {
 }
 
 func TestInvocationBindingUsesDurableChildIdentityAndIsSingleUse(t *testing.T) {
+	t.Parallel()
 	c := newBindingTestCoordinator(t)
 	var calls atomic.Int64
 	var observed InvocationIdentity
@@ -84,6 +86,7 @@ func TestInvocationBindingUsesDurableChildIdentityAndIsSingleUse(t *testing.T) {
 }
 
 func TestInvocationBindingFailurePrecedesEveryPublicProviderPath(t *testing.T) {
+	t.Parallel()
 	for _, entry := range []string{"run", "direct", "task"} {
 		t.Run(entry, func(t *testing.T) {
 			c := newBindingTestCoordinator(t)

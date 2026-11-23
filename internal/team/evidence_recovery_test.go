@@ -8,6 +8,7 @@ import (
 )
 
 func TestEvidenceRecoveryKeepsCanonicalExecutionOrigin(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"accepted", "unselected", "missing_source", "missing_input_source", "changed_result", "changed_verification", "changed_receipt", "stale_inputs", "wrong_branch"} {
 		t.Run(mode, func(t *testing.T) {
 			c := newTestCoordinator(t)

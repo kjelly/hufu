@@ -54,6 +54,7 @@ func scopeAssertion(assertions ...TaskOutputAssertion) VerificationSpec {
 }
 
 func TestPreflightActionAcceptance(t *testing.T) {
+	t.Parallel()
 	// The producer echoes the scope with empty fields omitted.
 	outputs := map[string]any{"scope": map[string]any{
 		"requested": map[string]any{"count": json.Number("22"), "head": "HEAD", "history": "first_parent", "kind": "last_n"},
@@ -127,6 +128,7 @@ func newDoneWorkflowCoordinator(t *testing.T) *Coordinator {
 }
 
 func TestFinishEndsRunWhenAcceptanceCannotBeRepaired(t *testing.T) {
+	t.Parallel()
 	c := newDoneWorkflowCoordinator(t)
 	resp, err := (&finishTool{coordinator: c}).Run(context.Background(), fantasy.ToolCall{Input: `{"response":"review report"}`})
 	if err != nil {
@@ -152,6 +154,7 @@ func TestFinishEndsRunWhenAcceptanceCannotBeRepaired(t *testing.T) {
 }
 
 func TestFinishRecordsRejections(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	c.session.Workspace = t.TempDir()
 	c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "still running"}})
@@ -166,6 +169,7 @@ func TestFinishRecordsRejections(t *testing.T) {
 }
 
 func TestDeterministicFinishTextNamesRejections(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		rejection  finishRejection
@@ -198,6 +202,7 @@ func TestDeterministicFinishTextNamesRejections(t *testing.T) {
 }
 
 func TestPreflightFailureEvidenceKeepsBoundedRedactedOutput(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		output  string

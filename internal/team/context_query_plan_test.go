@@ -9,6 +9,7 @@ import (
 )
 
 func TestContextQueryPlanPreservesPrimaryIdentityAndBoundsSources(t *testing.T) {
+	t.Parallel()
 	request := ContextRequest{SchemaVersion: 1, RunID: "run", TaskID: "1", Attempt: 1, Goal: "修復路由", Phase: PhaseExecute, Trigger: ContextTriggerTaskDispatch, Constraints: strings.Repeat("約束", 300), VerificationCriteria: strings.Repeat("檢查", 200)}
 	request.AssignRequestID()
 	before := request
@@ -44,6 +45,7 @@ func TestContextQueryPlanPreservesPrimaryIdentityAndBoundsSources(t *testing.T) 
 }
 
 func TestContextQueryPlanWholePathsAndLegacyFallback(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		goal string
 		want ContextQueryFallback
@@ -62,6 +64,7 @@ func TestContextQueryPlanWholePathsAndLegacyFallback(t *testing.T) {
 }
 
 func TestContextQueryPlanRedactsBeforeHashingAndTruncation(t *testing.T) {
+	t.Parallel()
 	request := ContextRequest{Goal: "normal", Constraints: "api_key=sk-test-secret-value-never-persist", Phase: PhaseExecute, Trigger: ContextTriggerTaskDispatch}
 	plan := BuildContextQueryPlan(request, ContextQueryHints{})
 	if strings.Contains(plan.Supplemental, "sk-test-secret-value") {

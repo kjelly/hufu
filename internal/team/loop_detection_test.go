@@ -54,6 +54,7 @@ func (m *mockCoordinator) simulateDelegation(tasks []TaskDef) []string {
 
 // TestTruncateTaskDesc tests the truncateTaskDesc function
 func TestTruncateTaskDesc(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -109,6 +110,7 @@ func TestTruncateTaskDesc(t *testing.T) {
 
 // TestDelegatedTasksTracking tests the delegated task counting mechanism
 func TestDelegatedTasksTracking(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		tasks        []TaskDef
@@ -196,6 +198,7 @@ func TestDelegatedTasksTracking(t *testing.T) {
 
 // TestLoopWarningGeneration tests the loop warning generation
 func TestLoopWarningGeneration(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name             string
 		tasks            []TaskDef
@@ -308,6 +311,7 @@ func TestLoopWarningGeneration(t *testing.T) {
 
 // TestLongTaskDescriptionTruncation tests truncation with real task descriptions
 func TestLongTaskDescriptionTruncation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		task     string

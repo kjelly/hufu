@@ -145,6 +145,7 @@ func mustCheckout(t *testing.T, f *versionFixture, target string) WorkspaceCheck
 // IT1/IT2: forking the active head reuses its tree, and checkouts switch the
 // files back and forth.
 func TestWorkspaceForkAndCheckoutSwitchFiles(t *testing.T) {
+	t.Parallel()
 	f := newVersionFixture(t)
 	f.write("A.txt", "main")
 	fork := mustFork(t, f, "exp", "")
@@ -187,6 +188,7 @@ func TestWorkspaceForkAndCheckoutSwitchFiles(t *testing.T) {
 // base is the snapshot at the fork event, and the active branch's uncaptured
 // edit is saved before the files are replaced.
 func TestWorkspaceHistoricalForkUsesSnapshotAtEvent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newVersionFixture(t)
 	f.write("v.txt", "one")
@@ -212,6 +214,7 @@ func TestWorkspaceHistoricalForkUsesSnapshotAtEvent(t *testing.T) {
 }
 
 func TestWorkspaceHistoricalForkDoesNotImportLaterTasks(t *testing.T) {
+	t.Parallel()
 	f := newVersionFixture(t)
 	if _, _, err := f.ops().SnapshotNow(t.Context()); err != nil {
 		t.Fatal(err)
@@ -238,6 +241,7 @@ func TestWorkspaceHistoricalForkDoesNotImportLaterTasks(t *testing.T) {
 // TestWorkspaceForkLegacyEventFailsClosed covers IT4: an event without any
 // workspace snapshot before it cannot be forked with workspace state.
 func TestWorkspaceForkLegacyEventFailsClosed(t *testing.T) {
+	t.Parallel()
 	f := newVersionFixture(t)
 	legacy := f.event("main", "test_marker")
 	f.write("x", "1")
@@ -254,6 +258,7 @@ func TestWorkspaceForkLegacyEventFailsClosed(t *testing.T) {
 // TestWorkspaceCheckoutLegacyBranchFailsClosed: a branch without a head
 // cannot be checked out with workspace semantics.
 func TestWorkspaceCheckoutLegacyBranchFailsClosed(t *testing.T) {
+	t.Parallel()
 	f := newVersionFixture(t)
 	if _, err := f.tree.CreateBranch("legacy", "", f.events); err != nil {
 		t.Fatal(err)
@@ -271,6 +276,7 @@ func TestWorkspaceCheckoutLegacyBranchFailsClosed(t *testing.T) {
 
 // TestWorkspaceProjectDirsNamedLikeBookkeeping covers IT12 (B5).
 func TestWorkspaceProjectDirsNamedLikeBookkeeping(t *testing.T) {
+	t.Parallel()
 	f := newVersionFixture(t)
 	files := map[string]string{"docs/history/a.md": "a", "internal/tasks/b.go": "b", "logs/c.txt": "c"}
 	for rel, content := range files {
@@ -290,6 +296,7 @@ func TestWorkspaceProjectDirsNamedLikeBookkeeping(t *testing.T) {
 
 // TestWorkspaceControlRootInsideSubject covers IT11 (defensive, §9.5).
 func TestWorkspaceControlRootInsideSubject(t *testing.T) {
+	t.Parallel()
 	f := newVersionFixture(t)
 	inside := filepath.Join(f.subject, "workspace", "dev")
 	if err := os.MkdirAll(inside, 0o755); err != nil {
@@ -321,6 +328,7 @@ func TestWorkspaceControlRootInsideSubject(t *testing.T) {
 
 // TestWorkspaceRestoreAndRecoveryMarker covers §20 and §22.3.
 func TestWorkspaceRestoreAndRecoveryMarker(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newVersionFixture(t)
 	f.write("a.txt", "v1")

@@ -75,6 +75,7 @@ func submitEvidenceRepairTurn(t *testing.T, c *Coordinator, id string) scriptedT
 }
 
 func TestProtocolRepairPreservesToolEvidence(t *testing.T) {
+	t.Parallel()
 	for _, initialFailure := range []string{"none", "schema", "preparation", "exhausted", "no_tool_call", "no_tool_call_exhausted", "empty_output", "empty_output_exhausted"} {
 		t.Run(initialFailure, func(t *testing.T) {
 			c, id, task := toolEvidenceRepairFixture(t)
@@ -194,6 +195,7 @@ func interruptedToolEvidenceFixture(t *testing.T, c *Coordinator, id string, tas
 }
 
 func TestResumedProtocolRepairPreservesToolEvidence(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name       string
 		attempt    int
@@ -253,6 +255,7 @@ func TestResumedProtocolRepairPreservesToolEvidence(t *testing.T) {
 }
 
 func TestProtocolRepairRejectsUnboundToolEvidence(t *testing.T) {
+	t.Parallel()
 	for _, mismatch := range []string{"run", "task", "agent", "snapshot", "schema", "scope", "missing", "tampered"} {
 		t.Run(mismatch, func(t *testing.T) {
 			c, id, task := toolEvidenceRepairFixture(t)
@@ -298,6 +301,7 @@ func TestProtocolRepairRejectsUnboundToolEvidence(t *testing.T) {
 }
 
 func TestSubmissionRepairEvidenceScope(t *testing.T) {
+	t.Parallel()
 	for _, mismatch := range []string{"none", "run", "task", "agent", "attempt", "ordinary_submission"} {
 		t.Run(mismatch, func(t *testing.T) {
 			c, id, _ := toolEvidenceRepairFixture(t)

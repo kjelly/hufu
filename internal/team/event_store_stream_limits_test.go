@@ -7,6 +7,7 @@ import (
 )
 
 func TestStreamValidatedRunEventsLimitsBeforeVisit(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-bounded", "session-bounded")
 	if err != nil {
@@ -58,6 +59,7 @@ func TestStreamValidatedRunEventsLimitsBeforeVisit(t *testing.T) {
 }
 
 func TestStreamValidatedRunEventsLimitedSnapshot(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-snapshot", "session-snapshot")
 	if err != nil {

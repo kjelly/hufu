@@ -84,6 +84,7 @@ func contractLintCoordinator(t *testing.T, mode string) (*Coordinator, *contract
 }
 
 func TestContractLintModeOnExecutionPath(t *testing.T) {
+	t.Parallel()
 	structural := func(c *Coordinator) error { return c.validateContractStructural(contractWarningTask(), "1") }
 	reported := func(c *Coordinator) error { return c.validateAndReportContract(contractWarningTask(), "") }
 	tests := []struct {
@@ -115,6 +116,7 @@ func TestContractLintModeOnExecutionPath(t *testing.T) {
 }
 
 func TestExecuteTasksWarnModeDefersContractWarningToExecuteTask(t *testing.T) {
+	t.Parallel()
 	c, log := contractLintCoordinator(t, agent.VerifierLintWarn)
 	// The preflight must neither reject the task nor emit the warning; the
 	// per-task structural check in executeTask is the single emitter, which
@@ -129,6 +131,7 @@ func TestExecuteTasksWarnModeDefersContractWarningToExecuteTask(t *testing.T) {
 }
 
 func TestValidateContractStructuralDedupsWarningsPerTodo(t *testing.T) {
+	t.Parallel()
 	c, log := contractLintCoordinator(t, agent.VerifierLintWarn)
 	task := contractWarningTask()
 	steps := []struct {
@@ -153,6 +156,7 @@ func TestValidateContractStructuralDedupsWarningsPerTodo(t *testing.T) {
 }
 
 func TestCloneCoordinatorSharesContractWarningDedup(t *testing.T) {
+	t.Parallel()
 	c, log := contractLintCoordinator(t, agent.VerifierLintWarn)
 	findings := contractWarningFindings()
 	c.emitContractWarnings("1", findings)
@@ -180,6 +184,7 @@ func TestCloneCoordinatorSharesContractWarningDedup(t *testing.T) {
 // unsynchronized nil check that used to initialize contractWarnings.
 
 func TestEmitContractWarningsConcurrentFirstUseInitializesOnce(t *testing.T) {
+	t.Parallel()
 	c, log := contractLintCoordinator(t, agent.VerifierLintWarn)
 	if c.contractWarnings != nil {
 		t.Fatal("precondition: contractWarnings must be nil")
@@ -202,6 +207,7 @@ func TestEmitContractWarningsConcurrentFirstUseInitializesOnce(t *testing.T) {
 }
 
 func TestEmitContractWarningsConcurrentSameTodoEmitsOnce(t *testing.T) {
+	t.Parallel()
 	c, log := contractLintCoordinator(t, agent.VerifierLintWarn)
 	findings := contractWarningFindings()
 
@@ -223,6 +229,7 @@ func TestEmitContractWarningsConcurrentSameTodoEmitsOnce(t *testing.T) {
 }
 
 func TestCloneCoordinatorConcurrentClonesShareDedupSet(t *testing.T) {
+	t.Parallel()
 	c, _ := contractLintCoordinator(t, agent.VerifierLintWarn)
 	if c.contractWarnings != nil {
 		t.Fatal("precondition: contractWarnings must be nil")
@@ -254,6 +261,7 @@ func TestCloneCoordinatorConcurrentClonesShareDedupSet(t *testing.T) {
 }
 
 func TestExecuteTaskContractCheckOnResume(t *testing.T) {
+	t.Parallel()
 	// Crash-resume enters executeTask directly and bypasses the ExecuteTasks
 	// preflight, so the contract check must run there too.
 	tests := []struct {
@@ -302,6 +310,7 @@ func TestExecuteTaskContractCheckOnResume(t *testing.T) {
 }
 
 func TestRecordContractFailurePersistsContractClass(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	c.sessionData = NewSession()
 	store, err := NewEventStore(c.session.Workspace, "run-test", "sess-test")

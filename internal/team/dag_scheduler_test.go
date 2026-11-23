@@ -16,6 +16,7 @@ import (
 )
 
 func TestProviderSemaphore(t *testing.T) {
+	t.Parallel()
 	manager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", map[string]config.ProviderConfig{
 		"local":  {MaxConcurrent: 1},
 		"ollama": {MaxConcurrent: 2},
@@ -58,6 +59,7 @@ func TestProviderSemaphore(t *testing.T) {
 }
 
 func TestAcquireSemNilChannelAlwaysAvailable(t *testing.T) {
+	t.Parallel()
 	slot, err := acquireSem(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("acquireSem(nil) error = %v", err)
@@ -67,6 +69,7 @@ func TestAcquireSemNilChannelAlwaysAvailable(t *testing.T) {
 }
 
 func TestExecutionBackendSemaphoreUsesCanonicalBackendBucket(t *testing.T) {
+	t.Parallel()
 	registry := NewExecutionRegistry()
 	if err := registry.Register(fakeLanguageModelBackend{fakeExecutionBackend{name: "local", kind: execution.BackendKindLLM, caps: execution.BackendCapabilities{DirectLanguageModel: true}}}); err != nil {
 		t.Fatal(err)
@@ -106,6 +109,7 @@ func TestExecutionBackendSemaphoreUsesCanonicalBackendBucket(t *testing.T) {
 }
 
 func TestCodexBackendDefaultsToSerializedConcurrency(t *testing.T) {
+	t.Parallel()
 	registry := NewExecutionRegistry()
 	if err := registry.Register(fakeExecutionBackend{name: codexSubagentProviderName, kind: execution.BackendKindAgent}); err != nil {
 		t.Fatal(err)
@@ -131,6 +135,7 @@ func TestCodexBackendDefaultsToSerializedConcurrency(t *testing.T) {
 }
 
 func TestAcquireSemLimitsConcurrency(t *testing.T) {
+	t.Parallel()
 	ch := make(chan struct{}, 1)
 
 	slot1, err := acquireSem(context.Background(), ch)
@@ -154,6 +159,7 @@ func TestAcquireSemLimitsConcurrency(t *testing.T) {
 }
 
 func TestProviderInvocationLimiterUsesFinalModelProvider(t *testing.T) {
+	t.Parallel()
 	manager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", map[string]config.ProviderConfig{
 		"local":  {MaxConcurrent: 1},
 		"remote": {MaxConcurrent: 1},
@@ -200,6 +206,7 @@ func TestProviderInvocationLimiterUsesFinalModelProvider(t *testing.T) {
 }
 
 func TestProviderInvocationLimiterIsSharedByExtraModelClones(t *testing.T) {
+	t.Parallel()
 	manager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", map[string]config.ProviderConfig{
 		"local": {MaxConcurrent: 1},
 	})
@@ -247,6 +254,7 @@ func TestProviderInvocationLimiterIsSharedByExtraModelClones(t *testing.T) {
 }
 
 func TestDAGSchedulerBudgetAdmissionSkipsQueuedWorkers(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Workspace: t.TempDir(),
@@ -313,6 +321,7 @@ func dagSchedulerTestWorkspace(t *testing.T) string {
 }
 
 func TestDAGSchedulerLaunchesOnlySlotOwnersInInputOrder(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Workspace: dagSchedulerTestWorkspace(t),
@@ -393,6 +402,7 @@ func TestDAGSchedulerLaunchesOnlySlotOwnersInInputOrder(t *testing.T) {
 }
 
 func TestDAGSchedulerCancellationDoesNotLaunchDependentFromBufferedEvent(t *testing.T) {
+	t.Parallel()
 	for range 100 {
 		c := &Coordinator{
 			session: &TeamSession{
@@ -437,6 +447,7 @@ func TestDAGSchedulerCancellationDoesNotLaunchDependentFromBufferedEvent(t *test
 }
 
 func TestDAGSchedulerPreCancelledContextStopsBeforeStranding(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Workspace: t.TempDir(),
@@ -507,6 +518,7 @@ func (a *budgetHoldingAgent) Stream(ctx context.Context, _ fantasy.AgentStreamCa
 }
 
 func TestDAGSchedulerBudgetExhaustionWhileQueuedTaskWaitsForPermit(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{
 			Workspace: dagSchedulerTestWorkspace(t),

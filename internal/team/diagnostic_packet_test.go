@@ -35,6 +35,7 @@ func pendingDiagnosticPackets(c *Coordinator) int {
 }
 
 func TestDiagnosisPolicyDecisionTable(t *testing.T) {
+	t.Parallel()
 	retry := func(class TaskFailureClass, edit func(*RecoveryDecisionInput)) RecoveryDecisionInput {
 		in := RecoveryDecisionInput{FailureClass: class, RecoveryPolicy: RecoveryRetry, Attempt: 1, MaxRetries: 3, EvidenceComplete: true, Replayable: true}
 		if edit != nil {
@@ -113,6 +114,7 @@ func TestDiagnosisPolicyDecisionTable(t *testing.T) {
 }
 
 func TestDiagnosticPacketRedactsEveryEvidenceField(t *testing.T) {
+	t.Parallel()
 	const secret = "Authorization: Bearer nested-secret-123"
 	// keyValueSecret only matches the key=value redactor, so the detail line
 	// exercises that path on its own as well as the bearer-token path.
@@ -149,6 +151,7 @@ func TestDiagnosticPacketRedactsEveryEvidenceField(t *testing.T) {
 }
 
 func TestDiagnosticDispositionMergeIsMonotonic(t *testing.T) {
+	t.Parallel()
 	ordered := []RetryDisposition{RetryWorker, RetryNone, ReplanRequired, ReconcileOnly, NeedsHuman}
 	for _, applied := range ordered {
 		for _, diagnosed := range ordered {
@@ -165,6 +168,7 @@ func TestDiagnosticDispositionMergeIsMonotonic(t *testing.T) {
 }
 
 func TestPersistedFailureRecordsDiagnosticPacket(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		detail string
@@ -215,6 +219,7 @@ func TestPersistedFailureRecordsDiagnosticPacket(t *testing.T) {
 }
 
 func TestSessionRestoreRedactsDiagnosticPacketsBeforeCheckpoint(t *testing.T) {
+	t.Parallel()
 	secret := "Authorization: Bearer legacy-session-secret"
 	legacy := DiagnosticPacket{
 		ID: "legacy-diagnostic", TaskID: "task-legacy", RunID: "run-legacy", FailureClass: FailureVerify,
@@ -245,6 +250,7 @@ func TestSessionRestoreRedactsDiagnosticPacketsBeforeCheckpoint(t *testing.T) {
 }
 
 func TestDiagnosticPacketEventReplaysAndRetriesAtCheckpoint(t *testing.T) {
+	t.Parallel()
 	persist := func(c *Coordinator) *TodoItem {
 		item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "will fail", MaxRetries: 2}})[0]
 		c.PersistFailureWithClass(item.Agent, item.Desc, item.ID, "source=error | error=command failed", RetryWorker, FailureExecution)

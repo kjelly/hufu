@@ -8,6 +8,7 @@ import (
 )
 
 func TestRefreshStaleGateVerifiersResetsWithoutRetryBudget(t *testing.T) {
+	t.Parallel()
 	stale := invariantCompletionTodo("run-old", "gate", InvariantVerificationGate, TaskDone, []InvariantAssessment{completionAssessment("safe", InvariantSeverityError, InvariantPreserved)})
 	stale.Retries = 2
 	stale.ExecutionReceipt = &ExecutionReceipt{RunID: "run-old", TaskID: stale.ID, Attempt: 1}
@@ -43,6 +44,7 @@ func TestRefreshStaleGateVerifiersResetsWithoutRetryBudget(t *testing.T) {
 }
 
 func TestCommitStaleGateVerifierResetIsDurableAndReplayable(t *testing.T) {
+	t.Parallel()
 	stale := invariantCompletionTodo("run-old", "gate", InvariantVerificationGate, TaskDone, []InvariantAssessment{completionAssessment("safe", InvariantSeverityError, InvariantPreserved)})
 	tracker := NewTaskTracker()
 	tracker.TodoList().Restore([]*TodoItem{stale})
@@ -78,6 +80,7 @@ func TestCommitStaleGateVerifierResetIsDurableAndReplayable(t *testing.T) {
 }
 
 func TestRefreshStaleGateVerifiersKeepsCurrentAndInterruptedTasks(t *testing.T) {
+	t.Parallel()
 	current := invariantCompletionTodo("run-current", "current", InvariantVerificationGate, TaskDone, []InvariantAssessment{completionAssessment("safe", InvariantSeverityError, InvariantPreserved)})
 	pending := invariantCompletionTodo("run-old", "pending", InvariantVerificationGate, TaskPending, []InvariantAssessment{completionAssessment("safe", InvariantSeverityError, InvariantPreserved)})
 	tracker := NewTaskTracker()
@@ -94,6 +97,7 @@ func TestRefreshStaleGateVerifiersKeepsCurrentAndInterruptedTasks(t *testing.T) 
 }
 
 func TestRefreshStaleGateVerifierPreservesUnrelatedInventoryCacheKey(t *testing.T) {
+	t.Parallel()
 	for _, bound := range []bool{false, true} {
 		name := "ordinary_gate"
 		if bound {
@@ -124,6 +128,7 @@ func TestRefreshStaleGateVerifierPreservesUnrelatedInventoryCacheKey(t *testing.
 }
 
 func TestRuntimeAttestedInvariantRejectionCanonicalizesFailureClass(t *testing.T) {
+	t.Parallel()
 	item := invariantCompletionTodo("run-current", "gate", InvariantVerificationGate, TaskError, []InvariantAssessment{completionAssessment("safe", InvariantSeverityError, InvariantViolated)})
 	item.FailureEvent = &FailureEventPayload{FailureClass: FailureExecution}
 	if got := effectiveFailureClassForTodo(item); got != FailureSemanticRejection {
@@ -136,6 +141,7 @@ func TestRuntimeAttestedInvariantRejectionCanonicalizesFailureClass(t *testing.T
 }
 
 func TestInvariantVerifierTasksBypassDuplicateSuppression(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker(), delegatedTasks: map[string]int{}}
 	tasks := []TaskDef{
 		{Agent: "reviewer", Goal: "verify invariants", InvariantVerification: InvariantVerificationReport},

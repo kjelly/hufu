@@ -35,6 +35,7 @@ func (c *projectContextTextCompacter) CompactStructured(context.Context, string,
 }
 
 func TestCoordinatorCompilerCompactsProjectOnceWithBoundedPlainTextCall(t *testing.T) {
+	t.Parallel()
 	compacter := &projectContextTextCompacter{result: "condensed project conventions"}
 	compiled, err := CompileCoordinatorContext(t.Context(), CoordinatorContextInput{
 		CorePrompt: "coordinate", ProjectContext: strings.Repeat("convention ", 600), SidecarCompacter: compacter,
@@ -80,6 +81,7 @@ func TestBuildSystemPromptDoesNotCompactShadowProjectAgain(t *testing.T) {
 }
 
 func TestSmallRoleSummaryDoesNotCallSidecar(t *testing.T) {
+	t.Parallel()
 	// No pool is installed: reaching the sidecar path would fail this test.
 	c := &Coordinator{}
 	if got := c.summarizeSystem(t.Context(), "short worker role"); got != "short worker role" {
@@ -88,6 +90,7 @@ func TestSmallRoleSummaryDoesNotCallSidecar(t *testing.T) {
 }
 
 func TestCancelledRoleSummaryFallsBackLocally(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	c := &Coordinator{}
@@ -98,6 +101,7 @@ func TestCancelledRoleSummaryFallsBackLocally(t *testing.T) {
 }
 
 func TestCompactProjectContextUsesTextCompactionForLargeAgentsMD(t *testing.T) {
+	t.Parallel()
 	agentsMD := "# Project Instructions\n" + strings.Repeat("Keep this convention. ", 250)
 	compacter := &projectContextTextCompacter{result: "# Project Instructions\n\nCondensed convention."}
 

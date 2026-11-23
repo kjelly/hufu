@@ -38,6 +38,7 @@ func wp3ContainsID(ids []string, id string) bool {
 }
 
 func TestWP3_ModeOffReturnsEmptyBundle(t *testing.T) {
+	t.Parallel()
 	repo := wp3SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 	bundle, err := svc.Recall(context.Background(), WorkerMemoryRecallRequest{
@@ -61,6 +62,7 @@ func TestWP3_ModeOffReturnsEmptyBundle(t *testing.T) {
 }
 
 func TestWP3_NoRepoReturnsEmptyBundle(t *testing.T) {
+	t.Parallel()
 	svc := NewWorkerMemoryService(nil, nil)
 	bundle, err := svc.Recall(context.Background(), WorkerMemoryRecallRequest{
 		WorkerID: "worker-a",
@@ -77,6 +79,7 @@ func TestWP3_NoRepoReturnsEmptyBundle(t *testing.T) {
 }
 
 func TestWP3_EmptyQueryReturnsEmptyBundle(t *testing.T) {
+	t.Parallel()
 	repo := wp3SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 	bundle, err := svc.Recall(context.Background(), WorkerMemoryRecallRequest{
@@ -94,6 +97,7 @@ func TestWP3_EmptyQueryReturnsEmptyBundle(t *testing.T) {
 }
 
 func TestWP3_SessionModeRetrievesOwnAndShared(t *testing.T) {
+	t.Parallel()
 	repo := wp3SetupRepo(t)
 	shared := contextstore.Scope{ProjectID: "p", TeamID: "team", SessionID: "sess"}
 	agentA := contextstore.Scope{ProjectID: "p", TeamID: "team", SessionID: "sess", AgentID: "worker-a"}
@@ -129,6 +133,7 @@ func TestWP3_SessionModeRetrievesOwnAndShared(t *testing.T) {
 }
 
 func TestWP3_AgentCannotSeeOtherAgentPrivate(t *testing.T) {
+	t.Parallel()
 	repo := wp3SetupRepo(t)
 	agentA := contextstore.Scope{ProjectID: "p", TeamID: "team", SessionID: "sess", AgentID: "worker-a"}
 	agentB := contextstore.Scope{ProjectID: "p", TeamID: "team", SessionID: "sess", AgentID: "worker-b"}
@@ -155,6 +160,7 @@ func TestWP3_AgentCannotSeeOtherAgentPrivate(t *testing.T) {
 }
 
 func TestWP3_MaxItemsLimitEnforced(t *testing.T) {
+	t.Parallel()
 	repo := wp3SetupRepo(t)
 	scope := contextstore.Scope{ProjectID: "p", TeamID: "team", SessionID: "sess", AgentID: "worker-a"}
 	items := make([]contextstore.ContextItem, 10)
@@ -183,6 +189,7 @@ func TestWP3_MaxItemsLimitEnforced(t *testing.T) {
 }
 
 func TestWP3_MaxTokensLimitEnforced(t *testing.T) {
+	t.Parallel()
 	repo := wp3SetupRepo(t)
 	scope := contextstore.Scope{ProjectID: "p", TeamID: "team", SessionID: "sess", AgentID: "worker-a"}
 	wp3AppendItems(t, repo,
@@ -205,6 +212,7 @@ func TestWP3_MaxTokensLimitEnforced(t *testing.T) {
 }
 
 func TestWP3_RenderWorkerMemorySectionHasDisclaimer(t *testing.T) {
+	t.Parallel()
 	bundle := WorkerMemoryBundle{
 		Items: []WorkerMemoryItem{
 			{ContextItem: contextstore.ContextItem{ID: "mem-1", Content: "some prior finding"}, Tier: "session"},
@@ -229,6 +237,7 @@ func TestWP3_RenderWorkerMemorySectionHasDisclaimer(t *testing.T) {
 }
 
 func TestWP3_RenderWorkerMemorySectionEmptyReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	section := RenderWorkerMemorySection(WorkerMemoryBundle{})
 	if section != "" {
 		t.Errorf("empty bundle should render empty string, got: %q", section)
@@ -236,6 +245,7 @@ func TestWP3_RenderWorkerMemorySectionEmptyReturnsEmpty(t *testing.T) {
 }
 
 func TestWP3_TraceRecordsIDsNotContent(t *testing.T) {
+	t.Parallel()
 	repo := wp3SetupRepo(t)
 	scope := contextstore.Scope{ProjectID: "p", TeamID: "team", SessionID: "sess", AgentID: "worker-a"}
 	wp3AppendItems(t, repo,
@@ -262,6 +272,7 @@ func TestWP3_TraceRecordsIDsNotContent(t *testing.T) {
 }
 
 func TestWP3_ShouldRecallWorkerMemory(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		agentDef *agent.AgentDef
@@ -310,6 +321,7 @@ func TestWP3_ShouldRecallWorkerMemory(t *testing.T) {
 }
 
 func TestWP3_ResolveWorkerScope(t *testing.T) {
+	t.Parallel()
 	base := contextstore.Scope{ProjectID: "p", TeamID: "team", SessionID: "sess"}
 	agentDef := &agent.AgentDef{MemoryID: "worker-v1"}
 	scope := resolveWorkerScope(base, agentDef, "")
@@ -325,6 +337,7 @@ func TestWP3_ResolveWorkerScope(t *testing.T) {
 }
 
 func TestWP3_PersistentModeRetrievesCrossSession(t *testing.T) {
+	t.Parallel()
 	repo := wp3SetupRepo(t)
 	// Session 1 items for agent-a.
 	sess1 := contextstore.Scope{ProjectID: "p", TeamID: "team", SessionID: "sess-1", AgentID: "worker-a"}
@@ -356,6 +369,7 @@ func TestWP3_PersistentModeRetrievesCrossSession(t *testing.T) {
 }
 
 func TestWP3_LifecycleCandidateExcluded(t *testing.T) {
+	t.Parallel()
 	repo := wp3SetupRepo(t)
 	scope := contextstore.Scope{ProjectID: "p", TeamID: "team", SessionID: "sess", AgentID: "worker-a"}
 	wp3AppendItems(t, repo,
@@ -380,6 +394,7 @@ func TestWP3_LifecycleCandidateExcluded(t *testing.T) {
 }
 
 func TestWP3_DedupByContentHash(t *testing.T) {
+	t.Parallel()
 	repo := wp3SetupRepo(t)
 	scope := contextstore.Scope{ProjectID: "p", TeamID: "team", SessionID: "sess", AgentID: "worker-a"}
 	// Two items with the same content but different IDs.
@@ -404,6 +419,7 @@ func TestWP3_DedupByContentHash(t *testing.T) {
 }
 
 func TestWP3_CompileWorkerContextIncludesWorkerMemory(t *testing.T) {
+	t.Parallel()
 	bundle := &WorkerMemoryBundle{
 		Items: []WorkerMemoryItem{
 			{ContextItem: contextstore.ContextItem{ID: "wm-1", Content: "prior worker memory finding"}, Tier: "session"},
@@ -429,6 +445,7 @@ func TestWP3_CompileWorkerContextIncludesWorkerMemory(t *testing.T) {
 }
 
 func TestWP3_CompileWorkerContextWithoutWorkerMemory(t *testing.T) {
+	t.Parallel()
 	compiled, err := CompileWorkerContext(context.Background(), WorkerContextInput{
 		Goal:         "do the task",
 		WorkerMemory: nil,

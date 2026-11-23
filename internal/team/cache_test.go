@@ -27,6 +27,7 @@ func newTestCacheCoordinator() *Coordinator {
 // ── Cache Generation tests ────────────────────────────────────────────────────
 
 func TestCacheGenerationInitiallyZero(t *testing.T) {
+	t.Parallel()
 	c := newTestCacheCoordinator()
 	if got := testTaskCache(c).generation.Load(); got != 0 {
 		t.Errorf("initial cacheGeneration = %d, want 0", got)
@@ -34,6 +35,7 @@ func TestCacheGenerationInitiallyZero(t *testing.T) {
 }
 
 func TestCacheHitSameGeneration(t *testing.T) {
+	t.Parallel()
 	c := newTestCacheCoordinator()
 	testTaskCache(c).generation.Store(1)
 
@@ -49,6 +51,7 @@ func TestCacheHitSameGeneration(t *testing.T) {
 }
 
 func TestCacheMultipleGenerationsCoexist(t *testing.T) {
+	t.Parallel()
 	c := newTestCacheCoordinator()
 
 	// Gen 1: store task A.
@@ -77,6 +80,7 @@ func TestCacheMultipleGenerationsCoexist(t *testing.T) {
 }
 
 func TestCacheHitCaseFolding(t *testing.T) {
+	t.Parallel()
 	c := newTestCacheCoordinator()
 	testTaskCache(c).generation.Store(1)
 
@@ -93,6 +97,7 @@ func TestCacheHitCaseFolding(t *testing.T) {
 }
 
 func TestCacheVerifyMustMatch(t *testing.T) {
+	t.Parallel()
 	c := newTestCacheCoordinator()
 	testTaskCache(c).generation.Store(1)
 
@@ -107,6 +112,7 @@ func TestCacheVerifyMustMatch(t *testing.T) {
 }
 
 func TestCacheVerifyModeMustMatch(t *testing.T) {
+	t.Parallel()
 	c := newTestCacheCoordinator()
 	c.storeTaskCacheWithVerification("developer", "inspect service", "systemctl is-active api", "success", "service is active")
 
@@ -122,6 +128,7 @@ func TestCacheVerifyModeMustMatch(t *testing.T) {
 }
 
 func TestSessionCacheRestoreKeepsVerifyMode(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		taskTracker: NewTaskTracker(),
 		taskCache:   newDefaultTaskCache(taskCacheDependencies{}),
@@ -145,6 +152,7 @@ func TestSessionCacheRestoreKeepsVerifyMode(t *testing.T) {
 }
 
 func TestCacheMissDifferentAgent(t *testing.T) {
+	t.Parallel()
 	c := newTestCacheCoordinator()
 	testTaskCache(c).generation.Store(1)
 
@@ -157,6 +165,7 @@ func TestCacheMissDifferentAgent(t *testing.T) {
 }
 
 func TestCacheMissDifferentTask(t *testing.T) {
+	t.Parallel()
 	c := newTestCacheCoordinator()
 	testTaskCache(c).generation.Store(1)
 
@@ -169,6 +178,7 @@ func TestCacheMissDifferentTask(t *testing.T) {
 }
 
 func TestCacheMultipleEntriesSameAgent(t *testing.T) {
+	t.Parallel()
 	c := newTestCacheCoordinator()
 	testTaskCache(c).generation.Store(1)
 
@@ -187,6 +197,7 @@ func TestCacheMultipleEntriesSameAgent(t *testing.T) {
 }
 
 func TestCacheEmptyOnInit(t *testing.T) {
+	t.Parallel()
 	c := newTestCacheCoordinator()
 	testTaskCache(c).generation.Store(1)
 
@@ -201,6 +212,7 @@ func TestCacheEmptyOnInit(t *testing.T) {
 // same goal text means the same work. Fresh entries stored under the new
 // generation are also retrievable.
 func TestCacheGenerationBumpPreservesExactMatchAndAcceptsFreshResult(t *testing.T) {
+	t.Parallel()
 	c := newTestCacheCoordinator()
 	testTaskCache(c).generation.Store(1)
 
@@ -234,6 +246,7 @@ func TestCacheGenerationBumpPreservesExactMatchAndAcceptsFreshResult(t *testing.
 // ── Worker-vs-coordinator generation bump tests ───────────────────────────────
 
 func TestExecuteTasksCacheGeneration(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name, caller string
 		want         int64
@@ -274,6 +287,7 @@ func TestExecuteTasksCacheGeneration(t *testing.T) {
 // two workers (same generation) each add the same sub-task; the second
 // should get a cache hit once the first has stored its result.
 func TestWorkerSubTaskSharingCache(t *testing.T) {
+	t.Parallel()
 	c := newTestCacheCoordinator()
 	testTaskCache(c).generation.Store(2) // coordinator already bumped to gen 2
 

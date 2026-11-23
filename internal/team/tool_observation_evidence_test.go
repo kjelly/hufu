@@ -35,6 +35,7 @@ func historicalEvidenceContract(t *testing.T) *CompiledResultContract {
 }
 
 func TestObservationReadBindsOnlyDeliveredHistoricalEvidence(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"read", "search_only", "unread_quote", "no_opt_in", "fresh_preferred", "repair", "wrong_transcript", "missing_read_result", "failed_read_result", "duplicate_read", "changed_delivery"} {
 		t.Run(mode, func(t *testing.T) {
 			c, ctx, _ := observationFixture(t)
@@ -128,6 +129,7 @@ func TestObservationReadBindsOnlyDeliveredHistoricalEvidence(t *testing.T) {
 }
 
 func TestObservationGatewayCapturesFullLogicalResultBeforeTruncation(t *testing.T) {
+	t.Parallel()
 	c, ctx, _ := observationFixture(t)
 	target := gatewayTestTarget()
 	target.Name, target.Server, target.NativeName = "source__read_document", "source", "read_document"
@@ -155,6 +157,7 @@ func TestObservationGatewayCapturesFullLogicalResultBeforeTruncation(t *testing.
 }
 
 func TestObservationPolicyGateDoesNotCaptureDeniedOrFailedCalls(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"allowed", "denied", "failed"} {
 		t.Run(mode, func(t *testing.T) {
 			c, ctx, _ := observationFixture(t)

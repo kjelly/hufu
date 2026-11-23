@@ -24,6 +24,7 @@ type contextQuerySignalCase struct {
 }
 
 func TestContextQueryQualityFixesFourSignalMissesAtSameBudget(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile(filepath.Join("..", "..", "evals/context-routing/fixtures/query-signals-baseline.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -122,6 +123,7 @@ func queryQualityIDs(items []contextstore.ContextItem) []string {
 }
 
 func TestContextQueryComparisonFallbackKeepsRankingAndWritesNothing(t *testing.T) {
+	t.Parallel()
 	_, repo := rankingTestCoordinator(t, agent.MemoryLearningActive)
 	ctx := t.Context()
 	scope := contextstore.Scope{ProjectID: "project", TeamID: "team"}
@@ -168,6 +170,7 @@ func TestContextQueryComparisonFallbackKeepsRankingAndWritesNothing(t *testing.T
 }
 
 func TestContextQuerySupplementalRankingRetainsHarmfulAndStalePenalties(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningActive)
 	ctx := t.Context()
 	safe, harmful, stale := rankingItem("safe-supplement", 1), rankingItem("harmful-supplement", 100), rankingItem("stale-supplement", 100)

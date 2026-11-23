@@ -10,6 +10,7 @@ import (
 )
 
 func TestCoordinator_GetCurrentStatus_DefaultIdle(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	if got := c.GetCurrentStatus(); got != "idle" {
 		t.Errorf("GetCurrentStatus() = %q, want %q", got, "idle")
@@ -17,6 +18,7 @@ func TestCoordinator_GetCurrentStatus_DefaultIdle(t *testing.T) {
 }
 
 func TestCoordinator_GetCurrentStatus_ModelStage(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "coordinator" })
 	c.updateSnapshot(func(s *currentSnapshot) { s.Model = "ollama/qwen3:8b" })
@@ -33,6 +35,7 @@ func TestCoordinator_GetCurrentStatus_ModelStage(t *testing.T) {
 }
 
 func TestCoordinator_GetCurrentStatus_ToolStage(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "helper" })
 	c.SetCurrentStage("tool")
@@ -48,6 +51,7 @@ func TestCoordinator_GetCurrentStatus_ToolStage(t *testing.T) {
 }
 
 func TestCoordinator_GetCurrentStatus_TruncatesLongTask(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "helper" })
 	c.SetCurrentStage("model")
@@ -65,6 +69,7 @@ func TestCoordinator_GetCurrentStatus_TruncatesLongTask(t *testing.T) {
 }
 
 func TestCoordinator_GetCurrentStatus_ElapseTime(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.SetCurrentStage("model")
 	// Force the start time to be 2 seconds ago.
@@ -79,6 +84,7 @@ func TestCoordinator_GetCurrentStatus_ElapseTime(t *testing.T) {
 }
 
 func TestCoordinator_GetCurrentStatus_IdleResetsStart(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.SetCurrentStage("model")
 	c.updateSnapshot(func(s *currentSnapshot) { s.Tool = "bash" })
@@ -101,6 +107,7 @@ func TestCoordinator_GetCurrentStatus_IdleResetsStart(t *testing.T) {
 }
 
 func TestTruncate(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		input  string
 		max    int
@@ -120,6 +127,7 @@ func TestTruncate(t *testing.T) {
 }
 
 func TestStatusToolResultRedactsSecretsBeyondCollapsedPreview(t *testing.T) {
+	t.Parallel()
 	const secret = "status-result-credential-123456789"
 	raw := strings.Repeat("x", 4100) + "\napi_token=" + secret + "\nvisible tail"
 	var reported StatusEvent
@@ -141,6 +149,7 @@ func TestStatusToolResultRedactsSecretsBeyondCollapsedPreview(t *testing.T) {
 }
 
 func TestStatusToolArgsRedactSecrets(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		secret string
@@ -166,6 +175,7 @@ func TestStatusToolArgsRedactSecrets(t *testing.T) {
 // Status tool-argument projections are redacted and bounded before any
 // reporter (including the TUI status bar preview) sees them.
 func TestStatusToolArgsAreRedactedAndBounded(t *testing.T) {
+	t.Parallel()
 	event := StatusEvent{}.withTool("bash", `{"command":"curl -H 'Authorization: Bearer sk-live-123456'"}`)
 	if strings.Contains(event.ToolArgs, "sk-live-123456") {
 		t.Fatalf("ToolArgs = %q, want the bearer token redacted", event.ToolArgs)

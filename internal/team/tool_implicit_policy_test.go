@@ -11,6 +11,7 @@ import (
 )
 
 func TestImplicitToolsTheArtifactPolicyRefusesAreHidden(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	candidate := []fantasy.AgentTool{
 		tools.NewViewTool(),

@@ -52,6 +52,7 @@ func boundaryToolContext(ctx context.Context) context.Context {
 
 // Acceptance: a blocked mutation starts zero tool processes.
 func TestBlockedMutationStartsZeroToolProcesses(t *testing.T) {
+	t.Parallel()
 	def := deployerAgent()
 	def.ToolRecovery = nil
 	c := boundaryCoordinator(t, def)
@@ -76,6 +77,7 @@ func TestBlockedMutationStartsZeroToolProcesses(t *testing.T) {
 // A read-only observation reaches its tool: commitment is evaluated at the
 // mutation boundary, so observing state is never mistaken for committing it.
 func TestReadOnlyObservationReachesToolUnderBlockedCommitGate(t *testing.T) {
+	t.Parallel()
 	def := deployerAgent()
 	def.ToolRecovery = nil
 	c := boundaryCoordinator(t, def)
@@ -99,6 +101,7 @@ func TestReadOnlyObservationReachesToolUnderBlockedCommitGate(t *testing.T) {
 
 // A satisfied contract lets the mutation through the same boundary.
 func TestSatisfiedCommitContractAdmitsMutationAtToolBoundary(t *testing.T) {
+	t.Parallel()
 	c := boundaryCoordinator(t, deployerAgent())
 	armedBoundaryTask(t, c, CommitGatePolicy{RequireRollback: true})
 
@@ -121,6 +124,7 @@ func TestSatisfiedCommitContractAdmitsMutationAtToolBoundary(t *testing.T) {
 // Acceptance: unknown side-effect state never auto-replays. The checkpoint
 // stops the run, and the repair controller refuses to retry.
 func TestUnknownSideEffectStateNeverAutoReplays(t *testing.T) {
+	t.Parallel()
 	decision := EvaluateCheckpoint(StopPolicy{}, ReplanPolicy{}, CheckpointState{
 		Attempt: 1, ToolCalls: 1, SideEffectState: RecoveryStateUnknown,
 	})
@@ -168,6 +172,7 @@ func TestUnknownSideEffectStateNeverAutoReplays(t *testing.T) {
 // fires, not the one captured when the task was armed. A reconciliation that
 // lands mid-execution must be what the checkpoint judges.
 func TestCheckpointReadsLiveReconcileClassification(t *testing.T) {
+	t.Parallel()
 	c := boundaryCoordinator(t, deployerAgent())
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
 		Agent: "deployer", Desc: "mutate", Goal: "mutate",
@@ -198,6 +203,7 @@ func TestCheckpointReadsLiveReconcileClassification(t *testing.T) {
 // that declares a mutation is admitted through the commit gate, and a blocked
 // step never reaches its runner.
 func TestStructuredMutateStepUsesTheCommitGate(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name       string
 		compensate string
@@ -236,6 +242,7 @@ func TestStructuredMutateStepUsesTheCommitGate(t *testing.T) {
 // A produce or validate step observes rather than commits, so it is outside
 // the gate for the same reason a read-only tool call is.
 func TestStructuredNonMutatingStepsAreNotGated(t *testing.T) {
+	t.Parallel()
 	def := deployerAgent()
 	def.ToolRecovery = nil
 	c := boundaryCoordinator(t, def)
@@ -252,6 +259,7 @@ func TestStructuredNonMutatingStepsAreNotGated(t *testing.T) {
 // A static runtime action is gated under its capability, and a declaration
 // for the capability covers every operation it exposes.
 func TestRuntimeActionGateNameAndCapabilityInheritance(t *testing.T) {
+	t.Parallel()
 	if got := runtimeActionGateName(&Action{Capability: "ovs", Type: "create-bridge"}); got != "ovs:create-bridge" {
 		t.Fatalf("gate name = %q, want ovs:create-bridge", got)
 	}

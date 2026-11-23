@@ -12,6 +12,7 @@ import (
 )
 
 func TestWebResearchReportRetainsSourcesAndPreciseGaps(t *testing.T) {
+	t.Parallel()
 	contract, err := compileResultContractSchema(filepath.Join("..", "..", ".agent-teams", "web-research"), "schemas/report-v1.json")
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +79,7 @@ func TestWebResearchReportRetainsSourcesAndPreciseGaps(t *testing.T) {
 }
 
 func TestWebResearchPromptJSONExamplesSatisfyContracts(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join("..", "..", ".agent-teams", "web-research")
 	for _, tc := range []struct{ name, version string }{{"researcher", "v3"}, {"countercheck", "v3"}, {"verifier", "audit-v3"}} {
 		t.Run(tc.name+"_"+tc.version, func(t *testing.T) {
@@ -150,6 +152,7 @@ func TestWebResearchPromptJSONExamplesSatisfyContracts(t *testing.T) {
 }
 
 func TestWebResearchCompleteAuditRequiresBothInputLenses(t *testing.T) {
+	t.Parallel()
 	compiled, err := compileResultContractSchema(filepath.Join("..", "..", ".agent-teams", "web-research"), "schemas/report-v1.json")
 	if err != nil {
 		t.Fatal(err)

@@ -12,6 +12,7 @@ import (
 )
 
 func TestToolMediaConsumerPreservesInitialInputAndAdmitsCompleteContinuation(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"initial images", "tool only"} {
 		t.Run(scenario, func(t *testing.T) {
 			testToolMediaConsumerContinuation(t, scenario == "tool only")

@@ -11,6 +11,7 @@ import (
 )
 
 func TestOnlyCompilerIncludedItemsBecomeExposures(t *testing.T) {
+	t.Parallel()
 	policy := agent.DefaultMemoryLearningPolicy()
 	policy.Mode = agent.MemoryLearningObserve
 	compiled := CompiledContext{IncludedItems: []ContextItem{
@@ -24,6 +25,7 @@ func TestOnlyCompilerIncludedItemsBecomeExposures(t *testing.T) {
 }
 
 func TestMemoryEventsAndReportsRedactContentAndSecrets(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run", "session")
 	if err != nil {
@@ -61,6 +63,7 @@ func TestMemoryEventsAndReportsRedactContentAndSecrets(t *testing.T) {
 }
 
 func TestMemoryManifestSurvivesSessionReplay(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	es, err := NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
@@ -80,6 +83,7 @@ func TestMemoryManifestSurvivesSessionReplay(t *testing.T) {
 }
 
 func TestMemoryLearningReportCountsOnlyMemoryEventsAcrossRuns(t *testing.T) {
+	t.Parallel()
 	store, err := NewEventStore(t.TempDir(), "run-a", "session-memory-report")
 	if err != nil {
 		t.Fatal(err)
@@ -152,6 +156,7 @@ func TestMemoryLearningReportCountsOnlyMemoryEventsAcrossRuns(t *testing.T) {
 }
 
 func TestUnknownMemoryIDFailsClosed(t *testing.T) {
+	t.Parallel()
 	c, manifest := memoryValidationCoordinator(t)
 	result := &TaskResult{TaskID: manifest.TaskID, Attempt: 1, Source: "submitted", MemoryUses: []MemoryUseRef{{RetrievalID: manifest.RetrievalID, ContextItemID: "forged", Disposition: MemoryUseApplied, Confidence: 1}}}
 	if err := c.validateMemoryUseClaims(context.Background(), manifest.TaskID, result); err == nil || !strings.Contains(err.Error(), "was not injected") {
@@ -160,6 +165,7 @@ func TestUnknownMemoryIDFailsClosed(t *testing.T) {
 }
 
 func TestMemoryUseSealsRuntimeAttempt(t *testing.T) {
+	t.Parallel()
 	c, manifest := memoryValidationCoordinator(t)
 	result := &TaskResult{TaskID: manifest.TaskID, Source: "submitted", MemoryUses: []MemoryUseRef{{RetrievalID: manifest.RetrievalID, ContextItemID: "memory-1", Disposition: MemoryUseApplied, Confidence: 1}}}
 	if err := c.validateMemoryUseClaims(context.Background(), manifest.TaskID, result); err != nil {
@@ -171,6 +177,7 @@ func TestMemoryUseSealsRuntimeAttempt(t *testing.T) {
 }
 
 func TestMemoryUseReasonCodeCannotCarryProseOrSecrets(t *testing.T) {
+	t.Parallel()
 	c, manifest := memoryValidationCoordinator(t)
 	result := &TaskResult{TaskID: manifest.TaskID, Source: "submitted", MemoryUses: []MemoryUseRef{{RetrievalID: manifest.RetrievalID, ContextItemID: "memory-1", Disposition: MemoryUseRejected, ReasonCode: "the full prompt said sk-secret", Confidence: 1}}}
 	if err := c.validateMemoryUseClaims(context.Background(), manifest.TaskID, result); err == nil {
@@ -179,6 +186,7 @@ func TestMemoryUseReasonCodeCannotCarryProseOrSecrets(t *testing.T) {
 }
 
 func TestMemoryUseCannotCrossTaskOrAttempt(t *testing.T) {
+	t.Parallel()
 	c, manifest := memoryValidationCoordinator(t)
 	result := &TaskResult{TaskID: manifest.TaskID, Attempt: 2, Source: "submitted", MemoryUses: []MemoryUseRef{{RetrievalID: manifest.RetrievalID, ContextItemID: "memory-1", Disposition: MemoryUseApplied, Confidence: 1}}}
 	if err := c.validateMemoryUseClaims(context.Background(), manifest.TaskID, result); err == nil {
@@ -187,6 +195,7 @@ func TestMemoryUseCannotCrossTaskOrAttempt(t *testing.T) {
 }
 
 func TestMemoryUseRejectsRevisionChangedAfterInjection(t *testing.T) {
+	t.Parallel()
 	c, manifest := memoryValidationCoordinator(t)
 	manifest.Items[0].ContentHash = "different-revision"
 	if err := c.taskTracker.TodoList().SetMemoryManifest(manifest.TaskID, &manifest); err != nil {
@@ -199,6 +208,7 @@ func TestMemoryUseRejectsRevisionChangedAfterInjection(t *testing.T) {
 }
 
 func TestFreeTextResultCannotClaimAppliedMemory(t *testing.T) {
+	t.Parallel()
 	c, manifest := memoryValidationCoordinator(t)
 	result := ParseFreeTextResult("done")
 	result.MemoryUses = []MemoryUseRef{{RetrievalID: manifest.RetrievalID, ContextItemID: "memory-1", Disposition: MemoryUseApplied, Confidence: 1}}

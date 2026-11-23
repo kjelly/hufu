@@ -6,6 +6,7 @@ import (
 )
 
 func TestRuntimeActionFailureUsesProcessEvidenceInsteadOfLogKeywords(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name, command, category string
 		class                   TaskFailureClass
@@ -49,6 +50,7 @@ func TestRuntimeActionFailureUsesProcessEvidenceInsteadOfLogKeywords(t *testing.
 }
 
 func TestActionProviderErrorDoesNotInterpretProviderProse(t *testing.T) {
+	t.Parallel()
 	err := ActionProviderError{Capability: "independent-provider", Cause: errors.New("verification policy audit passed; deployment failed")}
 	if got := classifyTaskFailure(err); got != FailureExecution {
 		t.Fatalf("class = %s, want execution", got)
@@ -56,6 +58,7 @@ func TestActionProviderErrorDoesNotInterpretProviderProse(t *testing.T) {
 }
 
 func TestCommandActionRecognizesDirectInterrupt(t *testing.T) {
+	t.Parallel()
 	provider := &commandActionProvider{capability: "demo", command: []string{"/bin/sh", "-c", "kill -INT $$"}}
 	_, err := provider.Execute(t.Context(), Action{Capability: "demo", Type: "apply"})
 	if got := classifyTaskFailure(err); got != FailureCancelled {
@@ -64,6 +67,7 @@ func TestCommandActionRecognizesDirectInterrupt(t *testing.T) {
 }
 
 func TestActionCancellationAndEnvironmentDoNotConsumeRetryState(t *testing.T) {
+	t.Parallel()
 	session := workflowTestSession(t)
 	session.Config.Retry.Transient.MaxAttempts = 2
 	w := executePhaseWorkflow(t, session)

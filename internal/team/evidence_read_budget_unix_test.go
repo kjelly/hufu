@@ -11,6 +11,7 @@ import (
 )
 
 func TestArtifactReadBudgetRejectsSpecialFiles(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "fifo")
 	if err := unix.Mkfifo(path, 0o600); err != nil {

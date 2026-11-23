@@ -6,6 +6,7 @@ import (
 )
 
 func TestExecutionContext_Validate(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		ctx     ExecutionContext
@@ -68,6 +69,7 @@ func TestExecutionContext_Validate(t *testing.T) {
 }
 
 func TestExecutionContext_RuntimeSchemaRoundTrip(t *testing.T) {
+	t.Parallel()
 	want := ExecutionContext{
 		RunID: "run-1", Team: "team", CurrentPhase: PhaseExecute,
 		RepositoryRoot:   "/repo",

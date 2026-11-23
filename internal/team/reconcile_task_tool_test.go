@@ -10,6 +10,7 @@ import (
 )
 
 func TestReconcileTaskErrorsNameTheWrongField(t *testing.T) {
+	t.Parallel()
 	const finishHint = "call finish with acknowledge_failed_tasks:true"
 	tests := []struct {
 		name       string

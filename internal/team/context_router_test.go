@@ -10,6 +10,7 @@ import (
 )
 
 func TestContextActivationEligibilityMatrix(t *testing.T) {
+	t.Parallel()
 	dispatch := validTestContextRequest()
 	dispatch.Phase = PhaseExecute
 	dispatch.AgentRole = "coder"
@@ -45,12 +46,14 @@ func TestContextActivationEligibilityMatrix(t *testing.T) {
 }
 
 func TestContextActivationRejectsUnknownKeys(t *testing.T) {
+	t.Parallel()
 	if _, err := ParseContextActivation(map[string]string{"activation.phase": "VERIFY"}); err == nil {
 		t.Fatal("unknown activation key was accepted")
 	}
 }
 
 func TestContextEligibilityRejectsForeignCandidateAndExpired(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	request := validTestContextRequest()
 	foreign := contextstore.ContextItem{ID: "candidate", Content: "failed run", Lifecycle: contextstore.LifecycleCandidate, Metadata: map[string]string{"run_id": "failed-run"}}
@@ -65,6 +68,7 @@ func TestContextEligibilityRejectsForeignCandidateAndExpired(t *testing.T) {
 }
 
 func TestContextEligibilityRequiresExplicitVerifyActivation(t *testing.T) {
+	t.Parallel()
 	request := validTestContextRequest()
 	request.Phase = PhaseVerify
 	generic := contextstore.ContextItem{ID: "generic", Lifecycle: contextstore.LifecycleConfirmed}
@@ -87,6 +91,7 @@ func TestContextEligibilityRequiresExplicitVerifyActivation(t *testing.T) {
 }
 
 func TestContextRouterAppliesActivationBeforeCandidateLimit(t *testing.T) {
+	t.Parallel()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	c.executionRunID = "run-1"
 	c.memoryRankingPolicy = MemoryRuntimeRankingPolicy{CandidateTopK: 1, InjectTopK: 1, MinimumRelevance: 0}
@@ -112,6 +117,7 @@ func TestContextRouterAppliesActivationBeforeCandidateLimit(t *testing.T) {
 }
 
 func TestRouterReadsTypedActivationProjection(t *testing.T) {
+	t.Parallel()
 	_, repo := rankingTestCoordinator(t, agent.MemoryLearningOff)
 	item := rankingItem("typed-activation", 1)
 	item.Metadata = map[string]string{"activation.phases": "VERIFY", "activation.triggers": "tool_failure"}
@@ -137,6 +143,7 @@ func TestRouterReadsTypedActivationProjection(t *testing.T) {
 }
 
 func TestContextRouterSelectsRepositoryInvariantsWithoutContextRepository(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	task := tracker.TodoList().AddBatch([]TodoSpec{{
 		PlanTaskID: "verify-review", Agent: "reviewer", Phase: PhaseVerify,
@@ -204,6 +211,7 @@ func TestContextRouterSelectsRepositoryInvariantsWithoutContextRepository(t *tes
 }
 
 func TestContextRouterTreatsEmptyTouchedPathsAsAllApplicable(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	task := tracker.TodoList().AddBatch([]TodoSpec{{PlanTaskID: "verify-all", Agent: "reviewer", Phase: PhaseVerify, InvariantVerification: InvariantVerificationGate}})[0]
 	c := &Coordinator{taskTracker: tracker, session: &TeamSession{Config: agent.TeamConfig{Name: "review"}, InvariantCatalog: []InvariantDefinition{
@@ -225,6 +233,7 @@ func TestContextRouterTreatsEmptyTouchedPathsAsAllApplicable(t *testing.T) {
 }
 
 func TestContextRouterDoesNotRouteInvariantsForOrdinaryTask(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	task := tracker.TodoList().AddBatch([]TodoSpec{{PlanTaskID: "ordinary", Agent: "reviewer", Phase: PhaseVerify}})[0]
 	c := &Coordinator{taskTracker: tracker, session: &TeamSession{Config: agent.TeamConfig{Name: "review"}, InvariantCatalog: []InvariantDefinition{{ID: "one", Statement: "one", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}}}}

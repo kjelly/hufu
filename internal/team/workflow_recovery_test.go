@@ -7,6 +7,7 @@ import (
 )
 
 func TestResumeSettlesCompletedWorkflowPhases(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"completed", "multiple_completed", "missing_contract", "pending", "protocol", "blocked", "cancelled", "failed", "verify_missing_evidence", "verify_evidence", "optional_verify"} {
 		t.Run(mode, func(t *testing.T) {
 			c := newTestCoordinator(t)

@@ -47,6 +47,7 @@ func runGatedCoordinatorTool(t *testing.T, c *Coordinator, name, todoID string) 
 }
 
 func TestFailedWorkflowBoundsCoordinatorToolCalls(t *testing.T) {
+	t.Parallel()
 	c := failedWorkflowCoordinator(t)
 	reconcile, reconcileCall := runGatedCoordinatorTool(t, c, reconcileTaskToolName, CoordTodoID)
 	for range 5 {
@@ -79,6 +80,7 @@ func TestFailedWorkflowBoundsCoordinatorToolCalls(t *testing.T) {
 }
 
 func TestCoordinatorCallBoundResetsWhenTheWorkflowReopens(t *testing.T) {
+	t.Parallel()
 	c := failedWorkflowCoordinator(t)
 	_, viewCall := runGatedCoordinatorTool(t, c, "view", CoordTodoID)
 	for range maxCoordinatorCallsAfterWorkflowFailure {
@@ -97,6 +99,7 @@ func TestCoordinatorCallBoundResetsWhenTheWorkflowReopens(t *testing.T) {
 }
 
 func TestWorkflowFailureResultNamesTheReopeningTask(t *testing.T) {
+	t.Parallel()
 	c := failedWorkflowCoordinator(t)
 	failure := errors.New("workflow prepare failed: provider failed")
 	err := c.workflowFailureResult(failure)

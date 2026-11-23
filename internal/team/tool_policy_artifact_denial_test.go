@@ -10,6 +10,7 @@ import (
 )
 
 func TestArtifactPathDenialReachesAttemptReceipt(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{"data/blocked", "meta/blocked.json", "media/data/blocked", "media/meta/blocked.json"} {
 		t.Run(path, func(t *testing.T) {
 			c := newTestCoordinator(t)

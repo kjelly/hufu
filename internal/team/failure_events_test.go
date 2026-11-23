@@ -55,6 +55,7 @@ func failureEventSurfaces(t *testing.T, c *Coordinator) *[]StatusEvent {
 // runs without an execution run ID: the journal record takes the run ID the
 // todo list carries instead of leaving the field empty.
 func TestFailureJournalRecordFallsBackToTodoListRunID(t *testing.T) {
+	t.Parallel()
 	c, _ := failureEventCoordinator(t, "fallback", "")
 	failureEventSurfaces(t, c)
 	c.executionRunID = ""
@@ -141,6 +142,7 @@ func assertFailureEventSurfacesRedacted(t *testing.T, c *Coordinator, secret str
 }
 
 func TestBlockedRecoveryFailureEventReachesEverySurface(t *testing.T) {
+	t.Parallel()
 	c, store := failureEventCoordinator(t, "blocked-recovery", "sh")
 	reported := failureEventSurfaces(t, c)
 	c.taskTracker.TodoList().Restore([]*TodoItem{{
@@ -200,6 +202,7 @@ func TestBlockedRecoveryFailureEventReachesEverySurface(t *testing.T) {
 }
 
 func TestDAGAntiThrashingBlockPersistsStructuredFailureEvent(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {}, maxConcurrent: 1}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "blocked scope", Kind: TaskKindOutcome, Advances: []string{"build"}}})[0]
 	c.metricsMu.Lock()
@@ -220,6 +223,7 @@ func TestDAGAntiThrashingBlockPersistsStructuredFailureEvent(t *testing.T) {
 }
 
 func TestProtocolIncompleteFailureEventReachesEverySurface(t *testing.T) {
+	t.Parallel()
 	c, store := failureEventCoordinator(t, "protocol-incomplete", "sh")
 	c.session.Config.MaxRetries = 1
 	// A worker without a model keeps admission off the provider backend.
@@ -320,6 +324,7 @@ func TestProtocolIncompleteFailureEventReachesEverySurface(t *testing.T) {
 }
 
 func TestFailureEventReducerSupportsLegacyFullAndSparsePayloads(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		eventType   string
@@ -399,6 +404,7 @@ func TestFailureEventReducerSupportsLegacyFullAndSparsePayloads(t *testing.T) {
 }
 
 func TestFailureEventReducerDistinguishesClearedAndOmittedFailure(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, update string
 		cleared      bool
@@ -425,6 +431,7 @@ func TestFailureEventReducerDistinguishesClearedAndOmittedFailure(t *testing.T) 
 }
 
 func TestFailureEventIsSelfContainedAndBounded(t *testing.T) {
+	t.Parallel()
 	c, store := failureEventCoordinator(t, "bounded", "bash")
 	workspace := c.session.Workspace
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
@@ -470,6 +477,7 @@ func TestFailureEventIsSelfContainedAndBounded(t *testing.T) {
 }
 
 func TestStructuredEnvironmentClassSurvivesPersistence(t *testing.T) {
+	t.Parallel()
 	c, store := failureEventCoordinator(t, "environment", "sh")
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "verify missing tool"}})[0]
 	item.Verify = "tool status"
@@ -517,6 +525,7 @@ func TestStructuredEnvironmentClassSurvivesPersistence(t *testing.T) {
 }
 
 func TestCheckpointTaskEventRetriesAfterAppendFailure(t *testing.T) {
+	t.Parallel()
 	c, store := failureEventCoordinator(t, "append-retry", "")
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "failed task"}})[0]
 	item.Status = TaskError

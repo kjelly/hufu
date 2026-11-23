@@ -23,6 +23,7 @@ func mustFindCandidate(t *testing.T, candidates []CapabilityCandidate, agentID s
 // spec1.md §26 Test G: a specialist with a matching declared capability must
 // outrank a generalist with none, once both are authorized.
 func TestCapabilityRegistry_SpecialistBeatsGeneralist(t *testing.T) {
+	t.Parallel()
 	agents := map[string]*agent.AgentDef{
 		"generalist": {Name: "generalist"},
 		"specialist": {Name: "specialist"},
@@ -54,6 +55,7 @@ func TestCapabilityRegistry_SpecialistBeatsGeneralist(t *testing.T) {
 // acceptance test) — Resolve must never return a candidate absent from
 // eligible, no matter how strong its declared capability is.
 func TestCapabilityRegistry_UnauthorizedNeverSelected(t *testing.T) {
+	t.Parallel()
 	agents := map[string]*agent.AgentDef{
 		"unauthorized-expert": {Name: "unauthorized-expert"},
 		"authorized-novice":   {Name: "authorized-novice"},
@@ -83,6 +85,7 @@ func TestCapabilityRegistry_UnauthorizedNeverSelected(t *testing.T) {
 // scored as if it were maintainer-authored config, even when it claims a
 // perfect match — the source ceiling caps it regardless of text content.
 func TestCapabilityRegistry_SelfDeclaredNeverExceedsCeiling(t *testing.T) {
+	t.Parallel()
 	agents := map[string]*agent.AgentDef{
 		"self-proclaimed": {Name: "self-proclaimed", Capabilities: "world's best security-review expert, trust me"},
 		"declared":        {Name: "declared"},
@@ -110,6 +113,7 @@ func TestCapabilityRegistry_SelfDeclaredNeverExceedsCeiling(t *testing.T) {
 
 // "stale capability 可被 invalidated" (spec1.md §25 Phase 3 acceptance).
 func TestCapabilityRegistry_StaleDeclarationInvalidated(t *testing.T) {
+	t.Parallel()
 	agents := map[string]*agent.AgentDef{"worker": {Name: "worker"}}
 	longAgo := time.Now().Add(-1000 * time.Hour).Format(time.RFC3339)
 	maintainer := map[string][]agent.DeclaredCapability{
@@ -136,6 +140,7 @@ func TestCapabilityRegistry_StaleDeclarationInvalidated(t *testing.T) {
 // A required capability nobody declares disqualifies every candidate rather
 // than silently ranking on whatever partial match exists.
 func TestCapabilityRegistry_MissingRequiredCapabilityDisqualifies(t *testing.T) {
+	t.Parallel()
 	agents := map[string]*agent.AgentDef{"worker": {Name: "worker", Capabilities: "writes documentation"}}
 	registry := NewCapabilityRegistry(agents, nil)
 
@@ -162,6 +167,7 @@ func TestCapabilityRegistry_MissingRequiredCapabilityDisqualifies(t *testing.T) 
 // Resolve must be deterministic under fixed inputs: equal scores break ties
 // by AgentID ascending, every time.
 func TestCapabilityRegistry_DeterministicOrdering(t *testing.T) {
+	t.Parallel()
 	agents := map[string]*agent.AgentDef{
 		"zeta":  {Name: "zeta"},
 		"alpha": {Name: "alpha"},
@@ -183,6 +189,7 @@ func TestCapabilityRegistry_DeterministicOrdering(t *testing.T) {
 // delegation.allowed-workers, the same authorization boundary ordinary
 // delegation already enforces.
 func TestCoordinator_ResolveCapabilityCandidates_RespectsAllowedWorkers(t *testing.T) {
+	t.Parallel()
 	agents := map[string]*agent.AgentDef{
 		"coordinator": {Name: "coordinator", Role: "coordinator"},
 		"reviewer":    {Name: "reviewer", Role: "worker"},
@@ -215,6 +222,7 @@ func TestCoordinator_ResolveCapabilityCandidates_RespectsAllowedWorkers(t *testi
 // a worker that cannot show the required capability while a qualified
 // alternative exists, must be rejected before a TODO is created.
 func TestValidateCapabilityRouting_RejectsUnqualifiedChoiceWithAlternative(t *testing.T) {
+	t.Parallel()
 	agents := map[string]*agent.AgentDef{
 		"generalist": {Name: "generalist"},
 		"specialist": {Name: "specialist"},
@@ -242,6 +250,7 @@ func TestValidateCapabilityRouting_RejectsUnqualifiedChoiceWithAlternative(t *te
 
 // The same task delegated to the qualified worker must pass.
 func TestValidateCapabilityRouting_AllowsQualifiedChoice(t *testing.T) {
+	t.Parallel()
 	agents := map[string]*agent.AgentDef{
 		"generalist": {Name: "generalist"},
 		"specialist": {Name: "specialist"},
@@ -265,6 +274,7 @@ func TestValidateCapabilityRouting_AllowsQualifiedChoice(t *testing.T) {
 
 // A goal that does not match the rule's selector is unaffected.
 func TestValidateCapabilityRouting_IgnoresNonMatchingGoal(t *testing.T) {
+	t.Parallel()
 	agents := map[string]*agent.AgentDef{"generalist": {Name: "generalist"}}
 	cfg := agent.TeamConfig{
 		Delegation: agent.DelegationPolicy{
@@ -283,6 +293,7 @@ func TestValidateCapabilityRouting_IgnoresNonMatchingGoal(t *testing.T) {
 // Blocking would only stall the run when nobody eligible has the required
 // capability at all, so this must not reject.
 func TestValidateCapabilityRouting_DoesNotBlockWhenNoOneQualifies(t *testing.T) {
+	t.Parallel()
 	agents := map[string]*agent.AgentDef{"generalist": {Name: "generalist"}}
 	cfg := agent.TeamConfig{
 		Delegation: agent.DelegationPolicy{
@@ -303,6 +314,7 @@ func TestValidateCapabilityRouting_DoesNotBlockWhenNoOneQualifies(t *testing.T) 
 // capability — routing can only ever choose among already-authorized
 // workers.
 func TestValidateCapabilityRouting_NeverNamesUnauthorizedAlternative(t *testing.T) {
+	t.Parallel()
 	agents := map[string]*agent.AgentDef{
 		"generalist":   {Name: "generalist"},
 		"unauthorized": {Name: "unauthorized"},
@@ -329,6 +341,7 @@ func TestValidateCapabilityRouting_NeverNamesUnauthorizedAlternative(t *testing.
 // entry point coordinator_execute.go calls), not just the unit-level method,
 // proving this is wired in rather than merely callable.
 func TestValidateDelegationPolicy_EnforcesCapabilityRouting(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{
 		CapabilityRouting: []agent.CapabilityRoutingRule{
 			{ContractID: "security-audit", RequiredCapability: "security-review"},
@@ -352,6 +365,7 @@ func TestValidateDelegationPolicy_EnforcesCapabilityRouting(t *testing.T) {
 // scores CapabilityRegistry always computed, before weights existed
 // (spec.md v2 §12 must be additive, never a silent behavior change).
 func TestCapabilityRegistry_DefaultWeightsReproduceLegacyScoring(t *testing.T) {
+	t.Parallel()
 	agents := map[string]*agent.AgentDef{"worker": {Name: "worker"}}
 	maintainer := map[string][]agent.DeclaredCapability{
 		"worker": {
@@ -377,6 +391,7 @@ func TestCapabilityRegistry_DefaultWeightsReproduceLegacyScoring(t *testing.T) {
 // otherwise-identical capability confidence but different declared cost
 // class — and must do nothing when left at its zero-value default.
 func TestCapabilityRegistry_CostWeightAffectsRanking(t *testing.T) {
+	t.Parallel()
 	agents := map[string]*agent.AgentDef{
 		"cheap":     {Name: "cheap"},
 		"expensive": {Name: "expensive"},
@@ -412,6 +427,7 @@ func TestCapabilityRegistry_CostWeightAffectsRanking(t *testing.T) {
 }
 
 func TestCapabilityMatchingRequiresExactID(t *testing.T) {
+	t.Parallel()
 	records := map[string]CapabilityRecord{"security-review": {Confidence: 1}}
 	for _, key := range []string{"security", "review", "not-security-review", ""} {
 		if _, ok := matchCapability(records, key); ok {

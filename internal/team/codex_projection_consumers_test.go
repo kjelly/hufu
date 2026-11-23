@@ -12,6 +12,7 @@ import (
 )
 
 func TestCodexProjectionConsumerRejectsUnsafeMarkers(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("Codex ProcessSupervisor is not implemented on Windows")
 	}
@@ -74,6 +75,7 @@ func TestCodexProjectionConsumerRejectsUnsafeMarkers(t *testing.T) {
 }
 
 func TestCodexProjectionConsumerPreservesLiveOwners(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("Codex ProcessSupervisor is not implemented on Windows")
 	}
@@ -104,6 +106,7 @@ func TestCodexProjectionConsumerPreservesLiveOwners(t *testing.T) {
 }
 
 func TestCodexProjectionConsumerDirectoryBudget(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("Codex ProcessSupervisor is not implemented on Windows")
 	}

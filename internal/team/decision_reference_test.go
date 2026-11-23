@@ -27,6 +27,7 @@ func validReferenceDraft() ReferenceEvidenceDraft {
 }
 
 func TestReferenceEvidenceDraftValidationIsBounded(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*ReferenceEvidenceDraft)
@@ -61,6 +62,7 @@ func TestReferenceEvidenceDraftValidationIsBounded(t *testing.T) {
 }
 
 func TestReferenceEvidenceStrictDecoderRejectsUnknownAndTrailingJSON(t *testing.T) {
+	t.Parallel()
 	payload, err := json.Marshal(validReferenceDraft())
 	if err != nil {
 		t.Fatal(err)
@@ -91,6 +93,7 @@ func TestReferenceEvidenceStrictDecoderRejectsUnknownAndTrailingJSON(t *testing.
 }
 
 func TestReferenceEvidenceProducerRawLimitUsesWholeResponse(t *testing.T) {
+	t.Parallel()
 	payload, err := json.Marshal(validReferenceDraft())
 	if err != nil {
 		t.Fatal(err)
@@ -106,6 +109,7 @@ func TestReferenceEvidenceProducerRawLimitUsesWholeResponse(t *testing.T) {
 }
 
 func TestReferenceEvidenceRuntimeEnvelopeLimitsUseMatchingWriterAndReader(t *testing.T) {
+	t.Parallel()
 	entry := ReferenceEvidenceArtifact{SchemaVersion: ReferenceEvidenceSchemaVersion, InvocationID: "invocation"}
 	for len(mustReferenceEvidenceEntryBytes(t, entry)) <= ReferenceEvidenceMaxEntryBytes {
 		entry.InvocationID += "x"
@@ -163,6 +167,7 @@ func mustReferenceEvidenceResultBytes(t *testing.T, result ReferenceEvidenceResu
 }
 
 func TestReferenceEvidenceRequestContainsOnlyProducerInput(t *testing.T) {
+	t.Parallel()
 	request := ReferenceEvidenceRequest{
 		SchemaVersion: ReferenceEvidenceSchemaVersion, InvocationID: "reference-1",
 		DecisionID: "decision-1", RunID: "run-1", TaskID: "task-1", Question: "Ship?",
@@ -188,6 +193,7 @@ func TestReferenceEvidenceRequestContainsOnlyProducerInput(t *testing.T) {
 }
 
 func TestReferenceEvidencePromptDeclaresTypedProducerContract(t *testing.T) {
+	t.Parallel()
 	prompt := referenceEvidencePrompt(`{"schema_version":1}`)
 	for _, required := range []string{"ReferenceEvidenceDraft", "schema_version", "entries", "Evidence only", "ArtifactRef", "media type"} {
 		if !strings.Contains(prompt, required) {
@@ -213,6 +219,7 @@ func (r *referenceDraftRunner) RunReferenceEvidence(_ context.Context, request R
 }
 
 func TestReferenceEvidencePublishesRuntimeOwnedCASArtifacts(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
@@ -294,6 +301,7 @@ func TestReferenceEvidencePublishesRuntimeOwnedCASArtifacts(t *testing.T) {
 }
 
 func TestReferenceEvidenceResumeRequiresValidResultEnvelopeAndReusesIt(t *testing.T) {
+	t.Parallel()
 	for _, corrupt := range []bool{false, true} {
 		t.Run(map[bool]string{false: "reuse", true: "corrupt"}[corrupt], func(t *testing.T) {
 			workspace := t.TempDir()
@@ -362,6 +370,7 @@ func TestReferenceEvidenceResumeRequiresValidResultEnvelopeAndReusesIt(t *testin
 }
 
 func TestReferenceEvidenceStartedOrFailedCannotReplay(t *testing.T) {
+	t.Parallel()
 	for _, failed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "started", true: "failed"}[failed], func(t *testing.T) {
 			j := &memoryJournal{}

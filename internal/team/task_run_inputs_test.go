@@ -21,6 +21,7 @@ func setTaskInputSnapshot(t *testing.T, c *Coordinator, typed bool) *RunInputSna
 }
 
 func TestTaskRunInputsBindEveryOccurrence(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"worker", "sidecar", "action", "materialized_action", "empty_inputs"} {
 		t.Run(kind, func(t *testing.T) {
 			c := newTestCoordinator(t)
@@ -64,6 +65,7 @@ func TestTaskRunInputsBindEveryOccurrence(t *testing.T) {
 }
 
 func TestTaskRunInputsRejectDriftBeforeCreation(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"missing_snapshot", "invalid_snapshot", "foreign_team", "different_schema", "partial_binding", "different_binding", "missing_occurrence_binding"} {
 		t.Run(kind, func(t *testing.T) {
 			c := newTestCoordinator(t)
@@ -109,6 +111,7 @@ func TestTaskRunInputsRejectDriftBeforeCreation(t *testing.T) {
 }
 
 func TestInterruptedRunInputsPreserveLegacyNoInputReplay(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"legacy_no_inputs", "legacy_completed_no_inputs", "typed_inputs", "explicit_resume"} {
 		t.Run(mode, func(t *testing.T) {
 			c := newTestCoordinator(t)
@@ -137,6 +140,7 @@ func TestInterruptedRunInputsPreserveLegacyNoInputReplay(t *testing.T) {
 }
 
 func TestEmptyRunInputsRetainOriginalContextOnFollowUp(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	original := setTaskInputSnapshot(t, c, false)
 	c.executionRunID = "follow-up-run"

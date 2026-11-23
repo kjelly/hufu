@@ -35,6 +35,7 @@ func diagnosticsTestContract(t *testing.T) *CompiledResultContract {
 }
 
 func TestResultEvidenceSeparatesFetchAndCitation(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct{ name, fetch, citation string }{
 		{"matched", "fetched", "matched"}, {"mismatch", "fetched", "mismatch"},
 		{"punctuation", "fetched", "mismatch"}, {"empty_quote", "fetched", "empty"},
@@ -110,6 +111,7 @@ func TestResultEvidenceSeparatesFetchAndCitation(t *testing.T) {
 }
 
 func TestResultEvidenceCorroborationRequiresDistinctOriginsAndTargets(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"distinct", "same_origin", "same_target", "one_source"} {
 		t.Run(name, func(t *testing.T) {
 			contract := diagnosticsTestContract(t)

@@ -41,6 +41,7 @@ func writeTestFile(t *testing.T, path, content string) {
 }
 
 func TestResolveRequiredResourceReadsAndHashesContent(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeTestFile(t, filepath.Join(root, "AGENTS.md"), "rules content")
 
@@ -67,6 +68,7 @@ func TestResolveRequiredResourceReadsAndHashesContent(t *testing.T) {
 }
 
 func TestRequiredResourceMissingFailsAdmission(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	spec := agent.RequiredResourceSpec{Name: "team-rules", Kind: agent.ResourceProjectRules, Path: "does-not-exist.md", Required: true}
 
@@ -76,6 +78,7 @@ func TestRequiredResourceMissingFailsAdmission(t *testing.T) {
 }
 
 func TestOptionalMissingResourceIsSkippedNotFailed(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	spec := agent.RequiredResourceSpec{Name: "nice-to-have", Kind: agent.ResourceProjectRules, Path: "does-not-exist.md", Required: false}
 
@@ -89,6 +92,7 @@ func TestOptionalMissingResourceIsSkippedNotFailed(t *testing.T) {
 }
 
 func TestRequiredResourceDigestMismatchFailsAdmission(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeTestFile(t, filepath.Join(root, "AGENTS.md"), "rules content")
 
@@ -106,6 +110,7 @@ func TestRequiredResourceDigestMismatchFailsAdmission(t *testing.T) {
 }
 
 func TestRequiredResourceSymlinkEscapeFails(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	outside := t.TempDir()
 	writeTestFile(t, filepath.Join(outside, "secret.md"), "outside content")
@@ -125,6 +130,7 @@ func TestRequiredResourceSymlinkEscapeFails(t *testing.T) {
 }
 
 func TestResolveRequiredResourcesStopsAtFirstFailure(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeTestFile(t, filepath.Join(root, "ok.md"), "fine")
 
@@ -138,6 +144,7 @@ func TestResolveRequiredResourcesStopsAtFirstFailure(t *testing.T) {
 }
 
 func TestResolveRequiredResourcesProducesMatchingSetAndLoaded(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeTestFile(t, filepath.Join(root, "AGENTS.md"), "rules content")
 
@@ -160,6 +167,7 @@ func TestResolveRequiredResourcesProducesMatchingSetAndLoaded(t *testing.T) {
 }
 
 func TestLockedResourceSetDigestExcludesLoadedAt(t *testing.T) {
+	t.Parallel()
 	base := LockedResource{
 		Name: "team-rules", Kind: agent.ResourceProjectRules, CanonicalPath: "/root/AGENTS.md",
 		SHA256: "abc", ByteSize: 10, InjectInto: []string{"coordinator"},
@@ -175,6 +183,7 @@ func TestLockedResourceSetDigestExcludesLoadedAt(t *testing.T) {
 }
 
 func TestLockedResourceSetDigestIsOrderIndependent(t *testing.T) {
+	t.Parallel()
 	r1 := LockedResource{Name: "a", Kind: agent.ResourceSkill, CanonicalPath: "/a", SHA256: "1", ByteSize: 1}
 	r2 := LockedResource{Name: "b", Kind: agent.ResourceSkill, CanonicalPath: "/b", SHA256: "2", ByteSize: 2}
 
@@ -186,6 +195,7 @@ func TestLockedResourceSetDigestIsOrderIndependent(t *testing.T) {
 }
 
 func TestLockedResourceSetDigestChangesWithContent(t *testing.T) {
+	t.Parallel()
 	r1 := LockedResource{Name: "a", Kind: agent.ResourceSkill, CanonicalPath: "/a", SHA256: "1", ByteSize: 1}
 	r2 := LockedResource{Name: "a", Kind: agent.ResourceSkill, CanonicalPath: "/a", SHA256: "2", ByteSize: 1}
 
@@ -199,6 +209,7 @@ func TestLockedResourceSetDigestChangesWithContent(t *testing.T) {
 // behavior change. At the parser level that means an empty declaration
 // list round-trips to an empty, non-nil-checked TeamConfig field.
 func TestDefaultProfileWithoutResourcesIsCompatible(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "team.yaml"), "name: legacy-team\n")
 
@@ -212,6 +223,7 @@ func TestDefaultProfileWithoutResourcesIsCompatible(t *testing.T) {
 }
 
 func TestParseTeamYMLRequiredResources(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `name: locked-team
 required-resources:
@@ -240,6 +252,7 @@ required-resources:
 }
 
 func TestParseTeamYMLRejectsInvalidRequiredResource(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := `name: locked-team
 required-resources:
@@ -255,6 +268,7 @@ required-resources:
 }
 
 func TestValidateRequiredResourceLocksNoOpWithoutDeclaration(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	// Deliberately no event store attached: if the no-op short-circuit ever
 	// regressed to touching EventJournal() first, this would fail with
@@ -267,6 +281,7 @@ func TestValidateRequiredResourceLocksNoOpWithoutDeclaration(t *testing.T) {
 }
 
 func TestResourceLockEventContainsNoContent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "AGENTS.md"), "secret rules content")
 	specs := []agent.RequiredResourceSpec{{Name: "team-rules", Kind: agent.ResourceProjectRules, Path: "AGENTS.md", Required: true}}
@@ -303,6 +318,7 @@ func TestResourceLockEventContainsNoContent(t *testing.T) {
 }
 
 func TestLockedResourceSetSurvivesResume(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "AGENTS.md"), "rules content")
 	specs := []agent.RequiredResourceSpec{{Name: "team-rules", Kind: agent.ResourceProjectRules, Path: "AGENTS.md", Required: true}}
@@ -322,6 +338,7 @@ func TestLockedResourceSetSurvivesResume(t *testing.T) {
 }
 
 func TestLockedResourceReplayRejectsConflict(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "AGENTS.md"), "original content")
 	specs := []agent.RequiredResourceSpec{{Name: "team-rules", Kind: agent.ResourceProjectRules, Path: "AGENTS.md", Required: true}}
@@ -343,6 +360,7 @@ func TestLockedResourceReplayRejectsConflict(t *testing.T) {
 }
 
 func TestLockedResourceMutationDoesNotChangeRunInput(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "AGENTS.md"), "original content")
 	specs := []agent.RequiredResourceSpec{{Name: "team-rules", Kind: agent.ResourceProjectRules, Path: "AGENTS.md", Required: true}}

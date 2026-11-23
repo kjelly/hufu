@@ -12,6 +12,7 @@ import (
 )
 
 func TestFinishRejectsZeroTaskRunWithRequiredWorkers(t *testing.T) {
+	t.Parallel()
 	c := newBudgetCoordinator(t)
 	if err := c.SetAcceptanceSpec(AcceptanceSpec{RequiredWorkers: []string{"worker"}}); err != nil {
 		t.Fatal(err)
@@ -26,6 +27,7 @@ func TestFinishRejectsZeroTaskRunWithRequiredWorkers(t *testing.T) {
 }
 
 func TestAcceptanceRequiredWorkersRejectsEmptyAndMissingStages(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session:        &TeamSession{Config: agent.TeamConfig{Name: "staged"}},
 		projectDir:     t.TempDir(),
@@ -68,6 +70,7 @@ func TestAcceptanceRequiredWorkersRejectsEmptyAndMissingStages(t *testing.T) {
 }
 
 func TestAcceptanceRequiredWorkersRejectsRuntimeOwnedResult(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session:        &TeamSession{Config: agent.TeamConfig{Name: "staged"}},
 		projectDir:     t.TempDir(),
@@ -86,6 +89,7 @@ func TestAcceptanceRequiredWorkersRejectsRuntimeOwnedResult(t *testing.T) {
 }
 
 func TestAcceptanceRequiredWorkersCloned(t *testing.T) {
+	t.Parallel()
 	original := AcceptanceSpec{RequiredWorkers: []string{"worker"}}
 	cloned := cloneAcceptanceSpec(original)
 	original.RequiredWorkers[0] = "other"
@@ -95,6 +99,7 @@ func TestAcceptanceRequiredWorkersCloned(t *testing.T) {
 }
 
 func TestAcceptanceRequiredWorkersCountsAsConfiguredForReliability(t *testing.T) {
+	t.Parallel()
 	session := &TeamSession{Config: agent.TeamConfig{AcceptanceSpec: &agent.AcceptanceSpec{RequiredWorkers: []string{"worker"}}}}
 	if !acceptanceContractConfigured(session, nil) {
 		t.Fatal("required workers acceptance was omitted from reliability reporting")
@@ -102,6 +107,7 @@ func TestAcceptanceRequiredWorkersCountsAsConfiguredForReliability(t *testing.T)
 }
 
 func TestAcceptanceRequiredWorkersRejectsInvalidTeamReferences(t *testing.T) {
+	t.Parallel()
 	session := policyTestSession()
 	session.Config.AcceptanceSpec = &agent.AcceptanceSpec{RequiredWorkers: []string{"worker", "worker", "missing", "coordinator"}}
 	findings := validateAcceptanceRequiredWorkers(session)
@@ -111,6 +117,7 @@ func TestAcceptanceRequiredWorkersRejectsInvalidTeamReferences(t *testing.T) {
 }
 
 func TestAcceptanceRequiredWorkersAcceptGapsOnlyWhenTeamOptsIn(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		status     string
 		acceptGaps bool
@@ -147,6 +154,7 @@ func TestAcceptanceRequiredWorkersAcceptGapsOnlyWhenTeamOptsIn(t *testing.T) {
 }
 
 func TestAcceptanceRequiredWorkersAcceptGapsWithoutWorkersWarns(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		workers  []string
@@ -175,6 +183,7 @@ func TestAcceptanceRequiredWorkersAcceptGapsWithoutWorkersWarns(t *testing.T) {
 // Research stages may finish while recording an inaccessible source; staged
 // coding stages must report success.
 func TestBundledTeamsRequiredWorkerGapPolicy(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		team       string
 		acceptGaps bool

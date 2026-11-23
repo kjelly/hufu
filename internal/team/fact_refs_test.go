@@ -26,6 +26,7 @@ func coordinatorWithTaskResult(todoID string, result *TaskResult) *Coordinator {
 // (here, a JSON list) into a later task's prose -- the runtime substitutes it
 // verbatim from that task's own submitted result.
 func TestResolveFactRefs_SubstitutesFactByName(t *testing.T) {
+	t.Parallel()
 	c := coordinatorWithTaskResult("1", &TaskResult{
 		TaskID: "1", Status: "success", Summary: "discovered targets", Source: "submitted",
 		Facts: map[string]any{"container_ids": []any{"c1", "c2", "c3"}, "count": float64(3)},
@@ -57,6 +58,7 @@ func TestResolveFactRefs_SubstitutesFactByName(t *testing.T) {
 // TestResolveFactRefs_StringFactIsNotJSONQuoted proves a plain string fact
 // (e.g. a resolved path) substitutes literally, not as a quoted JSON string.
 func TestResolveFactRefs_StringFactIsNotJSONQuoted(t *testing.T) {
+	t.Parallel()
 	c := coordinatorWithTaskResult("1", &TaskResult{
 		TaskID: "1", Status: "success", Summary: "s", Source: "submitted",
 		Facts: map[string]any{"resolved_path": "/workspace/out/report.json"},
@@ -75,6 +77,7 @@ func TestResolveFactRefs_StringFactIsNotJSONQuoted(t *testing.T) {
 // resolution: the description acts as the stable name, resolving to that
 // artifact's path.
 func TestResolveFactRefs_SubstitutesArtifactByDescription(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	artifactPath := filepath.Join(workspace, "inputs", "items.tsv")
 	c := coordinatorWithTaskResult("1", &TaskResult{
@@ -95,6 +98,7 @@ func TestResolveFactRefs_SubstitutesArtifactByDescription(t *testing.T) {
 // to its path only. It does not verify the declared digest, producer attempt,
 // or source freshness before another task consumes that path.
 func TestCharacterizationFactRefAcceptsStaleArtifactPath(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	path := filepath.Join(workspace, "inputs", "items.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -124,6 +128,7 @@ func TestCharacterizationFactRefAcceptsStaleArtifactPath(t *testing.T) {
 }
 
 func TestResolveFactRefs_NoFactRefsPassThroughUnchanged(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{}, taskTracker: NewTaskTracker()}
 	tasks := []TaskDef{{Agent: "a", Goal: "g1"}, {Agent: "b", Goal: "g2"}}
 	resolved, err := c.resolveFactRefs(tasks)
@@ -136,6 +141,7 @@ func TestResolveFactRefs_NoFactRefsPassThroughUnchanged(t *testing.T) {
 }
 
 func TestResolveFactRefs_UnresolvedTaskFailsClosed(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{session: &TeamSession{}, taskTracker: NewTaskTracker()}
 	tasks := []TaskDef{{Agent: "w", Goal: "{x}", FactRefs: []FactRef{{Name: "x", TaskID: "99", Fact: "missing"}}}}
 	if _, err := c.resolveFactRefs(tasks); err == nil || !strings.Contains(err.Error(), "no submitted result yet") {
@@ -144,6 +150,7 @@ func TestResolveFactRefs_UnresolvedTaskFailsClosed(t *testing.T) {
 }
 
 func TestResolveFactRefs_UnknownFactNameFailsClosed(t *testing.T) {
+	t.Parallel()
 	c := coordinatorWithTaskResult("1", &TaskResult{TaskID: "1", Status: "success", Summary: "s", Source: "submitted", Facts: map[string]any{"a": 1}})
 	tasks := []TaskDef{{Agent: "w", Goal: "{x}", FactRefs: []FactRef{{Name: "x", TaskID: "1", Fact: "b"}}}}
 	if _, err := c.resolveFactRefs(tasks); err == nil || !strings.Contains(err.Error(), `no fact named "b"`) {
@@ -152,6 +159,7 @@ func TestResolveFactRefs_UnknownFactNameFailsClosed(t *testing.T) {
 }
 
 func TestResolveFactRefs_UnknownArtifactDescriptionFailsClosed(t *testing.T) {
+	t.Parallel()
 	c := coordinatorWithTaskResult("1", &TaskResult{TaskID: "1", Status: "success", Summary: "s", Source: "submitted"})
 	tasks := []TaskDef{{Agent: "w", Goal: "{x}", FactRefs: []FactRef{{Name: "x", TaskID: "1", Artifact: "manifest"}}}}
 	if _, err := c.resolveFactRefs(tasks); err == nil || !strings.Contains(err.Error(), `no artifact named "manifest"`) {
@@ -160,6 +168,7 @@ func TestResolveFactRefs_UnknownArtifactDescriptionFailsClosed(t *testing.T) {
 }
 
 func TestResolveFactRefs_RequiresExactlyOneOfFactOrArtifact(t *testing.T) {
+	t.Parallel()
 	c := coordinatorWithTaskResult("1", &TaskResult{TaskID: "1", Status: "success", Summary: "s", Source: "submitted"})
 	for _, ref := range []FactRef{
 		{Name: "x", TaskID: "1"},                           // neither
@@ -177,6 +186,7 @@ func TestResolveFactRefs_RequiresExactlyOneOfFactOrArtifact(t *testing.T) {
 // worker's own "facts" argument is parsed, stored, and retrievable via
 // GetTaskResult -- exactly what resolveFactRefs reads from.
 func TestSubmitResultTool_StoresFacts(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker()}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "discover targets"}})[0]
 
@@ -203,6 +213,7 @@ func TestSubmitResultTool_StoresFacts(t *testing.T) {
 // TestExecuteTasks_ResolvesFactRefsBeforeAnyTodoCreation proves the
 // ExecuteTasks wiring end to end, mirroring the fan_out integration test.
 func TestExecuteTasks_ResolvesFactRefsBeforeAnyTodoCreation(t *testing.T) {
+	t.Parallel()
 	c := newDelegationPolicyCoordinator(agent.DelegationPolicy{})
 	c.session.Workspace = t.TempDir()
 	c.storeSubmittedTaskResult("1", &TaskResult{TaskID: "1", Status: "success", Summary: "s", Source: "submitted", Facts: map[string]any{"a": "b"}})

@@ -27,6 +27,7 @@ func wp6IDs(bundle WorkerMemoryBundle) map[string]bool {
 // authorization is applied after the exact, FTS, and vector stages, so a
 // future parent result from any retrieval source cannot leak into a child.
 func TestWP6RecallAuthorizesParentMemoryAtForkAcrossRetrievalSources(t *testing.T) {
+	t.Parallel()
 	repo := wp3SetupRepo(t)
 	main := contextstore.Scope{ProjectID: "p", TeamID: "team", SessionID: "sess", BranchID: "main", AgentID: "worker"}
 	feature := main
@@ -65,6 +66,7 @@ func TestWP6RecallAuthorizesParentMemoryAtForkAcrossRetrievalSources(t *testing.
 }
 
 func TestWP6CoordinatorUsesCheckedOutBranchAndForkMemoryIDs(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	es, err := NewEventStore(workspace, "run", "session")
 	if err != nil {
@@ -106,6 +108,7 @@ func TestWP6CoordinatorUsesCheckedOutBranchAndForkMemoryIDs(t *testing.T) {
 }
 
 func TestWP6SavedSessionMemoryRecallsAcrossForkAtWorkerScope(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
@@ -215,6 +218,7 @@ func TestWP6SavedSessionMemoryRecallsAcrossForkAtWorkerScope(t *testing.T) {
 }
 
 func TestWP6PersistentPromotionRejectsWrongBranchEvidence(t *testing.T) {
+	t.Parallel()
 	repo := wp3SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 	feature := wp5Scope("worker")
@@ -230,6 +234,7 @@ func TestWP6PersistentPromotionRejectsWrongBranchEvidence(t *testing.T) {
 }
 
 func TestWP6PersistentMemoryRemainsBranchIndependentAfterPromotion(t *testing.T) {
+	t.Parallel()
 	repo := wp3SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
 	feature := wp5Scope("worker")
@@ -257,6 +262,7 @@ func TestWP6PersistentMemoryRemainsBranchIndependentAfterPromotion(t *testing.T)
 }
 
 func TestWP6ContextShadowWriteRemainsBranchNeutral(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	tree := NewSessionTree()
 	feature, err := tree.CreateBranch("feature", "", nil)

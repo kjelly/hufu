@@ -60,6 +60,7 @@ func gatewayTestContext(t *testing.T, c *Coordinator, names ...string) context.C
 }
 
 func TestDynamicToolGatewaySchemaIsInventoryIndependent(t *testing.T) {
+	t.Parallel()
 	left := newDynamicToolGateway(nil, &gatewayTestExecutor{}, []DynamicToolTarget{gatewayTestTarget()})
 	rightTarget := gatewayTestTarget()
 	rightTarget.Name = "k8s__pods"
@@ -78,6 +79,7 @@ func TestDynamicToolGatewaySchemaIsInventoryIndependent(t *testing.T) {
 }
 
 func TestDynamicToolGatewayConvertsScalarStringsBeforeAuthorizationAndTransport(t *testing.T) {
+	t.Parallel()
 	for _, workerSchema := range []bool{false, true} {
 		t.Run(fmt.Sprint(workerSchema), func(t *testing.T) {
 			c := newDirectTypedCoordinator(t, "view", nil, nil)
@@ -108,6 +110,7 @@ func TestDynamicToolGatewayConvertsScalarStringsBeforeAuthorizationAndTransport(
 }
 
 func TestDynamicToolGatewaySearchAndInspectExposeOnlyAttemptCatalog(t *testing.T) {
+	t.Parallel()
 	target := gatewayTestTarget()
 	gateway := newDynamicToolGateway(nil, &gatewayTestExecutor{}, []DynamicToolTarget{target})
 	search, err := gateway.Run(t.Context(), fantasy.ToolCall{Input: `{"action":"search","query":"pull request"}`})
@@ -125,6 +128,7 @@ func TestDynamicToolGatewaySearchAndInspectExposeOnlyAttemptCatalog(t *testing.T
 }
 
 func TestDynamicToolGatewayValidatesBeforePolicyAndTransport(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "view", nil, nil)
 	executor := &gatewayTestExecutor{text: "ok"}
 	target := gatewayTestTarget()
@@ -160,6 +164,7 @@ func TestDynamicToolGatewayValidatesBeforePolicyAndTransport(t *testing.T) {
 }
 
 func TestDynamicToolGatewayCallAppliesLogicalPermissionAndReadOnlyPolicy(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "view", nil, nil)
 	target := gatewayTestTarget()
 	valid := `{"action":"call","target":"github__get_issue","arguments":{"owner":"kjelly","issue_number":1,"labels":[],"metadata":{"open":true}}}`
@@ -190,6 +195,7 @@ func TestDynamicToolGatewayCallAppliesLogicalPermissionAndReadOnlyPolicy(t *test
 }
 
 func TestDynamicToolGatewayInvocationReceiptAndUTF8Truncation(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "view", nil, nil)
 	todoID := resolverTodoID(t, c, "dynamic-receipt")
 	target := gatewayTestTarget()
@@ -251,6 +257,7 @@ func TestDynamicToolGatewayInvocationReceiptAndUTF8Truncation(t *testing.T) {
 }
 
 func TestDynamicToolGatewayPreservesContractEvidence(t *testing.T) {
+	t.Parallel()
 	for _, targetFromOutput := range []bool{false, true} {
 		for _, scenario := range []string{"matched", "tool_error", "transport_error", "missing_section", "output_limit"} {
 			t.Run(fmt.Sprintf("%s/output_target=%t", scenario, targetFromOutput), func(t *testing.T) {
@@ -349,6 +356,7 @@ func TestDynamicToolGatewayPreservesContractEvidence(t *testing.T) {
 }
 
 func TestDynamicSchemaUnsupportedKeywordIsIneligible(t *testing.T) {
+	t.Parallel()
 	schema := map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string", "pattern": "x"}}}
 	if dynamicSchemaEligible(schema) {
 		t.Fatal("unsupported pattern schema was gateway eligible")
@@ -380,6 +388,7 @@ func gatewayProjectionFixture(t *testing.T, count int) ([]fantasy.AgentTool, []i
 }
 
 func TestProjectDynamicToolGatewayCollapsesManyTargetsAndPreservesCompatibilityModes(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "view", nil, nil)
 	concrete, descriptors, snapshot := gatewayProjectionFixture(t, 50)
 	projected, targets, err := projectDynamicToolGateway(c, concrete, nil, descriptors, snapshot, WorkerToolResolutionNormal, nil)
@@ -401,6 +410,7 @@ func TestProjectDynamicToolGatewayCollapsesManyTargetsAndPreservesCompatibilityM
 }
 
 func TestProjectDynamicToolGatewayOrdersSurfaceAndFailsOnCollision(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "view", nil, nil)
 	managerTools, descriptors, snapshot := gatewayProjectionFixture(t, 1)
 	base := []fantasy.AgentTool{
@@ -441,6 +451,7 @@ func TestProjectDynamicToolGatewayOrdersSurfaceAndFailsOnCollision(t *testing.T)
 }
 
 func TestDynamicGatewayKeepsProviderDigestStableAndLogicalDigestDistinct(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "view", nil, nil)
 	def := &agent.AgentDef{Name: "worker"}
 	oneTools, oneDescriptors, oneSnapshot := gatewayProjectionFixture(t, 1)

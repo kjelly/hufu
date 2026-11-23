@@ -53,6 +53,7 @@ func evidenceTestStore(t *testing.T) (*FileArtifactStore, []ArtifactRef) {
 
 // Gates block before JUDGE: no judge is dispatched at all (spec §19, §17).
 func TestPreJudgeGatesBlockBeforeDispatch(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		mutatePol  func(*DecisionPolicy)
@@ -105,6 +106,7 @@ func TestPreJudgeGatesBlockBeforeDispatch(t *testing.T) {
 
 // Supplying the required evidence lets the same decision proceed.
 func TestOutsideViewSatisfiedProceeds(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
@@ -137,6 +139,7 @@ func TestOutsideViewSatisfiedProceeds(t *testing.T) {
 // Challenge runs only after aggregation and sees anonymized opinions, never
 // judge identity (spec §23).
 func TestChallengeRunsAfterAggregateAndIsAnonymized(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	challenger := &stubChallenger{}
 	engine := newTestEngineWithStages(journal, spreadRunner(), nil, DecisionServices{
@@ -184,6 +187,7 @@ func TestChallengeRunsAfterAggregateAndIsAnonymized(t *testing.T) {
 // A trigger that does not fire records the observed dispersion rather than
 // leaving the skip invisible (spec §22).
 func TestChallengeSkipIsRecorded(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	// All judges agree, so dispersion is zero.
 	runner := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
@@ -214,6 +218,7 @@ func TestChallengeSkipIsRecorded(t *testing.T) {
 // Revision is one independent second look: the judge sees the aggregate and the
 // challenge, never another judge's individual view, and the round is bounded.
 func TestRevisionIsBoundedAndIndependent(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	reviser := &stubReviser{respond: func(judgeID string) (DecisionRevision, error) {
 		if judgeID == "judge-3" {
@@ -272,6 +277,7 @@ func TestRevisionIsBoundedAndIndependent(t *testing.T) {
 // An unchanged revision carries the original scores forward rather than making
 // the judge retype them.
 func TestUnchangedRevisionPreservesScores(t *testing.T) {
+	t.Parallel()
 	packet := aggregatePacket(t)
 	weights, _ := normalizedWeights(packet.Criteria)
 	original := opinion("judge-1", packet.Hash, [2]float64{8, 6}, [2]float64{4, 4}, "a", 0.7)
@@ -298,6 +304,7 @@ func TestUnchangedRevisionPreservesScores(t *testing.T) {
 }
 
 func TestValidateRevisionRejectsBadOutput(t *testing.T) {
+	t.Parallel()
 	packet := aggregatePacket(t)
 	weights, _ := normalizedWeights(packet.Criteria)
 	original := opinion("judge-1", packet.Hash, [2]float64{8, 6}, [2]float64{4, 4}, "a", 0.7)
@@ -323,6 +330,7 @@ func TestValidateRevisionRejectsBadOutput(t *testing.T) {
 // A required premortem that produces nothing blocks before the decision is
 // finalized (spec §24, test matrix H).
 func TestRequiredPremortemBlocks(t *testing.T) {
+	t.Parallel()
 	policy := phase2Policy()
 	policy.Premortem.RequiredBeforeCommit = true
 
@@ -355,6 +363,7 @@ func TestRequiredPremortemBlocks(t *testing.T) {
 // The premortem's early warning signals become the decision's falsification
 // conditions, which is what a required forecast needs (spec §24, §40).
 func TestPremortemFeedsFalsificationConditions(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	policy := phase2Policy()
 	policy.Forecast.Required = true
@@ -379,6 +388,7 @@ func TestPremortemFeedsFalsificationConditions(t *testing.T) {
 
 // A required forecast with no usable probability blocks the decision.
 func TestRequiredForecastBlocksWithoutProbability(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	policy := phase2Policy()
 	policy.Forecast.Required = true
@@ -399,6 +409,7 @@ func TestRequiredForecastBlocksWithoutProbability(t *testing.T) {
 
 // Independence counts land on the record and shared origins warn (spec §28.2).
 func TestRecordCarriesIndependenceCounts(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	store, refs := evidenceTestStore(t)
 	policy := enginePolicy(2)
@@ -425,6 +436,7 @@ func TestRecordCarriesIndependenceCounts(t *testing.T) {
 
 // V1 keeps the independence requirement advisory unless a team opts in.
 func TestIndependenceRequirementIsOptIn(t *testing.T) {
+	t.Parallel()
 	store, refs := evidenceTestStore(t)
 	req := engineRequest(enginePolicy(2))
 	req.Artifacts = refs
@@ -442,6 +454,7 @@ func TestIndependenceRequirementIsOptIn(t *testing.T) {
 
 // Stages are resumable: a durable challenge or revision is not re-run.
 func TestPhase2StagesResumeWithoutRerunning(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	challenger := &stubChallenger{}
 	reviser := &stubReviser{}

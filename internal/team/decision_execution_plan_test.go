@@ -9,6 +9,7 @@ import (
 )
 
 func TestCompileDecisionExecutionPlanProjectsEffectiveStages(t *testing.T) {
+	t.Parallel()
 	policy := enginePolicy(3)
 	policy.OptionProposal.Enabled = true
 	policy.OutsideView = OutsideViewPolicy{Required: true, ReferenceEvidence: true}
@@ -44,12 +45,14 @@ func TestCompileDecisionExecutionPlanProjectsEffectiveStages(t *testing.T) {
 }
 
 func TestCompileDecisionExecutionPlanRejectsInvalidPolicy(t *testing.T) {
+	t.Parallel()
 	if _, err := CompileDecisionExecutionPlan(enginePolicy(0)); err == nil {
 		t.Fatal("invalid policy produced an execution plan")
 	}
 }
 
 func TestDecisionExecutionIsIndependentOfProfileDisplayName(t *testing.T) {
+	t.Parallel()
 	policy := enginePolicy(2)
 	cfg := DecisionConfig{
 		DefaultProfile: "alpha",
@@ -109,6 +112,7 @@ func TestDecisionExecutionIsIndependentOfProfileDisplayName(t *testing.T) {
 }
 
 func TestPresetSchemaCannotGrantAgentOrToolAuthority(t *testing.T) {
+	t.Parallel()
 	for _, extra := range []string{"    agents: [unauthorized]\n", "    tools: [bash]\n"} {
 		doc := []byte("profiles:\n  standard:\n    preset: builtin/standard@v1\n" + extra)
 		var cfg DecisionConfig

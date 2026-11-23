@@ -10,6 +10,7 @@ import (
 )
 
 func TestDualWriteEventStoreIntegration(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	session := NewSession()
 
@@ -53,6 +54,7 @@ func TestDualWriteEventStoreIntegration(t *testing.T) {
 }
 
 func TestCoordinatorRunEmitsSessionEvents(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	teamSession := &TeamSession{Workspace: dir, Config: agent.TeamConfig{Name: "test-team"}}
 	coord := &Coordinator{
@@ -99,6 +101,7 @@ func TestCoordinatorRunEmitsSessionEvents(t *testing.T) {
 }
 
 func TestDeduplicatedTaskEventsEmission(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	teamSession := &TeamSession{Workspace: dir}
 	coord := &Coordinator{
@@ -151,6 +154,7 @@ func TestDeduplicatedTaskEventsEmission(t *testing.T) {
 }
 
 func TestResumeAfterWorkerSuccessThenPolicyErrorPreservesCanonicalTaskShadow(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	live := &Coordinator{
 		session: &TeamSession{
@@ -281,6 +285,7 @@ func TestResumeAfterWorkerSuccessThenPolicyErrorPreservesCanonicalTaskShadow(t *
 }
 
 func TestCheckpointDoesNotAdvanceTaskWhenCanonicalEventAppendFails(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	coord := &Coordinator{
 		session:     &TeamSession{Workspace: workspace},

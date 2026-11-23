@@ -9,6 +9,7 @@ import (
 // Events appended through an EventStore bound to a branch must be stamped with
 // that branch's ID so CLI-created branches collect their own events (R1).
 func TestEventStore_BranchIDTagging(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	es, err := NewEventStore(tempDir, "run-1", "session-1")
 	if err != nil {
@@ -40,6 +41,7 @@ func TestEventStore_BranchIDTagging(t *testing.T) {
 // the session tree so a run after `hufu session checkout <branch>`
 // writes its events into that branch's lineage (R1).
 func TestCoordinatorInitEventStore_TagsActiveBranch(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	st := NewSessionTree()
 	exp, err := st.CreateBranch("exp", "", nil)
@@ -79,6 +81,7 @@ func TestCoordinatorInitEventStore_TagsActiveBranch(t *testing.T) {
 }
 
 func TestCoordinatorInitEventStore_FreshSessionUsesIndependentRootBranch(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	st := NewSessionTree()
 	if err := SaveSessionTree(workspace, st); err != nil {

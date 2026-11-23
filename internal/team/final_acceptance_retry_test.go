@@ -85,6 +85,7 @@ func acceptanceRetryCoordinator(t *testing.T, c *Coordinator, source *ResumeSour
 }
 
 func TestFinalAcceptanceRetryPreservesCompletedWork(t *testing.T) {
+	t.Parallel()
 	for _, outcome := range []string{"passed", "timeout", "cancelled", "negative"} {
 		t.Run(outcome, func(t *testing.T) {
 			c, source := finalAcceptanceRetryFixture(t)
@@ -164,6 +165,10 @@ func TestFinalAcceptanceRetryPreservesCompletedWork(t *testing.T) {
 }
 
 func TestFinalAcceptanceRetryRejectsUnsafeSources(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, name := range []string{"old_run", "changed_response", "changed_contract", "negative", "material_veto", "unresolved", "already_passed", "other_acceptance_failure", "protocol_error", "policy_drift"} {
 		t.Run(name, func(t *testing.T) {
 			c, source := finalAcceptanceRetryFixture(t)
@@ -221,6 +226,7 @@ func acceptanceRetryEvents(t *testing.T, c *Coordinator) []RunEvent {
 }
 
 func TestFinalAcceptanceRetryRestoresOnlyHashBoundAnswer(t *testing.T) {
+	t.Parallel()
 	review := &RequestAcceptanceResult{Error: "request acceptance review: context deadline exceeded", ResponseHash: runInputHash([]byte("complete original answer"))}
 	footer := "\n\n⚠️ ACCEPTANCE CHECK FAILED: " + review.Error + "\nThe run ends without success because the runtime workflow is done and accepts no new tasks."
 	for _, tc := range []struct {

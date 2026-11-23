@@ -89,6 +89,7 @@ func readCostEvents(t *testing.T, store *EventStore) []cost.Event {
 }
 
 func TestAgentExecutionBackendRequiresCostBoundary(t *testing.T) {
+	t.Parallel()
 	provider := &externalCostTestProvider{name: "codex"}
 	if _, err := NewAgentExecutionBackend("codex", provider, nil); err == nil {
 		t.Fatal("external backend accepted without cost boundary")
@@ -96,6 +97,7 @@ func TestAgentExecutionBackendRequiresCostBoundary(t *testing.T) {
 }
 
 func TestAgentExecutionBackendRejectsRunIdentityDriftBeforeProvider(t *testing.T) {
+	t.Parallel()
 	manager := newExternalCostManager(t, cost.PriceConfig{
 		BillingMode: cost.BillingMetered, OpaqueMaxUSDPerInvocation: "0.75",
 	}, cost.PolicyConfig{MaxRunUSD: "2"})
@@ -116,6 +118,7 @@ func TestAgentExecutionBackendRejectsRunIdentityDriftBeforeProvider(t *testing.T
 }
 
 func TestAgentExecutionBackendUsesOpaqueAdmissionThenObservedUsage(t *testing.T) {
+	t.Parallel()
 	manager := newExternalCostManager(t, cost.PriceConfig{
 		BillingMode: cost.BillingMetered, InputUSDPerMillion: "1", OutputUSDPerMillion: "1",
 		OpaqueMaxUSDPerInvocation: "0.75",
@@ -152,6 +155,7 @@ func TestAgentExecutionBackendUsesOpaqueAdmissionThenObservedUsage(t *testing.T)
 }
 
 func TestAgentExecutionBackendKeepsOpaqueBoundWithoutCompleteUsage(t *testing.T) {
+	t.Parallel()
 	manager := newExternalCostManager(t, cost.PriceConfig{
 		BillingMode: cost.BillingMetered, InputUSDPerMillion: "1", OutputUSDPerMillion: "1",
 		OpaqueMaxUSDPerInvocation: "0.75",
@@ -172,6 +176,7 @@ func TestAgentExecutionBackendKeepsOpaqueBoundWithoutCompleteUsage(t *testing.T)
 }
 
 func TestAgentExecutionBackendDeniesUnboundedOpaqueCostBeforeProvider(t *testing.T) {
+	t.Parallel()
 	manager := newExternalCostManager(t, cost.PriceConfig{
 		BillingMode: cost.BillingMetered, InputUSDPerMillion: "1", OutputUSDPerMillion: "1",
 	}, cost.PolicyConfig{MaxRunUSD: "2"})
@@ -193,6 +198,7 @@ func TestAgentExecutionBackendDeniesUnboundedOpaqueCostBeforeProvider(t *testing
 }
 
 func TestAgentExecutionBackendAllowsUnknownOpaqueCostOnlyWithoutHardBudget(t *testing.T) {
+	t.Parallel()
 	manager := newExternalCostManager(t, cost.PriceConfig{
 		BillingMode: cost.BillingMetered, InputUSDPerMillion: "1", OutputUSDPerMillion: "1",
 	}, cost.PolicyConfig{UnknownPricePolicy: cost.UnknownPriceAllow})
@@ -216,6 +222,7 @@ func TestAgentExecutionBackendAllowsUnknownOpaqueCostOnlyWithoutHardBudget(t *te
 }
 
 func TestAgentExecutionBackendKeepsNonMeteredBillingExplicit(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mode   cost.BillingMode
@@ -248,6 +255,7 @@ func TestAgentExecutionBackendKeepsNonMeteredBillingExplicit(t *testing.T) {
 }
 
 func TestAgentExecutionBackendSettlementFailurePreservesProviderResultAndLatchesIntegrity(t *testing.T) {
+	t.Parallel()
 	manager := newExternalCostManager(t, cost.PriceConfig{
 		BillingMode: cost.BillingMetered, OpaqueMaxUSDPerInvocation: "0.75",
 	}, cost.PolicyConfig{MaxRunUSD: "2"})

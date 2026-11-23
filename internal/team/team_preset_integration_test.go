@@ -13,6 +13,7 @@ import (
 // so they must load through the ordinary CompileTeam/LoadTeam pipeline
 // like any hand-authored team, with no dedicated runtime support.
 func TestTeamPreset_RenderedFilesCompileThroughOrdinaryPipeline(t *testing.T) {
+	t.Parallel()
 	for _, name := range preset.TeamNames() {
 		name := name
 		t.Run(name, func(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 )
 
 func TestProviderRejectsMediaBeforeTransport(t *testing.T) {
+	t.Parallel()
 	file := fantasy.FilePart{Data: []byte("opaque-image"), MediaType: "image/png"}
 	tool := fantasy.ToolResultPart{ToolCallID: "tool", Output: fantasy.ToolResultOutputContentMedia{MediaType: "image/png", Data: "opaque"}}
 	for _, part := range []fantasy.MessagePart{file, &file, tool, &tool, fantasy.FilePart{MediaType: "text/plain", Data: []byte("opaque")}} {

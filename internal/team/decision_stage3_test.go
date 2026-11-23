@@ -63,6 +63,7 @@ func stage3PartialDecisionWithRunID(t *testing.T, policy DecisionPolicy, runID s
 }
 
 func TestDecisionResumeUsesAnchoredOccurrenceAcrossRecoveryReceipts(t *testing.T) {
+	t.Parallel()
 	policy := enginePolicy(3)
 	policy.Discipline = DisciplinePolicy{
 		Stop:   StopPolicy{CheckpointEvery: 7},
@@ -152,6 +153,7 @@ func TestDecisionResumeUsesAnchoredOccurrenceAcrossRecoveryReceipts(t *testing.T
 }
 
 func TestDecisionOccurrenceLookupFindsAnchorBeforeAnyWorkerReceipt(t *testing.T) {
+	t.Parallel()
 	store, journal, req, _ := stage3PartialDecisionWithRunID(t, enginePolicy(3), "run-A")
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "resume decision"}})[0]
@@ -177,6 +179,7 @@ func TestDecisionOccurrenceLookupFindsAnchorBeforeAnyWorkerReceipt(t *testing.T)
 }
 
 func TestDecisionOccurrenceLookupFailsClosedForCorruptBranchTree(t *testing.T) {
+	t.Parallel()
 	store, journal, req, _ := stage3PartialDecisionWithRunID(t, enginePolicy(3), "run-A")
 	workspace := filepath.Dir(filepath.Dir(store.root))
 	storeRawSessionTree(t, workspace, "main", rawSessionBranch{id: "main", name: "main", state: "{not-json"})
@@ -196,6 +199,7 @@ func TestDecisionOccurrenceLookupFailsClosedForCorruptBranchTree(t *testing.T) {
 }
 
 func TestDecisionOccurrenceLookupFailsClosedForMissingActiveBranch(t *testing.T) {
+	t.Parallel()
 	store, journal, req, _ := stage3PartialDecisionWithRunID(t, enginePolicy(3), "run-A")
 	workspace := filepath.Dir(filepath.Dir(store.root))
 	storeRawSessionTree(t, workspace, "missing", rawSessionBranch{id: "main", name: "main"})
@@ -215,6 +219,7 @@ func TestDecisionOccurrenceLookupFailsClosedForMissingActiveBranch(t *testing.T)
 }
 
 func TestDecisionOccurrenceLookupFailsClosedForCyclicActiveBranch(t *testing.T) {
+	t.Parallel()
 	store, journal, req, _ := stage3PartialDecisionWithRunID(t, enginePolicy(3), "run-A")
 	workspace := filepath.Dir(filepath.Dir(store.root))
 	storeRawSessionTree(t, workspace, "main", rawSessionBranch{id: "main", name: "main", parent: "main"})
@@ -234,6 +239,7 @@ func TestDecisionOccurrenceLookupFailsClosedForCyclicActiveBranch(t *testing.T) 
 }
 
 func TestDecisionTransitionKeysIgnoreRetryTimestamps(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	assumptions := []DecisionAssumption{{ID: "A1", Statement: "traffic stays flat"}}
 	for _, at := range []time.Time{
@@ -273,6 +279,7 @@ func TestDecisionTransitionKeysIgnoreRetryTimestamps(t *testing.T) {
 }
 
 func TestDecisionEngineStage3FreshEngineResumeReusesTwoOpinions(t *testing.T) {
+	t.Parallel()
 	store, journal, req, _ := stage3PartialDecision(t)
 	recovered := newRecordingRunner(func(judgeID string, _ int) (DecisionOpinion, error) {
 		if judgeID != "judge-3" {
@@ -294,6 +301,7 @@ func TestDecisionEngineStage3FreshEngineResumeReusesTwoOpinions(t *testing.T) {
 }
 
 func TestDecisionEngineStage3RepeatFinalizedFreshEngineIsNoop(t *testing.T) {
+	t.Parallel()
 	store, journal, req, _ := stage3PartialDecision(t)
 	recovered := newRecordingRunner(func(string, int) (DecisionOpinion, error) {
 		return scoredOpinion(3, 9, "wait", 0.3), nil
@@ -325,6 +333,7 @@ func TestDecisionEngineStage3RepeatFinalizedFreshEngineIsNoop(t *testing.T) {
 }
 
 func TestDecisionEngineStage3RejectsMissingCorruptAndMismatchedEnvelope(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*FileArtifactStore, *memoryJournal, ArtifactRef)
@@ -368,6 +377,7 @@ func TestDecisionEngineStage3RejectsMissingCorruptAndMismatchedEnvelope(t *testi
 }
 
 func TestDecisionEngineStage3EnvelopeCommitOrdering(t *testing.T) {
+	t.Parallel()
 	store, journal, req, ref := stage3PartialDecision(t)
 	if _, err := store.Resolve(context.Background(), ref); err != nil {
 		t.Fatalf("envelope was not durable: %v", err)
@@ -391,6 +401,7 @@ func TestDecisionEngineStage3EnvelopeCommitOrdering(t *testing.T) {
 }
 
 func TestDecisionEngineStage3LegacyFinalizedResumeRemainsReadable(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	record := DecisionRecord{SchemaVersion: 1, ID: "legacy", RunID: "run-1", TaskID: "task-1", FinalOption: "wait"}
 	raw, err := marshalDecisionEvent(decisionEvent{DecisionID: "legacy", Record: &record})
@@ -411,6 +422,7 @@ func TestDecisionEngineStage3LegacyFinalizedResumeRemainsReadable(t *testing.T) 
 }
 
 func TestDecisionEngineStage4FinalizationSchemaDiscriminator(t *testing.T) {
+	t.Parallel()
 	for _, recordSchema := range []int{1, DecisionRecordSchemaVersion} {
 		for _, eventSchema := range []int{eventStoreLegacySchemaVersion, eventStoreSchemaVersion} {
 			t.Run(fmt.Sprintf("record-v%d-event-v%d", recordSchema, eventSchema), func(t *testing.T) {
@@ -511,6 +523,7 @@ func mutateDecisionEventPayload(t *testing.T, journal *memoryJournal, eventType 
 }
 
 func TestDecisionEngineStage4V2FinalizedReplayRequiresMatchingResultAndArtifact(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*decisionEvent)
@@ -553,6 +566,7 @@ func TestDecisionEngineStage4V2FinalizedReplayRequiresMatchingResultAndArtifact(
 }
 
 func TestDecisionEngineStage4V2FinalizedReplayWithMatchingResultAndArtifact(t *testing.T) {
+	t.Parallel()
 	journal, store, record := stage4FinalizedReplayFixture(t)
 	got, err := NewDecisionEngine(DecisionServices{Journal: journal, Store: store}).Resume(context.Background(), record.ID)
 	if err != nil {
@@ -564,6 +578,7 @@ func TestDecisionEngineStage4V2FinalizedReplayWithMatchingResultAndArtifact(t *t
 }
 
 func TestDecisionOccurrenceLookupUsesCheckpointedRunAfterStartupReroute(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "resume decision"}})[0]
@@ -600,6 +615,7 @@ func TestDecisionOccurrenceLookupUsesCheckpointedRunAfterStartupReroute(t *testi
 }
 
 func TestDecisionPostEnvelopeEventReceivesAnchoredProvenance(t *testing.T) {
+	t.Parallel()
 	store, journal, req, _ := stage3PartialDecision(t)
 	state, err := projectDecision(context.Background(), journal, req.DecisionID)
 	if err != nil {

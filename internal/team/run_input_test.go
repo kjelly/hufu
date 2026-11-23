@@ -36,6 +36,7 @@ func (p *testRunInputResolverProvider) ResolveRunInput(_ context.Context, reques
 }
 
 func TestLoadTeamNormalizesStrictTypedInputManifest(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	manifest := `apiVersion: hufu.io/v1alpha1
 kind: AgentTeam
@@ -73,6 +74,7 @@ spec:
 }
 
 func TestLoadTeamRejectsUnsafeOrUnknownTypedInputSchema(t *testing.T) {
+	t.Parallel()
 	for name, input := range map[string]string{
 		"unknown keyword": "type: string\n      pattern: '.*'",
 		"secret":          "type: string\n      secret: true",
@@ -95,6 +97,7 @@ func TestLoadTeamRejectsUnsafeOrUnknownTypedInputSchema(t *testing.T) {
 }
 
 func TestResolveRunInputSnapshotCanonicalizesSourcesAndDefaults(t *testing.T) {
+	t.Parallel()
 	definitions := []RunInputDefinition{
 		{Name: "optional", Schema: RunInputSchema{Type: "boolean"}},
 		{Name: "review.count", Schema: RunInputSchema{Type: "integer", Minimum: new(1.0), Maximum: new(100.0)}, Required: true, Default: json.RawMessage(`10`)},
@@ -119,6 +122,7 @@ func TestResolveRunInputSnapshotCanonicalizesSourcesAndDefaults(t *testing.T) {
 }
 
 func TestRunInputSnapshotJSONRoundTrip(t *testing.T) {
+	t.Parallel()
 	definitions := []RunInputDefinition{{Name: "review.scope", Required: true, Schema: RunInputSchema{Type: "object", Properties: map[string]RunInputSchema{
 		"count": {Type: "integer"}, "head": {Type: "string"}, "large": {Type: "integer"},
 		"paths": {Type: "array", Items: &RunInputSchema{Type: "string"}},
@@ -192,6 +196,7 @@ func TestRunInputSnapshotJSONRoundTrip(t *testing.T) {
 }
 
 func TestResolveRunInputSnapshotFailsClosedOnConflictAndInvalidValues(t *testing.T) {
+	t.Parallel()
 	definitions := []RunInputDefinition{{Name: "count", Schema: RunInputSchema{Type: "integer"}, Required: true}}
 	tests := []struct {
 		name        string
@@ -215,6 +220,7 @@ func TestResolveRunInputSnapshotFailsClosedOnConflictAndInvalidValues(t *testing
 }
 
 func TestResolveRunInputSnapshotMergesResolverWithoutSilentPrecedence(t *testing.T) {
+	t.Parallel()
 	definitions := []RunInputDefinition{{Name: "count", Schema: RunInputSchema{Type: "integer"}, Required: true}}
 	resolver := RunInputAssignment{
 		Name: "count", RawValue: []byte("3"), Source: RunInputSourceResolver,
@@ -241,6 +247,7 @@ func TestResolveRunInputSnapshotMergesResolverWithoutSilentPrecedence(t *testing
 }
 
 func TestRunInputResolverResponseFailsClosed(t *testing.T) {
+	t.Parallel()
 	for name, response := range map[string]RunInputResolverResponse{
 		"unknown status":     {Status: "guessed"},
 		"matched no version": {Status: "matched", Value: json.RawMessage(`1`)},
@@ -256,6 +263,7 @@ func TestRunInputResolverResponseFailsClosed(t *testing.T) {
 }
 
 func TestRunInputResolverSemanticGuidanceValidation(t *testing.T) {
+	t.Parallel()
 	base := RunInputResolverSpec{
 		ID: "scope-v1", Capability: "resolve-scope", Type: "resolve_scope",
 		Source: "invocation_prompt", SideEffect: "none", Timeout: 1,
@@ -276,6 +284,7 @@ func TestRunInputResolverSemanticGuidanceValidation(t *testing.T) {
 }
 
 func TestCoordinatorResolverUsesPromptAndExplicitCandidateBeforeSnapshot(t *testing.T) {
+	t.Parallel()
 	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
 	resolver := &testRunInputResolverProvider{response: RunInputResolverResponse{
 		Status: "matched", Value: json.RawMessage(`3`), ResolverVersion: "1",
@@ -314,6 +323,7 @@ func TestCoordinatorResolverUsesPromptAndExplicitCandidateBeforeSnapshot(t *test
 }
 
 func TestCoordinatorResolverAmbiguityFailsBeforeTaskOrModelBoundary(t *testing.T) {
+	t.Parallel()
 	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
 	resolver := &testRunInputResolverProvider{response: RunInputResolverResponse{Status: "ambiguous", Diagnostic: "two incompatible scopes"}}
 	coordinator.session.RunInputDefinitions = []RunInputDefinition{{
@@ -348,6 +358,7 @@ func TestCoordinatorResolverAmbiguityFailsBeforeTaskOrModelBoundary(t *testing.T
 }
 
 func TestInterruptedRunReusesFrozenInputsAndRejectsResumeDrift(t *testing.T) {
+	t.Parallel()
 	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
 	coordinator.SetSessionData(NewSession())
 	definitions := []RunInputDefinition{{Name: "count", Schema: RunInputSchema{Type: "integer"}, Required: true}}
@@ -375,6 +386,7 @@ func TestInterruptedRunReusesFrozenInputsAndRejectsResumeDrift(t *testing.T) {
 }
 
 func TestRunInputSchemasEnforceSupportedScalarArrayAndSizeBounds(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		schema RunInputSchema
@@ -404,6 +416,7 @@ func TestRunInputSchemasEnforceSupportedScalarArrayAndSizeBounds(t *testing.T) {
 }
 
 func TestResolveRunInputSnapshotFreezesEmptyInputs(t *testing.T) {
+	t.Parallel()
 	snapshot, err := ResolveRunInputSnapshot(nil, nil, "run", "invocation", "legacy")
 	if err != nil || snapshot == nil || len(snapshot.Inputs) != 0 || ValidateRunInputSnapshot(snapshot) != nil {
 		t.Fatalf("no-input resolution = %#v, err=%v", snapshot, err)
@@ -418,6 +431,7 @@ func TestResolveRunInputSnapshotFreezesEmptyInputs(t *testing.T) {
 }
 
 func TestResolveRunInputSnapshotEnforcesAggregateSize(t *testing.T) {
+	t.Parallel()
 	definitions := make([]RunInputDefinition, maxRunInputDefinitions)
 	value := json.RawMessage(`"` + strings.Repeat("x", 5_000) + `"`)
 	for index := range definitions {
@@ -429,6 +443,7 @@ func TestResolveRunInputSnapshotEnforcesAggregateSize(t *testing.T) {
 }
 
 func TestRunInputObjectValidationAndHashStability(t *testing.T) {
+	t.Parallel()
 	allowAdditional := false
 	schema := RunInputSchema{Type: "object", Properties: map[string]RunInputSchema{
 		"kind":  {Type: "string", Enum: []json.RawMessage{json.RawMessage(`"last_n"`)}},
@@ -453,6 +468,7 @@ func TestRunInputObjectValidationAndHashStability(t *testing.T) {
 }
 
 func TestRunInputSnapshotCloneHasNoMutableAliases(t *testing.T) {
+	t.Parallel()
 	original := &RunInputSnapshot{Inputs: []ResolvedRunInput{{CanonicalValue: json.RawMessage(`{"x":1}`), Evidence: []InputEvidence{{Location: "original"}}}}}
 	clone := CloneRunInputSnapshot(original)
 	clone.Inputs[0].CanonicalValue[2] = 'y'
@@ -463,6 +479,7 @@ func TestRunInputSnapshotCloneHasNoMutableAliases(t *testing.T) {
 }
 
 func TestRunInputsResolvedEventReplaysFrozenSnapshot(t *testing.T) {
+	t.Parallel()
 	snapshot, err := ResolveRunInputSnapshot([]RunInputDefinition{{Name: "value", Schema: RunInputSchema{Type: "string"}, Default: json.RawMessage(`"x"`)}}, nil, "run-1", "invocation-1", "demo")
 	if err != nil {
 		t.Fatal(err)
@@ -478,6 +495,7 @@ func TestRunInputsResolvedEventReplaysFrozenSnapshot(t *testing.T) {
 }
 
 func TestRunInputsResolvedEventRetainsChatInvocationHistory(t *testing.T) {
+	t.Parallel()
 	definition := []RunInputDefinition{{Name: "value", Schema: RunInputSchema{Type: "integer"}, Required: true}}
 	first, err := ResolveRunInputSnapshot(definition, []RunInputAssignment{{Name: "value", RawValue: []byte("1"), Source: RunInputSourceCLI}}, "run-1", "run-1:invocation", "demo")
 	if err != nil {
@@ -499,6 +517,7 @@ func TestRunInputsResolvedEventRetainsChatInvocationHistory(t *testing.T) {
 }
 
 func TestExecutionPolicyConfigurationHashIncludesRunInputSchema(t *testing.T) {
+	t.Parallel()
 	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
 	without := coordinator.ExecutionPolicySnapshot()
 	coordinator.session.RunInputDefinitions = []RunInputDefinition{{Name: "value", Schema: RunInputSchema{Type: "string"}, Default: json.RawMessage(`"x"`)}}
@@ -512,6 +531,7 @@ func TestExecutionPolicyConfigurationHashIncludesRunInputSchema(t *testing.T) {
 }
 
 func TestRunInputSnapshotIsPersistedAfterPolicyAndBeforeProviderBoundary(t *testing.T) {
+	t.Parallel()
 	coordinator := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 1)
 	coordinator.session.RunInputDefinitions = []RunInputDefinition{{Name: "value", Schema: RunInputSchema{Type: "string"}, Required: true}}
 	state, err := newExecutionPolicyState(coordinator)
@@ -566,6 +586,7 @@ func writeTypedInputFixture(t *testing.T, dir, manifest string) {
 }
 
 func TestRunInputConflictValueIsRedactedAndBounded(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		value string
@@ -606,6 +627,7 @@ func resolvedScopeSnapshot(t *testing.T, raw, runID string) *RunInputSnapshot {
 }
 
 func TestTerminalRunSnapshotPersistsInputsAndAssertionSummaries(t *testing.T) {
+	t.Parallel()
 	snapshot := resolvedScopeSnapshot(t, "3", "run-present")
 	spec := VerificationSpec{Type: VerifyTaskOutputAssert, WorksetSourceTask: "producer", TaskOutputName: "scope", Assertions: []TaskOutputAssertion{{Pointer: "/requested", Op: "equals_input", Input: "scope"}}}
 	verification := &VerificationResult{ExitCode: 0, Spec: &spec, TaskOutputAssertions: []TaskOutputAssertionResult{{SourceTaskID: "producer-1", Output: "scope", Pointer: "/requested", Op: "equals_input", Passed: true}}}
@@ -630,6 +652,7 @@ func TestTerminalRunSnapshotPersistsInputsAndAssertionSummaries(t *testing.T) {
 }
 
 func TestRunInputCompatibilityInspectorCountsBoundAndLegacyTasks(t *testing.T) {
+	t.Parallel()
 	snapshot := resolvedScopeSnapshot(t, "1", "run-compat")
 	snapshotPayload, err := json.Marshal(snapshot)
 	if err != nil {
@@ -661,6 +684,7 @@ func TestRunInputCompatibilityInspectorCountsBoundAndLegacyTasks(t *testing.T) {
 }
 
 func TestAggregateRunResultsFoldsTypedInputMetrics(t *testing.T) {
+	t.Parallel()
 	results := []*RunResult{
 		{Outcome: RunOutcomeCompleted, GoalSatisfied: true, Acceptance: &AcceptanceResult{State: AcceptancePassed}, Metrics: RunMetrics{
 			TypedRunInputsResolved: 1, InputBoundActions: 2, InputBoundAssertionsPassed: 1,

@@ -26,6 +26,7 @@ func decisionConfigFixture() DecisionConfig {
 // Precedence is CLI/request > task contract > team default > built-in off
 // (spec §8).
 func TestResolveDecisionProfilePrecedence(t *testing.T) {
+	t.Parallel()
 	cfg := decisionConfigFixture()
 	tests := []struct {
 		name        string
@@ -94,6 +95,7 @@ func TestResolveDecisionProfilePrecedence(t *testing.T) {
 // An unknown profile name must fail closed rather than silently degrade to a
 // weaker profile (spec §8, §9).
 func TestResolveDecisionProfileRejectsUnknownName(t *testing.T) {
+	t.Parallel()
 	cfg := decisionConfigFixture()
 	for _, tc := range []struct {
 		name    string
@@ -117,6 +119,7 @@ func TestResolveDecisionProfileRejectsUnknownName(t *testing.T) {
 }
 
 func TestDecisionProfileOffIsNotEnabled(t *testing.T) {
+	t.Parallel()
 	resolution := DecisionProfileResolution{Profile: DecisionProfileOff, Source: DecisionProfileSourceTeam}
 	if resolution.Enabled() {
 		t.Fatal("off profile reported as enabled")
@@ -130,6 +133,7 @@ func TestDecisionProfileOffIsNotEnabled(t *testing.T) {
 }
 
 func TestValidateTaskDecisionProfiles(t *testing.T) {
+	t.Parallel()
 	cfg := decisionConfigFixture()
 	ok := []TaskDef{
 		{ID: "t1"},
@@ -153,6 +157,7 @@ func TestValidateTaskDecisionProfiles(t *testing.T) {
 }
 
 func TestResolveMaterializedDecisionProfileAcceptsBuiltInsAtEveryLayer(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		cfg     DecisionConfig
@@ -183,6 +188,7 @@ func TestResolveMaterializedDecisionProfileAcceptsBuiltInsAtEveryLayer(t *testin
 }
 
 func TestResolveMaterializedDecisionProfileRejectsMalformedBuiltinWithoutFallback(t *testing.T) {
+	t.Parallel()
 	cfg := decisionConfigFixture()
 	for _, name := range []string{"builtin/standard", "builtin/standard@v3", "builtin/missing@v1"} {
 		if _, _, err := ResolveMaterializedDecisionProfile(cfg, name, TaskDef{}, agent.BuiltInDecisionProfileCatalog()); err == nil || !strings.Contains(err.Error(), ReasonDecisionProfileUnknown) {
@@ -192,6 +198,7 @@ func TestResolveMaterializedDecisionProfileRejectsMalformedBuiltinWithoutFallbac
 }
 
 func TestValidateTaskDecisionProfilesAcceptsExactBuiltin(t *testing.T) {
+	t.Parallel()
 	if err := ValidateTaskDecisionProfiles(DecisionConfig{}, []TaskDef{{ID: "builtin", DecisionProfile: agent.DecisionProfileBuiltinStandardV1}}); err != nil {
 		t.Fatal(err)
 	}

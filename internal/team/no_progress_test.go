@@ -18,6 +18,7 @@ import (
 // across the §8.1 disposition ladder. Refs:
 // docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 func TestDecideNoProgress_TableDriven(t *testing.T) {
+	t.Parallel()
 	limits := NoProgressLimits{MaxTokens: 1000, MaxTurns: 4, MaxTasks: 3}
 
 	tests := []struct {
@@ -125,6 +126,7 @@ func TestDecideNoProgress_TableDriven(t *testing.T) {
 // remain enforced. Refs: docs/archive/implementation-plans/generic-task-reliability.md
 // §8.1, WP-12
 func TestDecideNoProgress_DisabledCounterIgnored(t *testing.T) {
+	t.Parallel()
 	// MaxTokens disabled (0), turns and tasks enforced.
 	limits := NoProgressLimits{MaxTokens: 0, MaxTurns: 4, MaxTasks: 3}
 
@@ -160,6 +162,7 @@ func TestDecideNoProgress_DisabledCounterIgnored(t *testing.T) {
 // (task done does NOT reset the counters). Refs:
 // docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 func TestNoProgressCounters_ResetOnlyByCriterionProgress(t *testing.T) {
+	t.Parallel()
 	c := newNoProgressTestCoordinator(t)
 
 	// Simulate accumulation: 2 turns, 3 tasks, 500 tokens.
@@ -210,6 +213,7 @@ func TestNoProgressCounters_ResetOnlyByCriterionProgress(t *testing.T) {
 // non-zero values. Refs: docs/archive/implementation-plans/generic-task-reliability.md
 // §8.1, WP-12
 func TestDefaultReliabilityConfig_NoProgressLimitsPopulated(t *testing.T) {
+	t.Parallel()
 	def := agent.DefaultReliabilityConfig()
 	if def.MaxTokensWithoutProgress == 0 {
 		t.Fatal("DefaultReliabilityConfig MaxTokensWithoutProgress = 0, want non-zero")
@@ -227,6 +231,7 @@ func TestDefaultReliabilityConfig_NoProgressLimitsPopulated(t *testing.T) {
 // other two remain enforced. Refs:
 // docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 func TestNoProgressYAML_ExplicitZeroDisablesOneCounter(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	yaml := "name: no-progress-zero\nacceptance: 'true'\nreliability:\n  max-tokens-without-progress: 0\n"
 	if err := writeFile(dir, "team.yaml", yaml); err != nil {
@@ -267,6 +272,7 @@ func TestNoProgressYAML_ExplicitZeroDisablesOneCounter(t *testing.T) {
 // values override the defaults, and unset restores the default. Refs:
 // docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 func TestNoProgressYAML_ExplicitValuesOverrideDefaults(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	yaml := "name: no-progress-override\nacceptance: 'true'\nreliability:\n  max-turns-without-progress: 2\n  max-tasks-without-progress: 5\n"
 	if err := writeFile(dir, "team.yaml", yaml); err != nil {
@@ -296,6 +302,7 @@ func TestNoProgressYAML_ExplicitValuesOverrideDefaults(t *testing.T) {
 // no-progress fields receives all three defaults. Refs:
 // docs/archive/implementation-plans/generic-task-reliability.md §8.1, WP-12
 func TestNoProgressYAML_UnsetRestoresDefaults(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	yaml := "name: no-progress-unset\nacceptance: 'true'\n"
 	if err := writeFile(dir, "team.yaml", yaml); err != nil {
@@ -321,6 +328,7 @@ func TestNoProgressYAML_UnsetRestoresDefaults(t *testing.T) {
 }
 
 func TestEnforceNoProgressBudget_ReplanThenPartialContinuation(t *testing.T) {
+	t.Parallel()
 	var events []StatusEvent
 	c := &Coordinator{
 		session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{
@@ -373,6 +381,7 @@ func TestEnforceNoProgressBudget_ReplanThenPartialContinuation(t *testing.T) {
 }
 
 func TestEnforceNoProgressBudget_ReplanDoesNotCloseDelegationGate(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{Config: agent.TeamConfig{
 			Reliability: agent.ReliabilityConfig{
@@ -410,6 +419,7 @@ func TestEnforceNoProgressBudget_ReplanDoesNotCloseDelegationGate(t *testing.T) 
 }
 
 func TestEnforceNoProgressBudget_WarnOnlyDoesNotWrapUp(t *testing.T) {
+	t.Parallel()
 	var events []StatusEvent
 	c := &Coordinator{
 		session: &TeamSession{Config: agent.TeamConfig{
@@ -446,6 +456,7 @@ func TestEnforceNoProgressBudget_WarnOnlyDoesNotWrapUp(t *testing.T) {
 }
 
 func TestFinishPreservesNoProgressStopWithoutUnresolvedTasks(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{
 			Name: "no-progress-finish-boundary",
@@ -507,6 +518,7 @@ func newAcceptanceBlockedNoProgressCoordinator(t *testing.T) *Coordinator {
 }
 
 func TestFinishNoProgressStopSkipsBlockingAcceptanceSelfHealing(t *testing.T) {
+	t.Parallel()
 	c := newAcceptanceBlockedNoProgressCoordinator(t)
 	strict, ok := GetBuiltinProfile(string(ProfileStrictVerification))
 	if !ok {
@@ -533,6 +545,7 @@ func TestFinishNoProgressStopSkipsBlockingAcceptanceSelfHealing(t *testing.T) {
 }
 
 func TestFinishNoProgressStopSkipsUnattendedAcceptanceRollback(t *testing.T) {
+	t.Parallel()
 	c := newAcceptanceBlockedNoProgressCoordinator(t)
 	c.SetUnattended(true)
 	c.SetAcceptance("false")
@@ -555,6 +568,7 @@ func TestFinishNoProgressStopSkipsUnattendedAcceptanceRollback(t *testing.T) {
 }
 
 func TestNoProgressCountsCoordinatorTurnsAndTokens(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.runOrchestratorOverride = func(context.Context, *agent.AgentDef, string) (string, []fantasy.StepResult, error) {
 		return "ok", nil, nil
@@ -577,6 +591,7 @@ func TestNoProgressCountsCoordinatorTurnsAndTokens(t *testing.T) {
 }
 
 func TestNoProgressAccountingBoundaries(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	c.recordNoProgressTasks(3)
 	if got := c.noProgressCounters().Tasks; got != 3 {
@@ -599,6 +614,7 @@ func TestNoProgressAccountingBoundaries(t *testing.T) {
 }
 
 func TestNoProgressAccountingTreatsValidatedWorksetAsOneBoundedUnit(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	children := make([]TaskDef, 52)
 	for i := range children {
@@ -627,6 +643,7 @@ func TestNoProgressAccountingTreatsValidatedWorksetAsOneBoundedUnit(t *testing.T
 }
 
 func TestNoProgressAccountingTreatsValidatedInventoryAsOneBoundedUnit(t *testing.T) {
+	t.Parallel()
 	c := newNoProgressTestCoordinator(t)
 	c.recordNoProgressTasks(6)
 	spec := &EvidenceInventorySpec{TaskID: "inventory", MaxSources: 24}
@@ -660,6 +677,7 @@ func TestNoProgressAccountingTreatsValidatedInventoryAsOneBoundedUnit(t *testing
 }
 
 func TestSchedulerErrorPostconditionPreservesCanonicalDiagnostic(t *testing.T) {
+	t.Parallel()
 	c := newNoProgressTestCoordinator(t)
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "bound preflight"}})[0]
 	if err := c.taskTracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskInProgress, "running", ""); err != nil {
@@ -687,6 +705,7 @@ func TestSchedulerErrorPostconditionPreservesCanonicalDiagnostic(t *testing.T) {
 }
 
 func TestAuxiliaryLLMStreamsOverrideWorkerReceiptMarker(t *testing.T) {
+	t.Parallel()
 	workerCtx := context.WithValue(context.Background(), llmUsageReceiptExpectedKey{}, true)
 	if llmUsageNeedsDirectNoProgressAccounting(workerCtx) {
 		t.Fatal("worker stream unexpectedly selected direct accounting")
@@ -720,6 +739,7 @@ func (noProgressAccountingAgent) result() *fantasy.AgentResult {
 }
 
 func TestRunAgentUsageAccountingHonorsReceiptMarker(t *testing.T) {
+	t.Parallel()
 	newCoordinator := func() *Coordinator {
 		return &Coordinator{
 			session:      &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "usage-accounting"}},
@@ -748,6 +768,7 @@ func TestRunAgentUsageAccountingHonorsReceiptMarker(t *testing.T) {
 }
 
 func TestObjectiveVerifierProgressResetsOnlyOnFailToPass(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{taskTracker: NewTaskTracker(), sessionData: NewSession()}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "verify", Verify: "test -f artifact"}})[0]
 	c.metricsMu.Lock()
@@ -785,6 +806,7 @@ func TestObjectiveVerifierProgressResetsOnlyOnFailToPass(t *testing.T) {
 }
 
 func TestContinuationCheckpointPersistsAndRestoresNoProgressCounters(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{
 		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "continuation-progress"}},
@@ -819,6 +841,7 @@ func TestContinuationCheckpointPersistsAndRestoresNoProgressCounters(t *testing.
 }
 
 func TestEnsureFinishedNoProgressStopDoesNotSpendAnotherLLMTurn(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	c := &Coordinator{
 		session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{
@@ -861,6 +884,7 @@ func TestEnsureFinishedNoProgressStopDoesNotSpendAnotherLLMTurn(t *testing.T) {
 }
 
 func TestEnsureFinishedTerminalUnresolvedDoesNotSpendAnotherLLMTurn(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "closed checkpoint"}})[0]
@@ -889,6 +913,7 @@ func TestEnsureFinishedTerminalUnresolvedDoesNotSpendAnotherLLMTurn(t *testing.T
 }
 
 func TestEnsureFinishedCompletesWhenAllTasksDoneButCoordinatorOmitsFinish(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "reader", Desc: "read-only review"}})[0]
 	tracker.TodoList().UpdateStatusAndOutput(item.ID, TaskDone, "summary", "review evidence")
@@ -917,6 +942,7 @@ func TestEnsureFinishedCompletesWhenAllTasksDoneButCoordinatorOmitsFinish(t *tes
 }
 
 func TestAttemptWrapUpRecoveryTerminalUnresolvedDoesNotSpendAnotherLLMTurn(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "blocked checkpoint"}})[0]
 	tracker.TodoList().UpdateStatus(item.ID, TaskBlocked, "terminal evidence")
@@ -951,6 +977,7 @@ func TestAttemptWrapUpRecoveryTerminalUnresolvedDoesNotSpendAnotherLLMTurn(t *te
 // or this exact wrapped shape falls into the hard-failure path instead of the
 // graceful one.
 func TestAttemptWrapUpRecoveryRecoversNoProgressStopWrappedAsToolFailure(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "go-reviewer", Desc: "review batch-0000"}})[0]
 	tracker.TodoList().UpdateStatusAndOutput(item.ID, TaskDone, "summary", "batch-0000 reviewed: no blockers")
@@ -986,6 +1013,7 @@ func TestAttemptWrapUpRecoveryRecoversNoProgressStopWrappedAsToolFailure(t *test
 }
 
 func TestRestoredNoProgressBudgetStopsBeforeInitialCoordinatorTurn(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	c := &Coordinator{
 		session: &TeamSession{Config: agent.TeamConfig{
@@ -1021,6 +1049,7 @@ func TestRestoredNoProgressBudgetStopsBeforeInitialCoordinatorTurn(t *testing.T)
 }
 
 func TestEnsureFinishedChecksNoProgressAfterForcedSummary(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	c := &Coordinator{
 		session: &TeamSession{Config: agent.TeamConfig{
@@ -1075,6 +1104,7 @@ func writeFile(dir, name, content string) error {
 }
 
 func TestNoProgressStop_RejectsCandidatesAcrossRestart(t *testing.T) {
+	t.Parallel()
 	t.Run("direct agent budget stop rejects candidates", func(t *testing.T) {
 		workspace := t.TempDir()
 		dbPath := filepath.Join(workspace, "context.sqlite")

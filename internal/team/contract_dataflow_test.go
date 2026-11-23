@@ -6,6 +6,7 @@ import (
 )
 
 func TestContractDataflow(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name, code string
 		change     func(*TeamSession)
@@ -54,6 +55,7 @@ func TestContractDataflow(t *testing.T) {
 }
 
 func TestFixedCollectionSourceTaskDeclarations(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name, ids string
 		valid     bool

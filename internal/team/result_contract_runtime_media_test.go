@@ -116,6 +116,7 @@ func testRuntimeMediaResultInputs(t *testing.T, c *Coordinator, source *TodoItem
 }
 
 func TestRuntimeMediaInputDeclaration(t *testing.T) {
+	t.Parallel()
 	for _, field := range []string{`"runtime_media":null`, `"runtime_media":{}`} {
 		if _, err := DecodeWorkerResultProposal([]byte(validProposalJSON(field))); err == nil {
 			t.Fatal("external proposal supplied a runtime-owned media envelope")

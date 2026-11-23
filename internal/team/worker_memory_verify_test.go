@@ -13,6 +13,7 @@ import (
 )
 
 func TestVerifyPrivateMemoryQueryIsDeniedAtEveryBoundary(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []Phase{PhaseVerify, "verify", PhaseExecute} {
 		t.Run(string(phase), func(t *testing.T) {
 			c, _ := newWorkerMemoryQueryCoordinator(t, agent.WorkerMemorySession)
@@ -53,6 +54,7 @@ func TestVerifyPrivateMemoryQueryIsDeniedAtEveryBoundary(t *testing.T) {
 }
 
 func TestVerifyMemoryPolicyOverridesSessionToolPermission(t *testing.T) {
+	t.Parallel()
 	c, _ := newWorkerMemoryQueryCoordinator(t, agent.WorkerMemorySession)
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "critic", Desc: "verify", Phase: PhaseVerify}})[0]
 	ctx := context.WithValue(t.Context(), todoIDKey{}, item.ID)

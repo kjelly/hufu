@@ -10,6 +10,7 @@ import (
 )
 
 func TestContractDataflowPreservesResearchBeyondPresentationLimits(t *testing.T) {
+	t.Parallel()
 	for _, external := range []bool{false, true} {
 		t.Run(fmt.Sprintf("external=%t", external), func(t *testing.T) {
 			c := newTestCoordinator(t)
@@ -181,6 +182,7 @@ func TestContractDataflowPreservesResearchBeyondPresentationLimits(t *testing.T)
 }
 
 func TestContractDataflowBindsEveryResearchSourceDiagnostic(t *testing.T) {
+	t.Parallel()
 	compiled, err := compileResultContractSchema(filepath.Join(bundledTeamsDir(t), "web-research"), "schemas/research-v3.json")
 	if err != nil {
 		t.Fatal(err)

@@ -9,6 +9,7 @@ import (
 // The counts were measured offline with the named tokenizer, not the runtime's
 // estimator. Pin the exact fixture bytes so stale measurements cannot pass CI.
 func TestDependencyResultViewMeasuredFixture(t *testing.T) {
+	t.Parallel()
 	var measurement struct {
 		Tokenizer string                 `json:"tokenizer"`
 		Version   string                 `json:"tokenizer_version"`

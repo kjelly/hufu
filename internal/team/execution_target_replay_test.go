@@ -23,6 +23,7 @@ func (replayProfileIntrospector) InspectModel(_ context.Context, _ providerintro
 }
 
 func TestReplayTodoListAcceptsMatchingExecutionIdentityDualWrite(t *testing.T) {
+	t.Parallel()
 	target := execution.ExecutionTarget{Backend: "local", Model: "qwen3:8b"}
 	item := &TodoItem{
 		ID:                "task-1",
@@ -46,6 +47,7 @@ func TestReplayTodoListAcceptsMatchingExecutionIdentityDualWrite(t *testing.T) {
 }
 
 func TestReplayTodoListRejectsExecutionTargetConflict(t *testing.T) {
+	t.Parallel()
 	target := execution.ExecutionTarget{Backend: "local", Model: "qwen3:8b"}
 	payload := mustJSON(t, map[string]any{
 		"id":                 "task-1",
@@ -64,6 +66,7 @@ func TestReplayTodoListRejectsExecutionTargetConflict(t *testing.T) {
 }
 
 func TestReplayTodoListRejectsBackendBindingConflict(t *testing.T) {
+	t.Parallel()
 	target := execution.ExecutionTarget{Backend: "local", Model: "qwen3:8b"}
 	payload := mustJSON(t, map[string]any{
 		"id":                 "task-1",
@@ -84,6 +87,7 @@ func TestReplayTodoListRejectsBackendBindingConflict(t *testing.T) {
 }
 
 func TestTaskTransitionPayloadOmitsEmptyExecutionIdentity(t *testing.T) {
+	t.Parallel()
 	payload, err := json.Marshal(taskTransitionPayload(&TodoItem{ID: "task-1", Status: TaskPending}))
 	if err != nil {
 		t.Fatal(err)
@@ -101,6 +105,7 @@ func TestTaskTransitionPayloadOmitsEmptyExecutionIdentity(t *testing.T) {
 }
 
 func TestCanonicalTaskDurabilityOmitsRetiredIdentityFields(t *testing.T) {
+	t.Parallel()
 	target := execution.ExecutionTarget{Backend: "local", Model: "qwen3:8b"}
 	item := &TodoItem{
 		ID:                "task-1",
@@ -154,6 +159,7 @@ func TestCanonicalTaskDurabilityOmitsRetiredIdentityFields(t *testing.T) {
 }
 
 func TestReplayTodoListReadsLegacyAndCanonicalSessionBindingEvents(t *testing.T) {
+	t.Parallel()
 	target := execution.ExecutionTarget{Backend: "codex", Model: "gpt-5.6-luna"}
 	item := &TodoItem{ID: "task-1", Model: "gpt-5.6-luna", SubagentProvider: "codex", ExecutionTarget: target, ExecutionTopology: []execution.ExecutionTarget{target}}
 	created := RunEvent{ID: "created", Type: string(EventTaskCreated), TaskID: item.ID, Payload: mustJSON(t, taskTransitionPayload(item))}
@@ -165,6 +171,7 @@ func TestReplayTodoListReadsLegacyAndCanonicalSessionBindingEvents(t *testing.T)
 }
 
 func TestReplayTodoListRejectsConflictingSessionBindingEvents(t *testing.T) {
+	t.Parallel()
 	target := execution.ExecutionTarget{Backend: "codex", Model: "gpt-5.6-luna"}
 	item := &TodoItem{ID: "task-1", Model: "gpt-5.6-luna", SubagentProvider: "codex", ExecutionTarget: target, ExecutionTopology: []execution.ExecutionTarget{target}}
 	created := RunEvent{ID: "created", Type: string(EventTaskCreated), TaskID: item.ID, Payload: mustJSON(t, taskTransitionPayload(item))}
@@ -177,6 +184,7 @@ func TestReplayTodoListRejectsConflictingSessionBindingEvents(t *testing.T) {
 }
 
 func TestReplayTodoListAppliesLegacyExecutionTargetMigration(t *testing.T) {
+	t.Parallel()
 	legacy := &TodoItem{ID: "task-1", Model: "gpt-5.6-luna", SubagentProvider: "codex"}
 	created := RunEvent{ID: "created", Type: string(EventTaskCreated), TaskID: legacy.ID, Payload: mustJSON(t, taskTransitionPayload(legacy))}
 	target := execution.ExecutionTarget{Backend: "codex", Model: "gpt-5.6-luna"}
@@ -191,6 +199,7 @@ func TestReplayTodoListAppliesLegacyExecutionTargetMigration(t *testing.T) {
 }
 
 func TestReplayTodoListAppliesLegacyExecutionTopologyMigration(t *testing.T) {
+	t.Parallel()
 	legacy := &TodoItem{
 		ID: "task-topology", Model: "primary", ModelTopology: []string{"primary", "extra"},
 		SubagentProvider: localSubagentProviderName,
@@ -211,6 +220,7 @@ func TestReplayTodoListAppliesLegacyExecutionTopologyMigration(t *testing.T) {
 }
 
 func TestReplayTodoListRejectsMigrationTargetOrTopologyConflict(t *testing.T) {
+	t.Parallel()
 	legacy := &TodoItem{
 		ID:               "task-migration-conflict",
 		Model:            "primary",
@@ -273,6 +283,7 @@ func TestReplayTodoListRejectsMigrationTargetOrTopologyConflict(t *testing.T) {
 }
 
 func TestReplayTodoListRejectsMigrationEvidenceMismatch(t *testing.T) {
+	t.Parallel()
 	legacy := &TodoItem{
 		ID:               "task-migration-evidence",
 		Model:            "openrouter/meta/llama",
@@ -336,6 +347,7 @@ func TestReplayTodoListRejectsMigrationEvidenceMismatch(t *testing.T) {
 }
 
 func TestMigrateLegacyExecutionTargetPersistsOrderedTopology(t *testing.T) {
+	t.Parallel()
 	tracker := NewTaskTracker()
 	item := &TodoItem{ID: "legacy-topology", Agent: "worker", Desc: "legacy topology", Status: TaskPending, Model: "primary", ModelTopology: []string{"primary", "extra"}, SubagentProvider: localSubagentProviderName}
 	tracker.TodoList().Restore([]*TodoItem{item})
@@ -369,6 +381,7 @@ func TestMigrateLegacyExecutionTargetPersistsOrderedTopology(t *testing.T) {
 }
 
 func TestLegacyExecutionMigrationIsBranchScoped(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-branch-migration", "session-branch-migration")
 	if err != nil {
@@ -449,6 +462,7 @@ func TestLegacyExecutionMigrationIsBranchScoped(t *testing.T) {
 }
 
 func TestReplayedNamedLLMTargetRetainsQualifiedAdmissionIdentity(t *testing.T) {
+	t.Parallel()
 	target := execution.ExecutionTarget{Backend: "openrouter", Model: "meta/foo"}
 	item := &TodoItem{
 		ID: "task-named-llm", Model: target.Model,
@@ -483,6 +497,7 @@ func TestReplayedNamedLLMTargetRetainsQualifiedAdmissionIdentity(t *testing.T) {
 }
 
 func TestReplayedNamedLLMProviderAdmissionUsesQualifiedModel(t *testing.T) {
+	t.Parallel()
 	target := execution.ExecutionTarget{Backend: "openrouter", Model: "meta/foo"}
 	manager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", map[string]config.ProviderConfig{
 		"openrouter": {ProviderURL: "http://127.0.0.1:1/v1"},
@@ -511,6 +526,7 @@ func TestReplayedNamedLLMProviderAdmissionUsesQualifiedModel(t *testing.T) {
 }
 
 func TestReplayedTopologySelectorsAndIndexedTargetsPreserveSameModelBackends(t *testing.T) {
+	t.Parallel()
 	task := TaskDef{
 		ModelTopology: []string{"same-model", "same-model"},
 		ExecutionTopology: []execution.ExecutionTarget{
@@ -534,6 +550,7 @@ func TestReplayedTopologySelectorsAndIndexedTargetsPreserveSameModelBackends(t *
 }
 
 func TestReadCheckedActiveExecutionTasksSeesCrashWindowEventWithoutCheckpointWrite(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	target := execution.ExecutionTarget{Backend: "codex", Model: "gpt-5.6-luna"}
 	item := &TodoItem{

@@ -10,6 +10,7 @@ import (
 )
 
 func TestResultTransportAuthoringAcceptsOnlyDeclaredModes(t *testing.T) {
+	t.Parallel()
 	for _, value := range []string{"runtime", "tool", "RUNTIME", "automatic", "''", "null", "true", "[]", "{}"} {
 		for _, surface := range []string{"agent", "agent_quoted", "agent_indented", "flat", "manifest"} {
 			t.Run(surface+"/"+value, func(t *testing.T) {
@@ -51,6 +52,7 @@ func TestResultTransportAuthoringAcceptsOnlyDeclaredModes(t *testing.T) {
 }
 
 func TestCollectorResponseChannelAuthoring(t *testing.T) {
+	t.Parallel()
 	for _, value := range []string{"function", "text_json", "auto", "AUTO", "''", "null", "true", "[]", "{}"} {
 		for _, manifest := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/manifest=%v", value, manifest), func(t *testing.T) {

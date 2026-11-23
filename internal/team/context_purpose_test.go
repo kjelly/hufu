@@ -6,6 +6,7 @@ import (
 )
 
 func TestContextPurposeRegistryIsClosed(t *testing.T) {
+	t.Parallel()
 	if _, err := contextPurposePolicy("not-a-purpose"); err == nil {
 		t.Fatal("unknown purpose was accepted")
 	}
@@ -33,6 +34,7 @@ func TestContextPurposeRegistryIsClosed(t *testing.T) {
 }
 
 func TestAuxiliaryFallbackHonorsPurposePolicy(t *testing.T) {
+	t.Parallel()
 	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
 	if err := c.recordAuxiliaryFallback(context.Background(), "guard_reviewer", ""); err == nil {
 		t.Fatal("guard fallback was accepted instead of failing closed")

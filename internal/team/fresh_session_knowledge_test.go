@@ -20,6 +20,7 @@ func learningPolicy(mode agent.MemoryLearningMode) agent.MemoryLearningPolicy {
 // A fresh session withholds the prior session's archive in every case, but a
 // team with learning on still reads canonical context.
 func TestCanonicalMemoryDisabledSeparatesArchiveFromKnowledge(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		mode           agent.MemoryLearningMode
@@ -55,6 +56,7 @@ func TestCanonicalMemoryDisabledSeparatesArchiveFromKnowledge(t *testing.T) {
 // DisableMemory withholds only the archive sources; DisableCanonicalMemory
 // withholds canonical context. Both compilers honor the split.
 func TestCompileContextSplitsArchiveFromCanonicalMemory(t *testing.T) {
+	t.Parallel()
 	bundle := &CanonicalContextBundle{SharedPersistent: []contextstore.ContextItem{{
 		ID: "persistent-1", Kind: contextstore.ContextPattern, Content: "canon-marker procedure",
 		ContentHash: "canon-hash", Lifecycle: contextstore.LifecycleConfirmed, Confidence: 1,
@@ -110,6 +112,7 @@ func TestCompileContextSplitsArchiveFromCanonicalMemory(t *testing.T) {
 // persistent knowledge only when learning is on, and never the legacy archive
 // files that fresh start fills from the prior session.
 func TestFreshSessionCoordinatorPromptReadsPersistentKnowledgeOnlyWithLearning(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		mode          agent.MemoryLearningMode
@@ -177,6 +180,7 @@ func TestFreshSessionCoordinatorPromptReadsPersistentKnowledgeOnlyWithLearning(t
 // canonicalContextBundleForRequest, so its gate decides whether a fresh worker
 // sees persistent knowledge.
 func TestFreshSessionWorkerBundleCarriesPersistentKnowledgeOnlyWithLearning(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		mode          agent.MemoryLearningMode
@@ -253,6 +257,7 @@ func freshKnowledgeCoordinator(workspace string, repo *contextstore.SQLiteReposi
 // A fresh run's typed results and verification failures are its own working
 // memory; they are written only when learning is on.
 func TestFreshSessionWritesCurrentRunWorkingMemoryOnlyWithLearning(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		mode      agent.MemoryLearningMode
@@ -296,6 +301,7 @@ func TestFreshSessionWritesCurrentRunWorkingMemoryOnlyWithLearning(t *testing.T)
 // run only through accepted-run extraction and confirmation; the first run's
 // session records never do.
 func TestFreshSessionCarriesAcceptedKnowledgeToNextFreshRun(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		mode          agent.MemoryLearningMode
@@ -362,6 +368,7 @@ func TestFreshSessionCarriesAcceptedKnowledgeToNextFreshRun(t *testing.T) {
 // scope. That archive must stay withheld from a fresh session even when
 // learning lets it read shared-session context; a resumed session keeps it.
 func TestFreshSessionWithholdsPriorSessionArchiveSummary(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		fresh       bool

@@ -7,6 +7,7 @@ import (
 )
 
 func TestDecisionIndexEntryRedactedDeeplySanitizesPresentationStrings(t *testing.T) {
+	t.Parallel()
 	entry := DecisionIndexEntry{
 		DecisionID:              "api_key=redacted-decision-id",
 		RunID:                   "api_key=redacted-run-id",
@@ -117,6 +118,7 @@ func TestDecisionIndexEntryRedactedDeeplySanitizesPresentationStrings(t *testing
 }
 
 func TestDecisionIndexAppendReloadRedactsNestedProjection(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		entry DecisionIndexEntry

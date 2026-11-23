@@ -12,6 +12,7 @@ import (
 )
 
 func TestRuntimeWorkflow_Integration(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "TestRuntimeWorkflow_Integration")
 	if err != nil {
 		t.Fatal(err)

@@ -8,6 +8,7 @@ import (
 )
 
 func TestCoordinatorTaskReceiptRecordsRetryOccurrence(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	c.executionRunID = "run-coordinator-retry"
 	id := addTodo(t, c, "runtime result")
@@ -40,6 +41,7 @@ func TestCoordinatorTaskReceiptRecordsRetryOccurrence(t *testing.T) {
 }
 
 func TestRuntimeActionPersistsTaskReceiptBeforeEvidenceManifest(t *testing.T) {
+	t.Parallel()
 	command := []string{"/bin/sh", "-c", `set -eu
 printf 'artifact' > "$HUFU_WORKSPACE/result.txt"
 printf '%s' '{"outputs":{"ok":true},"artifacts":[{"path":"result.txt","kind":"provider-output"}]}'
@@ -73,6 +75,7 @@ printf '%s' '{"outputs":{"ok":true},"artifacts":[{"path":"result.txt","kind":"pr
 }
 
 func TestRuntimeActionBindsFrozenInputsAcrossReceiptResultAndEvidence(t *testing.T) {
+	t.Parallel()
 	command := []string{"/bin/sh", "-c", `set -eu
 printf '%s' '{"outputs":{"ok":true}}'
 `}
@@ -121,6 +124,7 @@ printf '%s' '{"outputs":{"ok":true}}'
 }
 
 func TestStructuredCoordinatorTaskPersistsTaskReceiptBeforeDone(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	contract := ExecutionContract{Steps: []ExecutionStep{{ID: "inspect", Tool: "inspector", Effect: ExecutionEffectRead}}}
 	c := &Coordinator{

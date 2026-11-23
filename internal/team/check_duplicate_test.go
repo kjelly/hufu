@@ -8,6 +8,7 @@ import (
 )
 
 func TestCheckDuplicateTasks_SameBatch(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		delegatedTasks:   make(map[string]int),
 		delegatedTasksMu: sync.Mutex{},
@@ -144,6 +145,7 @@ func TestCheckDuplicateTasks_SameBatch(t *testing.T) {
 }
 
 func TestCheckDuplicateTasks_SuppressesExistingActiveTodo(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		delegatedTasks:   make(map[string]int),
 		delegatedTasksMu: sync.Mutex{},
@@ -172,6 +174,7 @@ func TestCheckDuplicateTasks_SuppressesExistingActiveTodo(t *testing.T) {
 }
 
 func TestCheckDuplicateTasks_TypedVerificationIdentity(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		delegatedTasks:   make(map[string]int),
 		delegatedTasksMu: sync.Mutex{},
@@ -198,6 +201,7 @@ func TestCheckDuplicateTasks_TypedVerificationIdentity(t *testing.T) {
 }
 
 func TestCheckDuplicateTasks_TypedVerificationContractFiltersActiveAndCurrentRunCache(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		delegatedTasks:   make(map[string]int),
 		delegatedTasksMu: sync.Mutex{},
@@ -234,6 +238,7 @@ func TestCheckDuplicateTasks_TypedVerificationContractFiltersActiveAndCurrentRun
 }
 
 func TestCheckDuplicateTasks_SuppressesPermissionBlockedFailure(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		delegatedTasks:   make(map[string]int),
 		delegatedTasksMu: sync.Mutex{},
@@ -266,6 +271,7 @@ func TestCheckDuplicateTasks_SuppressesPermissionBlockedFailure(t *testing.T) {
 // explicitly asked to re-run the same mission. Only entries produced by this
 // run may do that.
 func TestCheckDuplicateTasks_PinnedEntriesDoNotReject(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		delegatedTasks:   make(map[string]int),
 		delegatedTasksMu: sync.Mutex{},
@@ -290,6 +296,7 @@ func TestCheckDuplicateTasks_PinnedEntriesDoNotReject(t *testing.T) {
 }
 
 func TestCheckDuplicateTasks_CurrentRunCacheStillRejects(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{
 		delegatedTasks:   make(map[string]int),
 		delegatedTasksMu: sync.Mutex{},

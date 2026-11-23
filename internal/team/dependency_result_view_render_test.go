@@ -25,6 +25,7 @@ func dependencyViewRenderFixture() (TaskResult, DependencyResultViewSource) {
 }
 
 func TestDependencyResultViewRendering(t *testing.T) {
+	t.Parallel()
 	markers := map[string]string{"summary": "summary_sentinel", "findings": "finding_sentinel", "artifacts": "opaque_sentinel", "files_modified": "edited_sentinel", "verification": "verification_sentinel"}
 	for _, field := range dependencyResultViewFields {
 		t.Run(field, func(t *testing.T) {
@@ -71,6 +72,7 @@ func TestDependencyResultViewRendering(t *testing.T) {
 }
 
 func TestDependencyResultViewRenderingOrderAndAttributionIsolation(t *testing.T) {
+	t.Parallel()
 	first, firstSource := dependencyViewRenderFixture()
 	second, secondSource := dependencyViewRenderFixture()
 	second.TaskID, secondSource.TaskID = "another", "another"
@@ -102,6 +104,7 @@ func TestDependencyResultViewRenderingOrderAndAttributionIsolation(t *testing.T)
 }
 
 func TestDependencyResultViewRejectsUnavailableSources(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		change func(*TaskResult, *DependencyResultViewSource)

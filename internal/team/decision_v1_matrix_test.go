@@ -25,6 +25,7 @@ import (
 // therefore failed at its first judge, in production, with the subsystem's own
 // unit tests all passing.
 func TestEveryDecisionStagePurposeIsRegistered(t *testing.T) {
+	t.Parallel()
 	for _, purpose := range decisionStagePurposes {
 		policy, err := contextPurposePolicy(purpose)
 		if err != nil {
@@ -51,6 +52,7 @@ type decisionMatrixRow struct {
 // named coverage. It deliberately does not re-run the tests: its job is to
 // make an unattributed row impossible to leave behind.
 func TestDecisionV1MatrixIsFullyAttributed(t *testing.T) {
+	t.Parallel()
 	rows := []decisionMatrixRow{
 		{"A", "old config behaves identically", []string{
 			"TestDecisionV1OffProfileIsInert",
@@ -274,6 +276,7 @@ func mustDecisionEntry(e *decisionE2E, decisionID string) (DecisionIndexEntry, b
 // Row R: a submit_result that invalidates its own decision must not leave a
 // success projection behind.
 func TestDecisionV1InvalidatingCheckpointBlocksSuccess(t *testing.T) {
+	t.Parallel()
 	c := boundaryCoordinator(t, deployerAgent())
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
 		Agent: "deployer", Desc: "mutate", Goal: "mutate",
@@ -325,6 +328,7 @@ func TestDecisionV1InvalidatingCheckpointBlocksSuccess(t *testing.T) {
 // some production path. A constant with no caller is a lifecycle stage that
 // cannot be observed, which is indistinguishable from one that never runs.
 func TestDeclaredDecisionEventsAreEmittedBySomeProductionPath(t *testing.T) {
+	t.Parallel()
 	sources := map[string]string{}
 	entries, err := filepath.Glob("*.go")
 	if err != nil {
@@ -510,6 +514,7 @@ func TestFinalizationOverrideIsItsOwnEvent(t *testing.T) {
 // only the request. Recording only the request leaves a reader unable to tell
 // an abandoned plan from one that got its replacement.
 func TestReplanRecordsRequestAndCompletion(t *testing.T) {
+	t.Parallel()
 	c := boundaryCoordinator(t, deployerAgent())
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
 		Agent: "deployer", Desc: "mutate", Goal: "mutate",
@@ -544,6 +549,7 @@ func TestReplanRecordsRequestAndCompletion(t *testing.T) {
 // The caller receives an error and no cleanup function, so a published
 // discipline would gate the tools of whatever ran under that todo next.
 func TestArmDisciplineLeavesNothingArmedWhenPersistenceFails(t *testing.T) {
+	t.Parallel()
 	c := boundaryCoordinator(t, deployerAgent())
 	c.SetEventJournal(failingJournal{err: errors.New("journal unavailable")})
 

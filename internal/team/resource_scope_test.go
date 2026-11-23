@@ -10,6 +10,7 @@ import (
 )
 
 func TestTaskResourceScopeSnapshotFallbackAndRoundTrip(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "view", nil, nil)
 	for _, test := range []struct {
 		name   string
@@ -56,6 +57,7 @@ func TestTaskResourceScopeSnapshotFallbackAndRoundTrip(t *testing.T) {
 }
 
 func TestTaskResourceScopeSnapshotRejectsTampering(t *testing.T) {
+	t.Parallel()
 	root, err := NewWorkspacePathResourceClaim(".", ResourceRead)
 	if err != nil {
 		t.Fatal(err)
@@ -72,6 +74,7 @@ func TestTaskResourceScopeSnapshotRejectsTampering(t *testing.T) {
 }
 
 func TestIntersectPathScopeCeilings(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	requested := []string{filepath.Join(root, "internal", "team") + string(filepath.Separator)}
 	got, err := IntersectPathScopeCeilings(requested, []string{root}, []string{filepath.Join(root, "internal")})
@@ -93,6 +96,7 @@ func TestIntersectPathScopeCeilings(t *testing.T) {
 }
 
 func TestSerializeConflictingMutationTasksUsesEnvelopeClaims(t *testing.T) {
+	t.Parallel()
 	left, _ := NewWorkspacePathResourceClaim("internal/team", ResourceWrite)
 	right, _ := NewWorkspacePathResourceClaim("cmd/hufu", ResourceWrite)
 	overlap, _ := NewWorkspacePathResourceClaim("internal", ResourceWrite)
@@ -116,12 +120,14 @@ func TestSerializeConflictingMutationTasksUsesEnvelopeClaims(t *testing.T) {
 }
 
 func TestNewDAGSchedulerRejectsMissingEnvelope(t *testing.T) {
+	t.Parallel()
 	if _, err := newDAGScheduler(nil, []TaskDef{{Agent: "worker"}}, []*TodoItem{{ID: "1"}}, nil, nil); err == nil {
 		t.Fatal("missing execution envelope accepted")
 	}
 }
 
 func TestExecuteTasksRejectsInvalidResourceClaimBeforeCreation(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "view", nil, nil)
 	c.delegatedTasks = make(map[string]int)
 	_, err := c.ExecuteTasks(t.Context(), []TaskDef{{
@@ -136,6 +142,7 @@ func TestExecuteTasksRejectsInvalidResourceClaimBeforeCreation(t *testing.T) {
 }
 
 func TestRecordResourceClaimsResolvedIsContentFree(t *testing.T) {
+	t.Parallel()
 	journal := &uniqueRecordingJournal{}
 	c := &Coordinator{executionRunID: "run-resource", projectDir: "/home/secret", reportStatus: func(StatusEvent) {}}
 	c.SetEventJournal(journal)

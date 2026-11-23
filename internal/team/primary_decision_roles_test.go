@@ -11,6 +11,7 @@ import (
 )
 
 func TestResolvePrimaryDecisionRolesIsDeterministicAndMeetsDiversity(t *testing.T) {
+	t.Parallel()
 	bundle, err := agent.ResolveBuiltInDecisionProfileBundle(agent.DecisionProfileBuiltinLightV2)
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +51,7 @@ func TestResolvePrimaryDecisionRolesIsDeterministicAndMeetsDiversity(t *testing.
 }
 
 func TestResolvePrimaryDecisionRolesFallbackAndHardCapabilityFailures(t *testing.T) {
+	t.Parallel()
 	bundle, err := agent.ResolveBuiltInDecisionProfileBundle(agent.DecisionProfileBuiltinLightV2)
 	if err != nil {
 		t.Fatal(err)
@@ -84,6 +86,7 @@ func TestResolvePrimaryDecisionRolesFallbackAndHardCapabilityFailures(t *testing
 }
 
 func TestAdmitPrimaryDecisionContextsRequiresCommonEvidenceAndNoTools(t *testing.T) {
+	t.Parallel()
 	bundle, err := agent.ResolveBuiltInDecisionProfileBundle(agent.DecisionProfileBuiltinLightV2)
 	if err != nil {
 		t.Fatal(err)
@@ -123,6 +126,7 @@ func TestAdmitPrimaryDecisionContextsRequiresCommonEvidenceAndNoTools(t *testing
 }
 
 func TestReservePrimaryDecisionBudgetFailsClosedAndSettlesOnce(t *testing.T) {
+	t.Parallel()
 	bundle, err := agent.ResolveBuiltInDecisionProfileBundle(agent.DecisionProfileBuiltinLightV2)
 	if err != nil {
 		t.Fatal(err)

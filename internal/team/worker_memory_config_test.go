@@ -20,6 +20,7 @@ func writeAgentFile(t *testing.T, dir, filename, frontmatter, body string) {
 }
 
 func TestWP2_AgentFrontmatterParsesMemoryConfig(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeAgentFile(t, dir, "researcher.md", `name: researcher
 memory-id: research-v1
@@ -62,6 +63,7 @@ memory:
 }
 
 func TestWP2_AgentWithoutMemoryConfigGetsBuiltInDefault(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeAgentFile(t, dir, "worker.md", `name: worker
 role: worker`, "You are a worker.")
@@ -78,6 +80,7 @@ role: worker`, "You are a worker.")
 }
 
 func TestWP2_TeamYMLParsesWorkerMemoryDefaults(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte(`name: test-team
 worker-memory:
@@ -107,6 +110,7 @@ worker-memory:
 }
 
 func TestWP2_TeamWithoutWorkerMemoryGetsBuiltInDefault(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte(`name: test-team`), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -121,6 +125,7 @@ func TestWP2_TeamWithoutWorkerMemoryGetsBuiltInDefault(t *testing.T) {
 }
 
 func TestWP2_PrecedenceAgentOverridesTeam(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte(`name: test-team
 worker-memory:
@@ -150,6 +155,7 @@ memory:
 }
 
 func TestWP2_PrecedenceTeamAppliesWhenAgentDoesNotOverride(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte(`name: test-team
 worker-memory:
@@ -177,6 +183,7 @@ role: worker`, "You are a worker.")
 }
 
 func TestWP2_InvalidModeReturnsError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeAgentFile(t, dir, "worker.md", `name: worker
 memory:
@@ -188,6 +195,7 @@ memory:
 }
 
 func TestWP2_NegativeMaxItemsReturnsError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeAgentFile(t, dir, "worker.md", `name: worker
 memory:
@@ -200,6 +208,7 @@ memory:
 }
 
 func TestWP2_NegativeMaxTokensReturnsError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeAgentFile(t, dir, "worker.md", `name: worker
 memory:
@@ -212,6 +221,7 @@ memory:
 }
 
 func TestWP2_InvalidTTLReturnsError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeAgentFile(t, dir, "worker.md", `name: worker
 memory:
@@ -224,6 +234,7 @@ memory:
 }
 
 func TestWP2_DuplicateMemoryIDReturnsError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte(`name: test-team`), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -243,6 +254,7 @@ memory:
 }
 
 func TestWP2_DuplicateMemoryIDAllowedWhenOneIsOff(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte(`name: test-team`), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -264,6 +276,7 @@ memory-id: shared-id`, "Agent B")
 }
 
 func TestWP2_AgentRenamePreservesIdentityViaMemoryID(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte(`name: test-team`), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -300,6 +313,7 @@ memory:
 }
 
 func TestWP2_AgentWithoutMemoryIDFallsBackToName(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte(`name: test-team`), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -322,6 +336,7 @@ memory:
 }
 
 func TestWP2_BuiltInHelperDefaultsToOff(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte(`name: test-team
 worker-memory:
@@ -344,6 +359,7 @@ role: worker`, "You are a worker.")
 }
 
 func TestWP2_OldTeamYMLWithoutMemoryParsesUnchanged(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte(`name: legacy-team
 max-rounds: 5
@@ -370,6 +386,7 @@ tools: bash,view`, "You are a worker.")
 }
 
 func TestWP2_InvalidMemoryIDReturnsError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeAgentFile(t, dir, "worker.md", `name: worker
 memory-id: bad/id
@@ -384,6 +401,7 @@ memory:
 }
 
 func TestWP2_InvalidMemoryIDFailsAtLoadTime(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte(`name: test-team`), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -399,6 +417,7 @@ memory:
 }
 
 func TestWP2_DefaultTeamHelperMemoryOff(t *testing.T) {
+	t.Parallel()
 	session, err := LoadDefaultTeam(t.TempDir(), nil, "")
 	if err != nil {
 		t.Fatalf("LoadDefaultTeam: %v", err)
@@ -414,6 +433,7 @@ func TestWP2_DefaultTeamHelperMemoryOff(t *testing.T) {
 }
 
 func TestWP2_NormalizeMemoryID(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input string
 		want  string
@@ -446,6 +466,7 @@ func TestWP2_NormalizeMemoryID(t *testing.T) {
 }
 
 func TestWP2_TeamYMLInvalidWorkerMemoryReturnsError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte(`name: test-team
 worker-memory:

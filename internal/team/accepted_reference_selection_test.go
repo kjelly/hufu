@@ -11,6 +11,7 @@ import (
 )
 
 func TestParseAcceptedReferenceSelections(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		values []string
@@ -33,6 +34,10 @@ func TestParseAcceptedReferenceSelections(t *testing.T) {
 }
 
 func TestAcceptedReferenceSelectionRejectsForgedGrant(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	t.Parallel()
 	for _, scenario := range []string{"missing_projection", "foreign_pointer", "duplicate_pointer", "foreign_reference", "forged_response", "stale_head", "cancelled", "missing_original_claims"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, source, id := contractCollectionFixture(t, researchCollectionResponse(t, 2), SideEffectNone, contractCollectionFixtureOptions{Accepted: true, ArtifactKeys: true})

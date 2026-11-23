@@ -12,6 +12,7 @@ import (
 )
 
 func TestReliabilityScenarioCorpusCoversPhase5Faults(t *testing.T) {
+	t.Parallel()
 	report := RunReliabilityEvalSuite(nil)
 	if len(report.Scenarios) != 8 || report.Metrics.PassedScenarios != 8 {
 		t.Fatalf("eval report = %#v, want 8 passing scenarios", report)
@@ -34,6 +35,7 @@ func TestReliabilityScenarioCorpusCoversPhase5Faults(t *testing.T) {
 }
 
 func TestReliabilityMetricsSafetyRates(t *testing.T) {
+	t.Parallel()
 	metrics := ComputeReliabilityMetrics([]ReliabilityObservation{
 		{Accepted: true, AcceptancePassed: true, EvidenceComplete: true},
 		{Accepted: true, AcceptancePassed: false, EvidenceComplete: false, UnsafeReplay: true},
@@ -46,6 +48,7 @@ func TestReliabilityMetricsSafetyRates(t *testing.T) {
 }
 
 func TestReliabilityMetricsUseExplicitRepairAndReplayFacts(t *testing.T) {
+	t.Parallel()
 	metrics := ComputeReliabilityMetrics([]ReliabilityObservation{{
 		RepairAttempted: true, RepairAttempts: 2, RepairSuccesses: 2,
 		ReplayAttempts: 4, UnsafeReplay: true, UnsafeReplayCount: 1,
@@ -56,6 +59,7 @@ func TestReliabilityMetricsUseExplicitRepairAndReplayFacts(t *testing.T) {
 }
 
 func TestReliabilityRolloutRequiresAcceptanceForStrictModes(t *testing.T) {
+	t.Parallel()
 	if got, err := ResolveReliabilityRollout("", false); err != nil || got != RolloutShadow {
 		t.Fatalf("default without acceptance = %q, %v", got, err)
 	}
@@ -68,6 +72,7 @@ func TestReliabilityRolloutRequiresAcceptanceForStrictModes(t *testing.T) {
 }
 
 func TestSaveReliabilityEvalReportIsAtomicAndDurable(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	report := RunReliabilityEvalSuite(nil)
 	if err := SaveReliabilityEvalReport(workspace, report); err != nil {
@@ -80,6 +85,7 @@ func TestSaveReliabilityEvalReportIsAtomicAndDurable(t *testing.T) {
 }
 
 func TestPersistReliabilityEvaluationUsesProductionObservation(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{
 		Reliability: agent.ReliabilityConfig{Rollout: string(RolloutShadow)},
@@ -107,6 +113,7 @@ func TestPersistReliabilityEvaluationUsesProductionObservation(t *testing.T) {
 }
 
 func TestPersistReliabilityEvaluationAggregatesHistoricalRuns(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{
 		Reliability: agent.ReliabilityConfig{Rollout: string(RolloutShadow)},
@@ -133,6 +140,7 @@ func TestPersistReliabilityEvaluationAggregatesHistoricalRuns(t *testing.T) {
 }
 
 func TestReliabilityRolloutConfigurationAndStrictEnforcement(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{
 		Reliability: agent.ReliabilityConfig{Rollout: string(RolloutStrictOptIn)},
@@ -165,6 +173,7 @@ func TestReliabilityRolloutConfigurationAndStrictEnforcement(t *testing.T) {
 }
 
 func TestStrictRolloutRequiresConfiguredAcceptanceContract(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	c := &Coordinator{session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{
 		Reliability: agent.ReliabilityConfig{Rollout: string(RolloutStrictOptIn)},
@@ -179,6 +188,7 @@ func TestStrictRolloutRequiresConfiguredAcceptanceContract(t *testing.T) {
 }
 
 func TestTeamYAMLRolloutFlowsIntoStrictRuntime(t *testing.T) {
+	t.Parallel()
 	teamDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(teamDir, "team.yaml"), []byte("name: yaml-rollout\nacceptance: 'true'\nreliability:\n  rollout: strict-opt-in\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -204,6 +214,7 @@ func TestTeamYAMLRolloutFlowsIntoStrictRuntime(t *testing.T) {
 }
 
 func TestCorruptHistoricalReliabilityReportFailsClosed(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	putRuntimeDocument(t, workspace, runtimestore.DocumentReliabilityEval, []byte("{not-json"))
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
@@ -218,6 +229,7 @@ func TestCorruptHistoricalReliabilityReportFailsClosed(t *testing.T) {
 }
 
 func TestTerminalCorruptHistoricalReportDowngradesRunAndPublishesBlocked(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	putRuntimeDocument(t, workspace, runtimestore.DocumentReliabilityEval, []byte("{malformed"))
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}, sessionData: NewSession()}

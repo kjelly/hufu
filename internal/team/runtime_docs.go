@@ -125,9 +125,6 @@ func (b *runtimeBatch) commit(ctx context.Context, tree *SessionTree) error {
 					return err
 				}
 			}
-			if err := runtimeBatchCommitStage(); err != nil {
-				return err
-			}
 			if tree == nil {
 				return nil
 			}
@@ -144,7 +141,3 @@ func (b *runtimeBatch) commit(ctx context.Context, tree *SessionTree) error {
 	}
 	return nil
 }
-
-// runtimeBatchCommitStage lets tests fail a commit between its document and
-// session tree writes.
-var runtimeBatchCommitStage = func() error { return nil }

@@ -68,6 +68,7 @@ func (f staticGrantFixture) narrowingMessages() []string {
 }
 
 func TestWorkerGrantIsIndependentOfCoordinatorSurface(t *testing.T) {
+	t.Parallel()
 	f := newStaticGrantFixture(t, "view,bash", nil)
 	if coordinatorCoreToolNames["bash"] {
 		t.Fatal("the coordinator surface unexpectedly includes bash")
@@ -85,6 +86,7 @@ func TestWorkerGrantIsIndependentOfCoordinatorSurface(t *testing.T) {
 }
 
 func TestStaticToolCeilingNarrowsButNeverWidens(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name            string
 		creationTools   string
@@ -127,6 +129,7 @@ func TestStaticToolCeilingNarrowsButNeverWidens(t *testing.T) {
 }
 
 func TestStaticToolCeilingIsPhaseFree(t *testing.T) {
+	t.Parallel()
 	f := newStaticGrantFixture(t, "view,bash", nil)
 	// Rebuild the ceiling while the workflow is outside EXECUTE.
 	f.c.phaseWorkflow = &runtimeWorkflow{enabled: true, state: PhasePrepare, workspace: RuntimeWorkspace{Root: filepath.Join(f.c.session.Workspace, "runtime")}}
@@ -149,6 +152,7 @@ func TestStaticToolCeilingIsPhaseFree(t *testing.T) {
 }
 
 func TestStaticToolCeilingLifecycleModes(t *testing.T) {
+	t.Parallel()
 	f := newStaticGrantFixture(t, "view", nil)
 	f.def.Tools = "view,bash"
 	repair, err := f.resolve(t, WorkerToolResolutionResultRepair)
@@ -171,6 +175,7 @@ func TestStaticToolCeilingLifecycleModes(t *testing.T) {
 }
 
 func TestStaticToolGrantNamesFiltersAgentMCPKeys(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "view", nil, []string{"blocked"})
 	def := &agent.AgentDef{Name: "worker", Role: "worker", Tools: "view", MCPTools: map[string]agent.MCPToolConfig{
 		"deploy": {}, "blocked": {}, "finish": {},
@@ -187,6 +192,7 @@ func TestStaticToolGrantNamesFiltersAgentMCPKeys(t *testing.T) {
 }
 
 func TestStaticToolCeilingSnapshotRules(t *testing.T) {
+	t.Parallel()
 	empty := newEmptyDynamicToolAuthorizationSnapshot()
 	if err := validateDynamicToolAuthorizationSnapshot(empty); err != nil {
 		t.Fatalf("empty snapshot invalid: %v", err)
@@ -236,6 +242,7 @@ func TestStaticToolCeilingSnapshotRules(t *testing.T) {
 }
 
 func TestDeclaredStepObeysStaticToolCeiling(t *testing.T) {
+	t.Parallel()
 	f := newStaticGrantFixture(t, "view", nil)
 	f.def.Tools = "view,bash"
 	runner := &coordinatorDeclaredToolRunner{c: f.c}
@@ -263,6 +270,7 @@ func (a toolSurfaceCaptureAgent) Stream(ctx context.Context, call fantasy.AgentS
 }
 
 func TestRetryTaskKeepsFrozenStaticToolCeiling(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var seen [][]string
 	c := newDirectTerminationCoordinator(t, directTerminationAgent{})

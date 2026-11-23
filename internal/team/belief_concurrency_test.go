@@ -31,6 +31,7 @@ func (j *blockingBeliefReadJournal) Append(ctx context.Context, event RunEvent) 
 }
 
 func TestBeliefBookkeepingReleasesTaskProjectionLock(t *testing.T) {
+	t.Parallel()
 	c, _, first, events := newActionProgressTransitionCoordinator(t)
 	events.SetBranchID("main")
 	c.session.Dir = t.TempDir()

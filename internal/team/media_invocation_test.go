@@ -12,6 +12,7 @@ import (
 )
 
 func TestNativeMediaExecutionRetainsOriginalOwnerAcrossInvocations(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx, end, err := c.beginPublicInvocationExecutionRun(t.Context())
 	if err != nil {
@@ -42,6 +43,7 @@ func TestNativeMediaExecutionRetainsOriginalOwnerAcrossInvocations(t *testing.T)
 }
 
 func TestNativeMediaCancelledPreflightKeepsCanonicalCancellation(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	item := createMediaOccurrence(t, c, ctx, nativeInvocationTask(t, c, ctx, media.InvocationSingleTask))
@@ -71,6 +73,7 @@ func TestNativeMediaCancelledPreflightKeepsCanonicalCancellation(t *testing.T) {
 }
 
 func TestNativeMediaResumeResetRetainsCanonicalBinding(t *testing.T) {
+	t.Parallel()
 	for _, restartInvocation := range []bool{false, true} {
 		name := "same invocation"
 		if restartInvocation {
@@ -135,6 +138,7 @@ func nativeInvocationTask(t *testing.T, c *Coordinator, ctx context.Context, mod
 }
 
 func TestNativeMediaInvocationOwnsOneCompleteOrderedTurn(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []media.InvocationMode{media.InvocationSingleTask, media.InvocationDirectAgent} {
 		t.Run(string(mode), func(t *testing.T) {
 			c := newMediaPolicyCoordinator(t)
@@ -170,6 +174,7 @@ func TestNativeMediaInvocationOwnsOneCompleteOrderedTurn(t *testing.T) {
 }
 
 func TestNativeMediaInvocationRejectsSubsetOrReorderedTurn(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"subset", "reordered"} {
 		t.Run(scenario, func(t *testing.T) {
 			c := newMediaPolicyCoordinator(t)
@@ -193,6 +198,7 @@ func TestNativeMediaInvocationRejectsSubsetOrReorderedTurn(t *testing.T) {
 }
 
 func TestNativeMediaInvocationRejectsGraphsBeforeDispatch(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"siblings", "pipeline", "fanout", "named edge"} {
 		t.Run(scenario, func(t *testing.T) {
 			c := newMediaPolicyCoordinator(t)
@@ -219,6 +225,7 @@ func TestNativeMediaInvocationRejectsGraphsBeforeDispatch(t *testing.T) {
 }
 
 func TestNativeMediaInvocationChecksCanonicalExecutionShape(t *testing.T) {
+	t.Parallel()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
 	canonical := createMediaOccurrence(t, c, ctx, nativeInvocationTask(t, c, ctx, media.InvocationSingleTask))

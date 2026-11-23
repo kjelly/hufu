@@ -17,6 +17,7 @@ func withWorksetLineSpans(document string) string {
 }
 
 func TestResultWorksetPathsCompile(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, document string
 		valid          bool
@@ -40,6 +41,7 @@ func TestResultWorksetPathsCompile(t *testing.T) {
 }
 
 func TestResultWorksetPathsResolveWithinFrozenAssignment(t *testing.T) {
+	t.Parallel()
 	c, producer, child, _ := runtimeWorksetInputFixture(t, "dir/source.go")
 	compiled, err := CompileResultContractDocument("paths.json", []byte(worksetPathResultSchema))
 	if err != nil {
@@ -128,6 +130,7 @@ func TestResultWorksetPathsResolveWithinFrozenAssignment(t *testing.T) {
 }
 
 func TestResultWorksetPathsCheckFrozenSourceSpansOnEverySubmissionRoute(t *testing.T) {
+	t.Parallel()
 	c := newTestCoordinator(t)
 	c.taskTracker.TodoList().SetRunID(c.executionRunID)
 	document := withWorksetLineSpans(worksetPathResultSchema)
@@ -188,6 +191,7 @@ func TestResultWorksetPathsCheckFrozenSourceSpansOnEverySubmissionRoute(t *testi
 }
 
 func TestResultWorksetPathsRequireUnambiguousAssignedSourceSpans(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name, inventory string
 		valid           bool
@@ -214,6 +218,7 @@ func TestResultWorksetPathsRequireUnambiguousAssignedSourceSpans(t *testing.T) {
 }
 
 func TestAcceptedWorksetPathRepairPreservesLineAndClaims(t *testing.T) {
+	t.Parallel()
 	original := &TaskResult{Status: TaskResultStatusSuccess, Summary: "unchanged", Confidence: 1, Facts: map[string]any{"large": jsontext.Value(`9007199254740993`)}, StructuredPayload: &ResultPayload{Value: jsontext.Value(`{"findings":[{"location":"dir/soruce.go:7","summary":"unchanged","severity":"error"}]}`)}}
 	pointers := []string{"/findings/0/location"}
 	want, err := acceptedResultSemanticHashWithPaths(original, pointers, pointers)

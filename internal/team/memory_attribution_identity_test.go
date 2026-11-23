@@ -15,6 +15,7 @@ import (
 // The worker prompt marks injected memory as id=context:<id> and never shows
 // the runtime-owned retrieval ID, so a claim must be accepted in that form.
 func TestMemoryUseBindsRuntimeRetrievalForPromptID(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		contextItemID string
@@ -49,6 +50,7 @@ func TestMemoryUseBindsRuntimeRetrievalForPromptID(t *testing.T) {
 }
 
 func TestMemoryUsesAreDroppedWhenLearningIsOff(t *testing.T) {
+	t.Parallel()
 	c, manifest := memoryValidationCoordinator(t)
 	c.session = &TeamSession{Config: agent.TeamConfig{MemoryLearning: agent.DefaultMemoryLearningPolicy()}}
 	result := &TaskResult{TaskID: manifest.TaskID, Source: "submitted", MemoryUses: []MemoryUseRef{{ContextItemID: "context:forged", Disposition: MemoryUseApplied, Confidence: 1}}}
@@ -61,6 +63,7 @@ func TestMemoryUsesAreDroppedWhenLearningIsOff(t *testing.T) {
 }
 
 func TestSubmitResultMemoryUseRetrievalIsOptional(t *testing.T) {
+	t.Parallel()
 	info := submitResultToolInfo(taskResultSubmissionContract{})
 	schema, _ := info.Parameters["memory_uses"].(map[string]any)
 	item, _ := schema["items"].(map[string]any)
@@ -71,6 +74,7 @@ func TestSubmitResultMemoryUseRetrievalIsOptional(t *testing.T) {
 }
 
 func TestMemoryOccurrenceIDSurvivesRetryAndResume(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		item *TodoItem
@@ -94,6 +98,7 @@ func TestMemoryOccurrenceIDSurvivesRetryAndResume(t *testing.T) {
 }
 
 func TestMemoryObservationSupportAndOccurrence(t *testing.T) {
+	t.Parallel()
 	outcome := func(effective float64, occurrence string) []byte {
 		raw, _ := json.Marshal(memoryOutcomePayload{
 			memoryEventPayload: memoryEventPayload{SchemaVersion: memoryEventSchemaVersion, RetrievalID: "retrieval-1", ContextItemID: "memory-1", PolicyVersion: "memory-policy-v1", OccurrenceID: occurrence},
@@ -131,6 +136,7 @@ func TestMemoryObservationSupportAndOccurrence(t *testing.T) {
 // earned credit, and failures attributed to the memory. Everything else adds
 // at most credit.
 func TestMemoryObservationStrongEvidence(t *testing.T) {
+	t.Parallel()
 	outcome := func(signal, direction string, effective, causal float64) []byte {
 		raw, _ := json.Marshal(memoryOutcomePayload{
 			memoryEventPayload: memoryEventPayload{SchemaVersion: memoryEventSchemaVersion, RetrievalID: "retrieval-1", ContextItemID: "memory-1", PolicyVersion: "memory-policy-v1", OccurrenceID: "run-a/1"},
@@ -179,6 +185,7 @@ func TestMemoryObservationStrongEvidence(t *testing.T) {
 // A later run's task with the same ID must earn its own credit and count as a
 // separate task, while a retry of one occurrence stays within that cap.
 func TestOutcomeCreditIsScopedToTaskOccurrence(t *testing.T) {
+	t.Parallel()
 	c, repo := outcomeTestCoordinator(t, "memory-1")
 	uses := func(retrieval string) []MemoryUseRef {
 		return []MemoryUseRef{{RetrievalID: retrieval, ContextItemID: "memory-1", Disposition: MemoryUseApplied, Confidence: 1}}
@@ -219,6 +226,7 @@ func TestOutcomeCreditIsScopedToTaskOccurrence(t *testing.T) {
 // Terminal tasks commit through CommitTaskTransition, which the checkpoint
 // emitter only revisits, so the commit itself must record outcome credit.
 func TestTerminalTransitionRecordsMemoryOutcome(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		mode         agent.MemoryLearningMode

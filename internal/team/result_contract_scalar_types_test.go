@@ -11,6 +11,7 @@ import (
 )
 
 func TestStructuredScalarConversionKeepsCanonicalHashAcrossRoutes(t *testing.T) {
+	t.Parallel()
 	compiled, ref := compiledReviewContract(t, true)
 	quoted := `{"verdict":"approve","max_tokens":"9007199254740993"}`
 	typed := `{"verdict":"approve","max_tokens":9007199254740993}`
@@ -54,6 +55,7 @@ func TestStructuredScalarConversionKeepsCanonicalHashAcrossRoutes(t *testing.T) 
 }
 
 func TestProtocolRepairConvertsScalarStringsBeforeTypedHandler(t *testing.T) {
+	t.Parallel()
 	type input struct {
 		Count   int  `json:"count"`
 		Enabled bool `json:"enabled"`
@@ -78,6 +80,7 @@ func TestProtocolRepairConvertsScalarStringsBeforeTypedHandler(t *testing.T) {
 }
 
 func TestStructuredScalarConversionStillEnforcesSchema(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeResultContractSchema(t, dir, "scalar.json", `{"type":"object","required":["done","count"],"properties":{"done":{"const":true},"count":{"type":"integer","minimum":1,"maximum":3},"flag":{"type":"boolean"},"ratio":{"type":"number","maximum":1}},"additionalProperties":false}`)
 	compiled, err := compileResultContractSchema(dir, "scalar.json")
@@ -99,6 +102,7 @@ func TestStructuredScalarConversionStillEnforcesSchema(t *testing.T) {
 }
 
 func TestStructuredScalarConversionOfTypedAdditionalProperties(t *testing.T) {
+	t.Parallel()
 	compiled, err := CompileResultContractDocument("typed-maps.json", []byte(`{
 	 "type":"object","required":["counts","ratios","flags"],"properties":{
 	  "counts":{"type":"object","additionalProperties":{"type":"integer","minimum":0}},

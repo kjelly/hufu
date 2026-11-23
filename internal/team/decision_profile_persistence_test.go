@@ -11,6 +11,7 @@ import (
 )
 
 func TestDecisionRunEnvelopeReadsV1AndWritesV2Identity(t *testing.T) {
+	t.Parallel()
 	policy := enginePolicy(2)
 	req := validEnvelopeRequest(policy)
 
@@ -56,6 +57,7 @@ func TestDecisionRunEnvelopeReadsV1AndWritesV2Identity(t *testing.T) {
 }
 
 func TestDecisionAdmissionEnvelopeSchemaCompatibilityMatrix(t *testing.T) {
+	t.Parallel()
 	v2Admission := admissionForTest(t, true)
 	v2Admission.RequestContractRef = "contract-v2"
 	v2Admission.RequestContractRevision = 2
@@ -115,6 +117,7 @@ func TestDecisionAdmissionEnvelopeSchemaCompatibilityMatrix(t *testing.T) {
 }
 
 func TestV1AdmissionWithoutEnvelopeAnchorsV2Bridge(t *testing.T) {
+	t.Parallel()
 	journal := &memoryJournal{}
 	policy := enginePolicy(1)
 	policy.MaxRounds = 0
@@ -194,6 +197,7 @@ func TestV1AdmissionWithoutEnvelopeAnchorsV2Bridge(t *testing.T) {
 }
 
 func TestDecisionRequestProfileIdentityFailsClosedAndClonesPolicy(t *testing.T) {
+	t.Parallel()
 	policy := enginePolicy(1)
 	req := validEnvelopeRequest(policy)
 	req.ProfileOrigin = agent.DecisionProfileOriginBuiltin

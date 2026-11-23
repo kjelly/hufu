@@ -9,6 +9,7 @@ import (
 )
 
 func TestRequireTaskContractRejectsTasksMissingConstraintsOrVerify(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		tasks   []TaskDef
@@ -54,6 +55,7 @@ func TestRequireTaskContractRejectsTasksMissingConstraintsOrVerify(t *testing.T)
 }
 
 func TestOriginalRequestForSharedWorkers(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		prompt  string
@@ -92,6 +94,7 @@ func TestOriginalRequestForSharedWorkers(t *testing.T) {
 }
 
 func TestCompileWorkerContextCarriesOriginalRequestAsReference(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("x", maxOriginalRequestRunes+10)
 	cases := []struct {
 		name      string

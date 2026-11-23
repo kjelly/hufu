@@ -10,6 +10,7 @@ import (
 )
 
 func TestFailedWorkflowPartialFinishWritesCanonicalTerminalEvent(t *testing.T) {
+	t.Parallel()
 	c := newDoneWorkflowCoordinator(t)
 	t.Cleanup(func() { _ = c.Close() })
 	c.executionRunID = "run-partial-workflow"
@@ -61,6 +62,7 @@ func TestFailedWorkflowPartialFinishWritesCanonicalTerminalEvent(t *testing.T) {
 }
 
 func TestFailedWorkflowPartialFinishPreservesFailure(t *testing.T) {
+	t.Parallel()
 	c := newDoneWorkflowCoordinator(t)
 	t.Cleanup(func() { _ = c.Close() })
 	c.phaseWorkflow.state = PhaseFailed
@@ -90,6 +92,7 @@ func TestFailedWorkflowPartialFinishPreservesFailure(t *testing.T) {
 }
 
 func TestFailedWorkflowPartialFinishWaitsForWorkers(t *testing.T) {
+	t.Parallel()
 	c := newDoneWorkflowCoordinator(t)
 	t.Cleanup(func() { _ = c.Close() })
 	c.phaseWorkflow.state = PhaseFailed
@@ -101,6 +104,7 @@ func TestFailedWorkflowPartialFinishWaitsForWorkers(t *testing.T) {
 }
 
 func TestFailedWorkflowAcknowledgmentPreservesDisposition(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name    string
 		status  TaskStatus
@@ -134,6 +138,7 @@ func TestFailedWorkflowAcknowledgmentPreservesDisposition(t *testing.T) {
 }
 
 func TestWorkflowFailureGuidanceChecksReplacementContract(t *testing.T) {
+	t.Parallel()
 	c, original, replacement := verifiedResolutionFixture(t)
 	c.phaseWorkflow = &runtimeWorkflow{enabled: true, state: PhaseFailed, failedTaskID: original.ID}
 	err := c.workflowFailureResult(errors.New("workflow failed"))

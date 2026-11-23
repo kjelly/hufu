@@ -89,6 +89,7 @@ func fixedCollectionSubmission(t *testing.T, plan resultFixedCollectionPlan, mut
 }
 
 func TestFixedCollectionSubmissionRejectsInventedMembershipAndAllowsCorrection(t *testing.T) {
+	t.Parallel()
 	for _, route := range []string{"local", "external"} {
 		for _, mistake := range []string{"52 instead of 51", "missing", "unknown key", "fixed identity", "invalid choice", "missing choice", "array"} {
 			t.Run(route+"/"+mistake, func(t *testing.T) {
@@ -162,6 +163,7 @@ func TestFixedCollectionSubmissionRejectsInventedMembershipAndAllowsCorrection(t
 }
 
 func TestFixedCollectionKeysBindSourceIdentityAndContent(t *testing.T) {
+	t.Parallel()
 	c, sources, item, plans := fixedCollectionFixture(t, 1)
 	raw := fixedCollectionSubmission(t, plans[0], nil)
 	payload, rejection := c.structuredPayloadForSubmission(item.ID, []byte(raw))
@@ -184,6 +186,7 @@ func TestFixedCollectionKeysBindSourceIdentityAndContent(t *testing.T) {
 }
 
 func TestFixedCollectionProviderAndPromptExposeOnlyDecisionFields(t *testing.T) {
+	t.Parallel()
 	c, _, item, plans := fixedCollectionFixture(t, 2)
 	compiled := c.session.ResultContracts["decisions.json"]
 	before := string(compiled.CanonicalSchema)
@@ -238,6 +241,7 @@ func (a *fixedCollectionCaptureAgent) Generate(ctx context.Context, call fantasy
 }
 
 func TestFixedCollectionActualWorkerDispatchAndCompletion(t *testing.T) {
+	t.Parallel()
 	c, _, item, plans := fixedCollectionFixture(t, 2)
 	c.session.Workspace = t.TempDir()
 	c.session.Agents = map[string]*agent.AgentDef{"worker": {Name: "worker", Role: "worker", Tools: "view", SideEffect: "none", Generation: agent.GenerationParams{Model: "test"}, MaxRetries: -1}}
@@ -256,6 +260,7 @@ func TestFixedCollectionActualWorkerDispatchAndCompletion(t *testing.T) {
 }
 
 func TestFixedCollectionProvenanceSurvivesSQLiteReplay(t *testing.T) {
+	t.Parallel()
 	c, sources, item, _ := fixedCollectionFixture(t, 2)
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-fixed", "session-fixed")
@@ -331,6 +336,7 @@ func TestFixedCollectionProvenanceSurvivesSQLiteReplay(t *testing.T) {
 }
 
 func TestFixedCollectionRejectsDuplicateKeysBeforeNormalization(t *testing.T) {
+	t.Parallel()
 	c, _, item, plans := fixedCollectionFixture(t, 1)
 	key := plans[0].rows[0].Key
 	raw := fmt.Sprintf(`{"decisions":{%q:{"state":"accept","reason":"first"},%q:{"state":"reject","reason":"second"}}}`, key, key)
@@ -345,6 +351,7 @@ func TestFixedCollectionRejectsDuplicateKeysBeforeNormalization(t *testing.T) {
 }
 
 func TestFixedCollectionCommitRejectsForgedCanonicalRows(t *testing.T) {
+	t.Parallel()
 	for _, mistake := range []string{"provenance", "identity", "extra row"} {
 		t.Run(mistake, func(t *testing.T) {
 			c, _, item, plans := fixedCollectionFixture(t, 1)
@@ -387,6 +394,7 @@ func TestFixedCollectionCommitRejectsForgedCanonicalRows(t *testing.T) {
 }
 
 func TestFixedCollectionDeclarationPreflight(t *testing.T) {
+	t.Parallel()
 	for _, mistake := range []string{"unknown field", "empty", "null", "bad target", "missing fixed", "duplicate fixed", "missing choice", "optional choice", "uppercase", "overlap", "missing source"} {
 		t.Run(mistake, func(t *testing.T) {
 			root, err := decodeResultContractJSON([]byte(fixedCollectionTestSchema))
@@ -434,6 +442,7 @@ func TestFixedCollectionDeclarationPreflight(t *testing.T) {
 }
 
 func TestFixedCollectionEmptyAndMissingEvidenceAreDistinct(t *testing.T) {
+	t.Parallel()
 	c, _, item, plans := fixedCollectionFixture(t, 0)
 	if _, rejection := c.structuredPayloadForSubmission(item.ID, []byte(fixedCollectionSubmission(t, plans[0], nil))); rejection != "" {
 		t.Fatal(rejection)
@@ -444,6 +453,7 @@ func TestFixedCollectionEmptyAndMissingEvidenceAreDistinct(t *testing.T) {
 }
 
 func TestFixedCollectionSupportsTranslationSegmentsWithoutIdentityRetyping(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeResultContractSchema(t, dir, "segments.json", `{"type":"object","properties":{"segments":{"type":"array","items":{"type":"string"}}}}`)
 	writeResultContractSchema(t, dir, "translations.json", `{
@@ -499,6 +509,7 @@ func TestFixedCollectionSupportsTranslationSegmentsWithoutIdentityRetyping(t *te
 }
 
 func TestFixedCollectionLimitsFailBeforeModelExecution(t *testing.T) {
+	t.Parallel()
 	c, sources, item, _ := fixedCollectionFixture(t, 0)
 	entries := make([]any, maxResultFixedCollectionRows+1)
 	for i := range entries {

@@ -8,6 +8,7 @@ import (
 )
 
 func TestNormalizeReplayEventsScopesIdempotencyToBranch(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name   string
 		branch string
@@ -36,6 +37,7 @@ func TestNormalizeReplayEventsScopesIdempotencyToBranch(t *testing.T) {
 }
 
 func TestReducersReconstructState(t *testing.T) {
+	t.Parallel()
 	var events []RunEvent
 
 	p1, _ := json.Marshal(map[string]string{"role": "user", "content": "Build website"})
@@ -71,6 +73,7 @@ func TestReducersReconstructState(t *testing.T) {
 }
 
 func TestReduceToTodoListReplaysBoundedReconciliationObservation(t *testing.T) {
+	t.Parallel()
 	events := []RunEvent{
 		{Type: "task_created", TaskID: "reconcile-1", Payload: []byte(`{"id":"reconcile-1","status":"in_progress"}`)},
 		{Type: "recovery_decision", TaskID: "reconcile-1", Payload: []byte(`{"decision":"reconcile_observed","recovery_state":"not_started","reconcile_source":"reconcile_tool","reconcile_exit_code":1,"attempt":1}`)},
@@ -92,6 +95,7 @@ func TestReduceToTodoListReplaysBoundedReconciliationObservation(t *testing.T) {
 }
 
 func TestReducersEmptyAndMalformedEvents(t *testing.T) {
+	t.Parallel()
 	session := ReduceToSessionData(nil)
 	if session == nil || len(session.Entries) != 0 {
 		t.Errorf("expected empty session for nil events")
@@ -118,6 +122,7 @@ func TestReducersEmptyAndMalformedEvents(t *testing.T) {
 }
 
 func TestReduceToSessionDataPreservesRunWarnings(t *testing.T) {
+	t.Parallel()
 	payload, err := json.Marshal(LifecycleEventPayload{
 		RunID: "run-warning", Outcome: RunOutcomeCompleted, GoalSatisfied: true,
 		Warnings: []string{"experience finalization timed out"},
@@ -132,6 +137,7 @@ func TestReduceToSessionDataPreservesRunWarnings(t *testing.T) {
 }
 
 func TestReduceToTodoList_ReconstructsTypedVerificationSpec(t *testing.T) {
+	t.Parallel()
 	payload, err := json.Marshal(map[string]any{
 		"id":          "typed-verify",
 		"desc":        "write verified report",
@@ -153,6 +159,7 @@ func TestReduceToTodoList_ReconstructsTypedVerificationSpec(t *testing.T) {
 }
 
 func TestReducersDeduplicateAndDoNotReopenTerminalTask(t *testing.T) {
+	t.Parallel()
 	completed := RunEvent{
 		ID: "evt-completed", IdempotencyKey: "task-1:done:1", Type: string(EventTaskCompleted), TaskID: "task-1",
 		Payload: []byte(`{"id":"task-1","status":"done","output":"durable"}`),
@@ -173,6 +180,7 @@ func TestReducersDeduplicateAndDoNotReopenTerminalTask(t *testing.T) {
 }
 
 func TestReducersReplaceReceiptSnapshotWithTerminalFailure(t *testing.T) {
+	t.Parallel()
 	zero, one := 0, 1
 	initial := ExecutionReceipt{
 		RunID: "run-receipt", TaskID: "task-1", Attempt: 1,
@@ -217,6 +225,7 @@ func TestReducersReplaceReceiptSnapshotWithTerminalFailure(t *testing.T) {
 }
 
 func TestAppendExecutionReceiptKeepsDistinctModelExecutionsInAttempt(t *testing.T) {
+	t.Parallel()
 	first := ExecutionReceipt{
 		RunID: "run-candidates", TaskID: "task-1", Attempt: 1,
 		ModelExecutionID: "candidate-a", TranscriptRef: "shared-transcript",
@@ -231,6 +240,7 @@ func TestAppendExecutionReceiptKeepsDistinctModelExecutionsInAttempt(t *testing.
 }
 
 func TestReducersRestoreCancelledTaskAsCanonicalError(t *testing.T) {
+	t.Parallel()
 	events := []RunEvent{
 		{Type: string(EventTaskCreated), TaskID: "cancelled-1", Payload: []byte(`{"id":"cancelled-1","status":"pending","desc":"cancelled work"}`)},
 		{Type: string(EventTaskCancelled), TaskID: "cancelled-1", Payload: []byte(`{"id":"cancelled-1","status":"error","detail":"context cancelled","summary":"context cancelled","output":"partial output","task_id":"cancelled-1","phase":"coordination","failure_class":"cancelled","retry_disposition":"none"}`)},
@@ -251,6 +261,7 @@ func TestReducersRestoreCancelledTaskAsCanonicalError(t *testing.T) {
 }
 
 func TestReducersRestoreVerifyingTask(t *testing.T) {
+	t.Parallel()
 	events := []RunEvent{
 		{Type: string(EventTaskCreated), TaskID: "verify-1", Payload: []byte(`{"id":"verify-1","status":"pending"}`)},
 		{Type: string(EventTaskStarted), TaskID: "verify-1", Payload: []byte(`{"id":"verify-1","status":"in_progress"}`)},
@@ -263,6 +274,7 @@ func TestReducersRestoreVerifyingTask(t *testing.T) {
 }
 
 func TestReduceReplayWorksetReceiptConflictByRuntimeTaskID(t *testing.T) {
+	t.Parallel()
 	receiptA := &WorksetExpansionReceipt{
 		WorksetID: "workset-a", RunID: "run-1", ParentTaskID: "prepare", SourceArtifactID: "artifact-a",
 		SourceSHA256: "sha-a", ItemCount: 1, Children: map[string]string{"item": "runtime-1"},
@@ -309,6 +321,7 @@ func TestReduceReplayWorksetReceiptConflictByRuntimeTaskID(t *testing.T) {
 }
 
 func TestReduceReplayWorksetReceiptConflictAfterTaskRemoval(t *testing.T) {
+	t.Parallel()
 	receiptA := &WorksetExpansionReceipt{
 		WorksetID: "workset-a", RunID: "run-1", ParentTaskID: "prepare", SourceArtifactID: "artifact",
 		SourceSHA256: "sha", ItemCount: 1, Children: map[string]string{"item": "runtime-1"},
@@ -360,6 +373,7 @@ func TestReduceReplayWorksetReceiptConflictAfterTaskRemoval(t *testing.T) {
 }
 
 func TestReduceReplayEquivalentWorksetReceiptsRemainHealthy(t *testing.T) {
+	t.Parallel()
 	receipt := &WorksetExpansionReceipt{
 		WorksetID: "workset-equivalent", RunID: "run-1", ParentTaskID: "prepare", SourceArtifactID: "artifact",
 		SourceSHA256: "sha", ItemCount: 1, Children: map[string]string{"item": "runtime-1"},
@@ -385,6 +399,7 @@ func TestReduceReplayEquivalentWorksetReceiptsRemainHealthy(t *testing.T) {
 }
 
 func TestReducersRestoreRuntimeTaskContract(t *testing.T) {
+	t.Parallel()
 	item := &TodoItem{
 		ID: "runtime-1", Phase: PhaseExecute, PlanTaskID: "plan-1", ContractID: "contract-1", ContractHash: "hash", ContractRevision: 2,
 		Agent: "worker", Desc: "apply action", Status: TaskInProgress, Detail: "running", Model: "model-1",
@@ -411,6 +426,7 @@ func TestReducersRestoreRuntimeTaskContract(t *testing.T) {
 }
 
 func TestTodoReplayPreservesFirstIdentityAndCycleBoundary(t *testing.T) {
+	t.Parallel()
 	for _, cycle := range []bool{false, true} {
 		name := "ordinary"
 		if cycle {

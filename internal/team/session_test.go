@@ -12,6 +12,7 @@ import (
 )
 
 func TestBudgetSnapshotLoadsLegacyRedactedTokenCounter(t *testing.T) {
+	t.Parallel()
 	var snapshot BudgetSnapshot
 	if err := json.Unmarshal([]byte(`{"max_tokens":"[REDACTED]","tokens_used":"[REDACTED]","attempt":2}`), &snapshot); err != nil {
 		t.Fatalf("legacy budget snapshot should remain loadable: %v", err)
@@ -22,6 +23,7 @@ func TestBudgetSnapshotLoadsLegacyRedactedTokenCounter(t *testing.T) {
 }
 
 func TestLoadSessionLoadsLegacyRedactedDiagnosticBudget(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	sessionData := `{
 		"created_at": "2026-08-11T00:00:00Z",
@@ -55,6 +57,7 @@ func TestLoadSessionLoadsLegacyRedactedDiagnosticBudget(t *testing.T) {
 }
 
 func TestLoadSessionLoadsLegacyRedactedRepairCostTokens(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	sessionData := `{
 		"created_at": "2026-08-11T00:00:00Z",
@@ -91,6 +94,7 @@ func TestLoadSessionLoadsLegacyRedactedRepairCostTokens(t *testing.T) {
 
 // TestLoadSession tests the LoadSession function
 func TestLoadSession(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		setup   func(t *testing.T) string
@@ -166,6 +170,7 @@ func TestLoadSession(t *testing.T) {
 
 // TestSessionMDPath tests the SessionMDPath function
 func TestSessionMDPath(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		workspace string
@@ -200,6 +205,7 @@ func TestSessionMDPath(t *testing.T) {
 
 // TestLoadSessionMD tests the LoadSessionMD function
 func TestLoadSessionMD(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		setup   func(t *testing.T) string
@@ -256,6 +262,7 @@ func TestLoadSessionMD(t *testing.T) {
 
 // TestSaveSessionMD tests the SaveSessionMD function
 func TestSaveSessionMD(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		setup   func(t *testing.T) string
@@ -318,6 +325,7 @@ func TestSaveSessionMD(t *testing.T) {
 
 // TestGenerateSessionMD tests the GenerateSessionMD function
 func TestGenerateSessionMD(t *testing.T) {
+	t.Parallel()
 	sessionData := &SessionData{
 		CreatedAt: "2024-01-01T00:00:00Z",
 		UpdatedAt: "2024-01-01T00:00:00Z",
@@ -378,6 +386,7 @@ func TestGenerateSessionMD(t *testing.T) {
 
 // TestSessionEntryTimestamp tests that SessionEntry has timestamp field
 func TestSessionEntryTimestamp(t *testing.T) {
+	t.Parallel()
 	entry := SessionEntry{
 		Role:      "user",
 		Content:   "Test content",
@@ -397,6 +406,7 @@ func TestSessionEntryTimestamp(t *testing.T) {
 
 // TestSessionDataFields tests that SessionData has all expected fields
 func TestSessionDataFields(t *testing.T) {
+	t.Parallel()
 	data := &SessionData{
 		CreatedAt: "2024-01-01T00:00:00Z",
 		UpdatedAt: "2024-01-01T00:00:00Z",
@@ -422,6 +432,7 @@ func TestSessionDataFields(t *testing.T) {
 
 // TestEnsureWorkspaceDirs tests the EnsureWorkspaceDirs function
 func TestEnsureWorkspaceDirs(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		workspace string
@@ -464,6 +475,7 @@ func TestEnsureWorkspaceDirs(t *testing.T) {
 
 // TestCleanRunDirs tests the CleanRunDirs function
 func TestCleanRunDirs(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	// Create the workspace dirs first
@@ -509,6 +521,7 @@ func TestCleanRunDirs(t *testing.T) {
 
 // TestWorkspaceDirConstants tests that workspace directory constants are defined
 func TestWorkspaceDirConstants(t *testing.T) {
+	t.Parallel()
 	expectedDirs := []string{
 		"tasks",
 		"shared",
@@ -521,6 +534,7 @@ func TestWorkspaceDirConstants(t *testing.T) {
 }
 
 func TestWriteTaskFile(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	tests := []struct {
@@ -656,6 +670,7 @@ func TestWriteTaskFile(t *testing.T) {
 
 // TestSessionDataRoundCount tests that rounds count is tracked correctly
 func TestSessionDataRoundCount(t *testing.T) {
+	t.Parallel()
 	data := &SessionData{
 		CreatedAt: time.Now().Format(time.RFC3339),
 		UpdatedAt: time.Now().Format(time.RFC3339),
@@ -675,6 +690,7 @@ func TestSessionDataRoundCount(t *testing.T) {
 
 // TestSessionEntryRole tests that SessionEntry role is validated
 func TestSessionEntryRole(t *testing.T) {
+	t.Parallel()
 	validRoles := []string{"user", "assistant", "system"}
 
 	for _, role := range validRoles {
@@ -689,6 +705,7 @@ func TestSessionEntryRole(t *testing.T) {
 }
 
 func TestWriteTaskFileWithDetailIncludesFailureSection(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	err := writeTaskFileWithDetail(tmpDir, "delegate", "researcher", "20260502-143005", "error", "Find security bugs", "", "source=task_timeout | current=tool agent=helper tool=kvmforge create | error=context deadline exceeded")
 	if err != nil {
@@ -710,6 +727,7 @@ func TestWriteTaskFileWithDetailIncludesFailureSection(t *testing.T) {
 }
 
 func TestWriteStatusWithDetailIncludesDetailField(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	err := writeStatusWithDetail(tmpDir, "researcher", "error", "Find security bugs", "source=sigint | error=context canceled")
 	if err != nil {

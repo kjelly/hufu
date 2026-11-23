@@ -10,6 +10,7 @@ import (
 )
 
 func TestParseJudgeVerdict(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		response   string
@@ -94,6 +95,7 @@ func TestParseJudgeVerdict(t *testing.T) {
 }
 
 func TestBuildJudgePrompt(t *testing.T) {
+	t.Parallel()
 	candidates := []*agentResult{
 		{model: "model-a", output: "output A"},
 		{model: "model-b", output: strings.Repeat("y", sidecar.JudgeProfile.InputRuneLimit())},
@@ -115,6 +117,7 @@ func TestBuildJudgePrompt(t *testing.T) {
 }
 
 func TestComposeJudgedOutput(t *testing.T) {
+	t.Parallel()
 	candidates := []*agentResult{
 		{model: "model-a", output: "winner output"},
 		{model: "model-b", output: "loser output"},
@@ -139,6 +142,7 @@ func TestComposeJudgedOutput(t *testing.T) {
 }
 
 func TestJudgeAgentResultsFallsBackWithoutJudge(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{reportStatus: func(StatusEvent) {}}
 	results := []*agentResult{
 		{model: "a", output: "out a"},
@@ -158,6 +162,7 @@ func TestJudgeAgentResultsFallsBackWithoutJudge(t *testing.T) {
 }
 
 func TestExtractJSONPayload(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in, want string
 	}{

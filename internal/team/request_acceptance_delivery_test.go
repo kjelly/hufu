@@ -45,6 +45,7 @@ func assessedRequestReview(sourceID string, assessment RequestDeliveryAssessment
 }
 
 func TestRequestAcceptanceDeliveryRejectsKnownGapsWithoutProofRepair(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"partial", "secondary", "wrong target", "unknown", "declared gap", "unauthorized substitute"} {
 		t.Run(scenario, func(t *testing.T) {
 			c := requestAcceptanceFixture(t)
@@ -93,6 +94,7 @@ func TestRequestAcceptanceDeliveryRejectsKnownGapsWithoutProofRepair(t *testing.
 }
 
 func TestRequestAcceptanceExplicitSubstituteAndFullOriginal(t *testing.T) {
+	t.Parallel()
 	for _, substitute := range []bool{false, true} {
 		t.Run(map[bool]string{false: "full original", true: "authorized summary"}[substitute], func(t *testing.T) {
 			c := requestAcceptanceFixture(t)
@@ -157,6 +159,7 @@ func TestRequestAcceptanceExplicitSubstituteAndFullOriginal(t *testing.T) {
 }
 
 func TestRequestAcceptanceContractAuditVetoesBeforeFreeze(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		verdict string
 		calls   int
@@ -206,6 +209,7 @@ func TestRequestAcceptanceContractAuditVetoesBeforeFreeze(t *testing.T) {
 }
 
 func TestRequestAcceptanceContractAuditRepairsFormatBeforeFreeze(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{
 		`{"faithful":"true","reason":"The contract preserves the request."}`,
 		`{"reason":"The contract preserves the request."}`,
@@ -273,6 +277,7 @@ func TestRequestAcceptanceContractAuditRepairsFormatBeforeFreeze(t *testing.T) {
 }
 
 func TestRequestAcceptanceContractAuditRepairFailuresStayUnfrozen(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"provider error", "canceled", "oversized", "invalid repair", "repair provider error", "repair canceled", "repair oversized", "repair veto"} {
 		t.Run(scenario, func(t *testing.T) {
 			c := requestAcceptanceFixture(t)
@@ -319,6 +324,7 @@ func TestRequestAcceptanceContractAuditRepairFailuresStayUnfrozen(t *testing.T) 
 }
 
 func TestRequestAcceptanceDeliverySchemaFailsClosed(t *testing.T) {
+	t.Parallel()
 	const request = "Read the document"
 	for _, delivery := range []RequestDelivery{
 		{Target: "document", Extent: "whatever", Source: "any", AllowedSubstitutes: []RequestDeliverySubstitute{}},
@@ -340,6 +346,7 @@ func TestRequestAcceptanceDeliverySchemaFailsClosed(t *testing.T) {
 }
 
 func TestRequestAcceptanceOpinionTaskHasNoInventedAcquisition(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	const request = "整理某項公共政策的正反看法"
 	freezeRequestFixture(t, c, request, "response")
@@ -356,6 +363,7 @@ func TestRequestAcceptanceOpinionTaskHasNoInventedAcquisition(t *testing.T) {
 }
 
 func TestRequestAcceptanceLegacySnapshotRemainsAuditable(t *testing.T) {
+	t.Parallel()
 	legacy := []byte(`{"version":1,"request":"read document","requirements":[{"id":"requirement-1","statement":"read document","source_quote":"read document","required":true,"verification":"observed"}]}`)
 	snapshot, err := ResolveRunInputSnapshot([]RunInputDefinition{requestAcceptanceDefinitionVersion(1)}, []RunInputAssignment{{
 		Name: requestAcceptanceInput, RawValue: legacy, Source: RunInputSourceResolver, ResolverID: "hufu-request-acceptance", ResolverVersion: "1",
@@ -373,6 +381,7 @@ func TestRequestAcceptanceLegacySnapshotRemainsAuditable(t *testing.T) {
 }
 
 func TestRequestAcceptanceDeliveryFailurePersistsPartial(t *testing.T) {
+	t.Parallel()
 	c := requestAcceptanceFixture(t)
 	const request = "Retrieve the original document in full"
 	snapshot := freezeDeliveryFixture(t, c, request, RequestDelivery{Target: "original document", Extent: "full", Source: "any", AllowedSubstitutes: []RequestDeliverySubstitute{}})

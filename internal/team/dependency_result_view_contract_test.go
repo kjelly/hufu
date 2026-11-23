@@ -20,6 +20,7 @@ func dependencyViewSession() *TeamSession {
 }
 
 func TestDependencyResultViewContractBinding(t *testing.T) {
+	t.Parallel()
 	for _, initial := range []bool{false, true} {
 		t.Run(map[bool]string{false: "named", true: "initial"}[initial], func(t *testing.T) {
 			session := dependencyViewSession()
@@ -75,6 +76,7 @@ func TestDependencyResultViewContractBinding(t *testing.T) {
 }
 
 func TestDependencyResultViewContractRejectsUnsupportedTasks(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		change func(*TeamSession)
@@ -119,6 +121,7 @@ func TestDependencyResultViewContractRejectsUnsupportedTasks(t *testing.T) {
 }
 
 func TestDependencyResultViewPersistsCanonicalOccurrence(t *testing.T) {
+	t.Parallel()
 	session := dependencyViewSession()
 	tasks, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "producer", ContractID: "produce", Goal: "produce"}, {Agent: "worker", ContractID: "consume", Goal: "consume"}})
 	if err != nil {
@@ -173,6 +176,7 @@ func TestDependencyResultViewPersistsCanonicalOccurrence(t *testing.T) {
 // b02b302b archive, before adding dependency-result-view. Do not regenerate
 // them from the current implementation when changing policy serialization.
 func TestDependencyResultViewLegacyIdentityFixture(t *testing.T) {
+	t.Parallel()
 	task := TaskDef{ID: "consume", Agent: "worker", DependsOnContracts: []string{"produce"}}
 	const contractHash = "e498a0bf132c51107107fc5530fdb783c6d3be22347c5b000ae9a529da7ccba7"
 	hash, err := effectiveContractHash(task.ID, task.Agent, task.Execution, task.OutputMode, task.SideEffect, task.Recovery, task.MaxRetries, task.Action, task.FanOut, task.Optional, task)

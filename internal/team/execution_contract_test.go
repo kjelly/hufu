@@ -14,6 +14,7 @@ import (
 )
 
 func TestValidateExecutionContract_Defaults(t *testing.T) {
+	t.Parallel()
 	task := TaskDef{
 		Agent: "dev",
 		Goal:  "build feature",
@@ -30,6 +31,7 @@ func TestValidateExecutionContract_Defaults(t *testing.T) {
 }
 
 func TestValidateExecutionContract_TemplateToolGrantMustBeBounded(t *testing.T) {
+	t.Parallel()
 	valid := TaskDef{Agent: "observer", Execution: ExecutionContract{
 		RequiresResult:     true,
 		ToolSequence:       []string{"terminal", "submit_result"},
@@ -46,6 +48,7 @@ func TestValidateExecutionContract_TemplateToolGrantMustBeBounded(t *testing.T) 
 }
 
 func TestValidateExecutionContract_ValidKinds(t *testing.T) {
+	t.Parallel()
 	kinds := []ExecutionKind{
 		"",
 		ExecutionKindInline,
@@ -69,6 +72,7 @@ func TestValidateExecutionContract_ValidKinds(t *testing.T) {
 }
 
 func TestValidateExecutionContract_ClosedToolSequence(t *testing.T) {
+	t.Parallel()
 	valid := TaskDef{
 		Agent: "worker",
 		Goal:  "run bounded checkpoint",
@@ -118,6 +122,7 @@ func TestValidateExecutionContract_ClosedToolSequence(t *testing.T) {
 }
 
 func TestExecutionContract_ClosedToolSequenceParsesFromTaskConfig(t *testing.T) {
+	t.Parallel()
 	const taskJSON = `{
   "agent":"worker",
   "goal":"bounded checkpoint",
@@ -153,6 +158,7 @@ execution:
 }
 
 func TestValidateExecutionContract_ToolInputSequence(t *testing.T) {
+	t.Parallel()
 	valid := TaskDef{Execution: ExecutionContract{
 		Kind:              ExecutionKindProcess,
 		RequiresResult:    true,
@@ -204,6 +210,7 @@ func TestValidateExecutionContract_ToolInputSequence(t *testing.T) {
 }
 
 func TestValidateExecutionContract_ToolInputValueSequence(t *testing.T) {
+	t.Parallel()
 	valid := TaskDef{Execution: ExecutionContract{
 		Kind:                   ExecutionKindProcess,
 		RequiresResult:         true,
@@ -237,6 +244,7 @@ func TestValidateExecutionContract_ToolInputValueSequence(t *testing.T) {
 }
 
 func TestValidateExecutionContract_MixedToolSequenceRejectsScalarPinning(t *testing.T) {
+	t.Parallel()
 	invalid := TaskDef{Execution: ExecutionContract{
 		Kind:           ExecutionKindProcess,
 		RequiresResult: true,
@@ -257,6 +265,7 @@ func TestValidateExecutionContract_MixedToolSequenceRejectsScalarPinning(t *test
 }
 
 func TestValidateExecutionContract_ToolExpectedExitCodes(t *testing.T) {
+	t.Parallel()
 	valid := TaskDef{Execution: ExecutionContract{
 		Kind:                  ExecutionKindProcess,
 		RequiresResult:        true,
@@ -315,6 +324,7 @@ execution:
 }
 
 func TestValidateExecutionContractRejectsCommandInToolSequence(t *testing.T) {
+	t.Parallel()
 	task := TaskDef{Execution: ExecutionContract{
 		Kind:           ExecutionKindProcess,
 		RequiresResult: true,
@@ -327,6 +337,7 @@ func TestValidateExecutionContractRejectsCommandInToolSequence(t *testing.T) {
 }
 
 func TestCoordinatorDispatchClosedToolSequenceRequiresResult(t *testing.T) {
+	t.Parallel()
 	// A coordinator can emit requires_result:false despite a closed sequence
 	// ending in submit_result. Dispatch must apply the normal worker-result
 	// invariant before structural contract preflight.
@@ -358,6 +369,7 @@ func TestCoordinatorDispatchClosedToolSequenceRequiresResult(t *testing.T) {
 }
 
 func TestValidateExecutionContract_InvalidKind(t *testing.T) {
+	t.Parallel()
 	task := TaskDef{
 		Agent: "dev",
 		Goal:  "do work",
@@ -376,6 +388,7 @@ func TestValidateExecutionContract_InvalidKind(t *testing.T) {
 }
 
 func TestValidateExecutionContract_RequiresVerification(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		kind       ExecutionKind
@@ -483,6 +496,7 @@ func TestValidateExecutionContract_RequiresVerification(t *testing.T) {
 }
 
 func TestValidateExecutionContract_RequiresVerificationRejectsNonAssertingOrMalformedTypedVerifier(t *testing.T) {
+	t.Parallel()
 	base := TaskDef{
 		Agent: "dev",
 		Goal:  "perform external action",
@@ -512,6 +526,7 @@ func TestValidateExecutionContract_RequiresVerificationRejectsNonAssertingOrMalf
 }
 
 func TestValidateExecutionContract_IgnoresGoalAndDesc(t *testing.T) {
+	t.Parallel()
 	// Must not read Goal or Constraints text to deduce execution risks
 	goals := []string{
 		"interactive shell session needed",
@@ -538,6 +553,7 @@ func TestValidateExecutionContract_IgnoresGoalAndDesc(t *testing.T) {
 }
 
 func TestExecutionContract_JSONAndYAML(t *testing.T) {
+	t.Parallel()
 	jsonPayload := `{
 		"agent": "worker",
 		"goal": "deploy app",
@@ -596,6 +612,7 @@ execution:
 }
 
 func TestExecutionContract_YAMLLegacyStrictResult(t *testing.T) {
+	t.Parallel()
 	// Top-level YAML strict-result
 	topLevelYAML := `
 agent: dev
@@ -627,6 +644,7 @@ execution:
 }
 
 func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
+	t.Parallel()
 	// 1. Verify ExecutionContract struct exports only the declared specification fields
 	contractType := reflect.TypeOf(ExecutionContract{})
 	expectedFields := map[string]bool{
@@ -751,6 +769,7 @@ func TestExecutionContract_SpecFieldsOnly(t *testing.T) {
 }
 
 func TestMissingExecutionToolsRejectsUnavailableClosedSequenceTools(t *testing.T) {
+	t.Parallel()
 	got := missingExecutionTools(nil, []string{"bash", "write", "submit_result"})
 	if want := []string{"bash", "write"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("missing execution tools = %v, want %v", got, want)
@@ -761,6 +780,7 @@ func TestMissingExecutionToolsRejectsUnavailableClosedSequenceTools(t *testing.T
 }
 
 func TestCoordinatorExecuteTasks_RejectsInvalidExecutionContract(t *testing.T) {
+	t.Parallel()
 	c := &Coordinator{}
 	tasks := []TaskDef{
 		{
@@ -784,6 +804,7 @@ func TestCoordinatorExecuteTasks_RejectsInvalidExecutionContract(t *testing.T) {
 }
 
 func TestValidateExecutionContract_RejectsNonAssertingVerifier(t *testing.T) {
+	t.Parallel()
 	kinds := []ExecutionKind{
 		ExecutionKindInline,
 		ExecutionKindProcess,

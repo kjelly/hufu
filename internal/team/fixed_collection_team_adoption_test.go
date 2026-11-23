@@ -118,6 +118,7 @@ func adoptedCollectionPayload(t *testing.T, c *Coordinator, item *TodoItem, raw 
 }
 
 func TestAdoptedFixedCollectionsPreserveMembershipAndAllowCorrection(t *testing.T) {
+	t.Parallel()
 	for _, teamName := range []string{"hufu-coding", "web-research", "hufu-dev"} {
 		for _, external := range []bool{false, true} {
 			for _, mistake := range []string{"missing", "extra", "fixed field", "invalid choice", "array"} {
@@ -176,6 +177,7 @@ func TestAdoptedFixedCollectionsPreserveMembershipAndAllowCorrection(t *testing.
 }
 
 func TestAdoptedFixedCollectionNegativeReportsRemainSubmittable(t *testing.T) {
+	t.Parallel()
 	for _, teamName := range []string{"hufu-coding", "hufu-dev"} {
 		for _, status := range []string{TaskResultStatusFailed, TaskResultStatusPartial, TaskResultStatusBlocked} {
 			t.Run(teamName+"/"+status, func(t *testing.T) {
@@ -219,6 +221,7 @@ func TestAdoptedFixedCollectionNegativeReportsRemainSubmittable(t *testing.T) {
 }
 
 func TestFixedCollectionDependencyScopeIsExplicitAndBounded(t *testing.T) {
+	t.Parallel()
 	c, sources, item, _ := fixedCollectionFixture(t, 1)
 	item.DependsOn, item.EvidenceFrom = []string{sources[0].ID}, nil
 	if _, err := c.fixedCollectionPlans(item.ID); err == nil {
@@ -251,6 +254,7 @@ func TestFixedCollectionDependencyScopeIsExplicitAndBounded(t *testing.T) {
 }
 
 func TestAdoptedFixedCollectionSourceReplacementInvalidatesDecisions(t *testing.T) {
+	t.Parallel()
 	for _, teamName := range []string{"hufu-coding", "web-research", "hufu-dev"} {
 		t.Run(teamName, func(t *testing.T) {
 			c, item, plans, value := adoptedFixedCollectionFixture(t, teamName)
@@ -299,6 +303,7 @@ func TestAdoptedFixedCollectionSourceReplacementInvalidatesDecisions(t *testing.
 }
 
 func TestAdoptedFixedCollectionEmptyInputIsNotMissingEvidence(t *testing.T) {
+	t.Parallel()
 	c, item, plans, value := adoptedFixedCollectionFixture(t, "hufu-dev")
 	source := c.todoItemByID(plans[0].binding.Sources[0].TaskID)
 	payload, err := validateStructuredResultPayload(c.session.ResultContracts[source.ResultContract.ID], *source.ResultContract, hufuDevPayload("implementation-engineer"))

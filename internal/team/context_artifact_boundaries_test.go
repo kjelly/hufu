@@ -17,6 +17,7 @@ import (
 // These captures include the exit footer. The non-truncating cases use short
 // lines; truncating cases use one long line, matching bash's legacy bounds.
 func TestContextArtifactProductionSizeBoundaries(t *testing.T) {
+	t.Parallel()
 	policy := defaultContextArtifactPolicy()
 	cases := []struct {
 		name         string
@@ -87,6 +88,7 @@ func TestContextArtifactProductionSizeBoundaries(t *testing.T) {
 }
 
 func TestBashSmallLongLineHonorsLegacyFallback(t *testing.T) {
+	t.Parallel()
 	f := newContextArtifactFixture(t, defaultContextArtifactPolicy())
 	svc := f.c.newContextArtifactService(f.task.ID, TaskDef{})
 	ctx := f.attemptCtx(t, svc, f.task.ID, 1)

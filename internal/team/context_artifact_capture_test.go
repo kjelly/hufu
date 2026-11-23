@@ -42,6 +42,7 @@ func rebuildThroughView(t *testing.T, c *Coordinator, ctx context.Context, id st
 }
 
 func TestBashOutputOffloadEndToEnd(t *testing.T) {
+	t.Parallel()
 	const privateKey = "-----BEGIN RSA PRIVATE KEY-----\nMIIEoffloadsecret\n-----END RSA PRIVATE KEY-----"
 	f := newContextArtifactFixture(t, defaultContextArtifactPolicy())
 	svc := f.c.newContextArtifactService(f.task.ID, TaskDef{})
@@ -118,6 +119,7 @@ func (p *offloadProbeTool) Run(ctx context.Context, _ fantasy.ToolCall) (fantasy
 }
 
 func TestPolicyGateBindsOffloaderOnlyAfterAuthorization(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "bash,view,grep", nil, nil)
 	store, err := NewEventStore(c.session.Workspace, "run-1", "session-1")
 	if err != nil {
@@ -164,6 +166,7 @@ func TestPolicyGateBindsOffloaderOnlyAfterAuthorization(t *testing.T) {
 }
 
 func TestDynamicGatewayOutputOffload(t *testing.T) {
+	t.Parallel()
 	c := newDirectTypedCoordinator(t, "view", nil, nil)
 	store, err := NewEventStore(c.session.Workspace, "run-1", "session-1")
 	if err != nil {
