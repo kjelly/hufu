@@ -10,6 +10,83 @@ import (
 	"testing"
 )
 
+func TestRepositorySnapshotBoundsRelatedEvidenceAndPlansEveryPrimary(t *testing.T) {
+	repo := newFixtureRepo(t)
+	const target = "service/a_target.go"
+	const callerCount = 64
+	for i := range callerCount {
+		name := fmt.Sprintf("service/caller_%02d_%s.go", i, strings.Repeat("context_", 8))
+		writeFile(t, filepath.Join(repo, name), fmt.Sprintf("package service\nfunc Caller%02d() { Target() }\n", i))
+	}
+	writeAndCommit(t, repo, target, "package service\nfunc Target() {}\n", "related evidence must fit", "2025-01-02T00:00:00Z")
+	config := sourceBudgetFixtureConfig(repo, "snapshot-out")
+	config.Routing = routingDocumentation
+	config.Scope = resolverScope{Kind: "repository_snapshot", History: "first_parent", Head: "HEAD"}
+	config.MaxCommits = 0
+	config.MaxPaths = 1
+	config.MaxReviewInputTokens = 12000
+	if _, err := Prepare(t.Context(), config); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(repo, config.OutputDir)
+	var inventory repositorySnapshotManifest
+	data, err := os.ReadFile(filepath.Join(out, "repository-snapshot.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	planned := make(map[string]int64)
+	for _, workset := range inventory.Plan.Worksets {
+		for _, source := range workset.Sources {
+			if len(source.Spans) == 1 && source.Spans[0].Start == 0 {
+				planned[source.Path] = source.Spans[0].End
+			}
+		}
+	}
+	var inventoried int
+	for _, file := range inventory.Files {
+		if !strings.HasPrefix(file.Path, "service/") {
+			continue
+		}
+		inventoried++
+		if planned[file.Path] != file.Bytes || file.SHA256 == "" {
+			t.Errorf("source lost primary coverage or identity: %s", file.Path)
+		}
+	}
+	if inventoried != 1+callerCount {
+		t.Fatalf("snapshot inventory lost source files: %d", inventoried)
+	}
+
+	manifest := readManifest(t, filepath.Join(out, "primary", "workset-manifest.json"))
+	for _, entry := range manifest.Items {
+		if len(entry.TouchedPaths) != 1 || entry.TouchedPaths[0] != target {
+			continue
+		}
+		assertReviewInputBudget(t, repo, entry, config)
+		for _, input := range entry.Inputs {
+			if input.Kind != "review_evidence_inventory" {
+				continue
+			}
+			var evidence evidenceInventory
+			data, err := os.ReadFile(filepath.Join(repo, input.Path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &evidence); err != nil {
+				t.Fatal(err)
+			}
+			if len(evidence.Sources) != 1+maxSnapshotRelatedPaths || evidence.Sources[0].Path != target || evidence.Sources[1].Role != "related" {
+				t.Fatalf("unexpected workset evidence count or primary: %d", len(evidence.Sources))
+			}
+			return
+		}
+	}
+	t.Fatal("target did not publish its bounded evidence inventory")
+}
+
 func TestRepositorySnapshotPaginatesFinalWorksets(t *testing.T) {
 	repo := newFixtureRepo(t)
 	for i := range 29 {

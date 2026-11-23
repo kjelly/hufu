@@ -77,6 +77,13 @@ func (s *reviewSourceSnapshot) bundleDataWithPrimary(partition string, primaryPa
 	if s.identity != nil {
 		inventory.SnapshotID, inventory.ContentSHA256 = s.identity.ID, s.identity.ContentSHA256
 		fmt.Fprintf(&bundle, "review_mode: repository_snapshot\nsnapshot_id: %s\ncontent_sha256: %s\n", s.identity.ID, s.identity.ContentSHA256)
+		// The complete repository inventory already seals every candidate's
+		// tracked identity. Keep the highest-ranked context in the workset so
+		// repeated metadata cannot crowd out its primary source.
+		if count := len(related); count > maxSnapshotRelatedPaths {
+			fmt.Fprintf(&bundle, "related_candidates_outside_workset: %d (see repository snapshot inventory for tracked paths and identities)\n", count-maxSnapshotRelatedPaths)
+			related = related[:maxSnapshotRelatedPaths]
+		}
 	}
 	bundle.WriteString("dependency_selection: same-package and snapshot import-dependent identifier candidates; symbol matches precede weaker method-name-only candidates, including candidate tests; unknown module ownership retains conservative name matching. This is not a type-checked call graph: interface injection, reflection and dynamic calls may require supplemental evidence.\nRelated paths without embedded content remain fully identified in the evidence inventory; their metadata is not duplicated here.\n")
 	bundle.WriteString("Read this artifact as the source/caller/test authority for the assigned workset. Do not substitute the live checkout.\ncoverage_scope: workset_only\nUnlisted or unavailable paths are not evidence of repository absence. Source byte ranges are half-open; source line coordinates retain their original numbering.\n")

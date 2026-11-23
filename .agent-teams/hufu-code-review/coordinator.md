@@ -48,8 +48,8 @@ Dispatch the fixed contracts in this order:
    snapshot. `completed: true` attests execution, while `passed` records the
    target outcome. Failed tests remain review evidence and require final
    `completed_with_gaps`; a launch failure or timeout blocks PREPARE.
-   Tests have an explicit 30m package deadline and a 35m command deadline;
-   the action allows 40m including snapshot setup and evidence publication.
+   Tests have an explicit 40m package deadline and a 50m command deadline.
+   The action allows 55m including snapshot setup and evidence publication.
    `timeout_kind` distinguishes `test`, `command`, `caller_deadline`, `canceled`,
    and `none`. `diagnostic` is a bounded head/tail summary; `summary_truncated`
    does not mean evidence was lost. `output_artifact_id` binds the complete

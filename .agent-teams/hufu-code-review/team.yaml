@@ -248,12 +248,12 @@ spec:
       source: ./reviewprep
       mode: trusted-static
       timeout: 300
-    # reviewprep: 30m/package, 35m total; 5m for snapshot setup and sealing.
+    # reviewprep: 40m/package, 50m command; 5m for snapshot setup and sealing.
     verify-review-tests:
       runtime: golang
       source: ./reviewprep
       mode: trusted-static
-      timeout: 2400
+      timeout: 3300
     prepare-review-supplement:
       runtime: golang
       source: ./reviewprep

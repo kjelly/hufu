@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -16,7 +17,7 @@ import (
 	"github.com/kjelly/hufu/internal/workspace/versionstore"
 )
 
-func actionRecoveryProvider(digest string, fail bool, calls *int, origins *map[string]string, captured ...*string) *golangActionProvider {
+func actionRecoveryProvider(digest string, failedTaskID string, calls *int, origins *map[string]string, captured ...*string) *golangActionProvider {
 	return &golangActionProvider{capability: "structured-actions", program: golangruntime.Program{Source: "/fixture/action", Digest: runInputHash([]byte(digest))}, execute: func(_ context.Context, _ golangruntime.Program, input []byte, env []string, _, _ int) (golangruntime.Result, error) {
 		*calls++
 		if len(captured) > 0 {
@@ -34,7 +35,7 @@ func actionRecoveryProvider(digest string, fail bool, calls *int, origins *map[s
 				return golangruntime.Result{}, err
 			}
 		}
-		if fail && values["HUFU_TASK_ID"] == "8" {
+		if failedTaskID != "" && values["HUFU_TASK_ID"] == failedTaskID {
 			err := exec.Command("/bin/sh", "-c", "exit 1").Run()
 			return golangruntime.Result{Stderr: []byte("old provider defect")}, err
 		}
@@ -47,10 +48,10 @@ func actionRecoveryProvider(digest string, fail bool, calls *int, origins *map[s
 
 func nativeActionRecoveryFixture(t *testing.T, payload ...string) (*Coordinator, *versionFixture, *ResumeSource, *int) {
 	t.Helper()
-	return nativeActionRecoveryWithReport(t, nil, payload...)
+	return nativeActionRecoveryWithTasks(t, 8, nil, payload...)
 }
 
-func nativeActionRecoveryWithReport(t *testing.T, report *CompiledResultContract, payload ...string) (*Coordinator, *versionFixture, *ResumeSource, *int) {
+func nativeActionRecoveryWithTasks(t *testing.T, taskCount int, report *CompiledResultContract, payload ...string) (*Coordinator, *versionFixture, *ResumeSource, *int) {
 	t.Helper()
 	f := &versionFixture{t: t, control: t.TempDir(), subject: t.TempDir()}
 	f.version = WorkspaceVersionContext{Mode: versionstore.ModeOff, WorkspaceID: "action-workspace", ProjectID: "action-project", TeamName: "generic-action", SubjectRoot: f.subject, ControlRoot: f.control, StateDir: t.TempDir()}
@@ -89,7 +90,7 @@ func nativeActionRecoveryWithReport(t *testing.T, report *CompiledResultContract
 	c.session.Config.ActionProviders = map[string]agent.ActionProviderConfig{"structured-actions": {Runtime: "golang", Source: "./action", Mode: golangruntime.TrustedStaticMode}}
 	c.session.ProviderRegistry = NewProviderRegistry()
 	calls := new(int)
-	c.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("original", true, calls, nil))
+	c.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("original", strconv.Itoa(taskCount), calls, nil))
 	flow := workflowTestSession(t)
 	flow.Workspace = f.control
 	if err = flow.SetCompatibilityWorkspaceScope(f.subject); err != nil {
@@ -97,7 +98,7 @@ func nativeActionRecoveryWithReport(t *testing.T, report *CompiledResultContract
 	}
 	c.phaseWorkflow = executePhaseWorkflow(t, flow)
 	c.phaseWorkflow.registry = c.session.ProviderRegistry
-	for i := range 8 {
+	for i := range taskCount {
 		c.session.ContractTasks = append(c.session.ContractTasks, TaskDef{ID: fmt.Sprintf("native-%d", i), Agent: "worker", Goal: "read frozen evidence", Phase: PhaseExecute, SideEffect: SideEffectNone, Recovery: RecoveryRetry, Verify: "true", Action: &Action{Capability: "structured-actions", Type: "read", Payload: `{"scope":{}}`, InputBindings: []ActionInputBinding{{Input: "scope", Target: "/scope"}}}})
 	}
 	if len(payload) > 0 {
@@ -144,7 +145,7 @@ func nativeActionRecoveryWithReport(t *testing.T, report *CompiledResultContract
 	for i, definition := range definitions {
 		task, item := createAdmittedTestTask(t, c, definition)
 		_, err := c.executeRuntimeAction(t.Context(), task, item.ID)
-		if (err != nil) != (i == 7) {
+		if (err != nil) != (i == nativeTasks-1) {
 			t.Fatalf("native %d: %v", i, err)
 		}
 	}
@@ -156,7 +157,7 @@ func nativeActionRecoveryWithReport(t *testing.T, report *CompiledResultContract
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("fixed", false, new(int), nil))
+	c.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("fixed", "", new(int), nil))
 	return c, f, source, calls
 }
 
@@ -173,7 +174,7 @@ func TestContractRecoveryActionUpgradesUnstartedConsumer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, f, source, calls := nativeActionRecoveryWithReport(t, old)
+	c, f, source, calls := nativeActionRecoveryWithTasks(t, 8, old)
 	c.session.ResultContracts[next.ID] = next
 	c.session.ContractTasks[len(c.session.ContractTasks)-1].ResultContract = new(next.ref(true))
 	ctx := WithReadOnlyActionRepair(WithMetadataOnlyContractRecovery(t.Context()), "8")
@@ -234,7 +235,7 @@ func testNativeActionRecoveryChild(t *testing.T, rebuild bool) {
 	fixedCalls := new(int)
 	var origins map[string]string
 	var captured string
-	c.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("fixed", false, fixedCalls, &origins, &captured))
+	c.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("fixed", "", fixedCalls, &origins, &captured))
 	ctx := WithReadOnlyActionRepair(WithMetadataOnlyContractRecovery(t.Context()), "8")
 	if rebuild {
 		if _, err := c.AssessContractRecovery(ctx, source); err == nil {
@@ -263,11 +264,11 @@ func testNativeActionRecoveryChild(t *testing.T, rebuild bool) {
 	if _, err = c.ApplyContractRecovery(ctx, source, "bad-plan", strings.Repeat("0", 64)); err == nil {
 		t.Fatal("stale plan accepted")
 	}
-	c.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("changed-again", false, new(int), nil))
+	c.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("changed-again", "", new(int), nil))
 	if _, err = c.ApplyContractRecovery(ctx, source, "changed-program", plan.SHA256); err == nil {
 		t.Fatal("program changed after preview was accepted")
 	}
-	c.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("fixed", false, fixedCalls, &origins, &captured))
+	c.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("fixed", "", fixedCalls, &origins, &captured))
 	branch, err := c.ApplyContractRecovery(ctx, source, "fixed-action", plan.SHA256)
 	if err != nil {
 		t.Fatal(err)
@@ -319,11 +320,11 @@ func testNativeActionRecoveryChild(t *testing.T, rebuild bool) {
 	if *fixedCalls != 0 {
 		t.Fatal("preview/publication executed provider")
 	}
-	fresh.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("changed-after-publication", false, new(int), nil))
+	fresh.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("changed-after-publication", "", new(int), nil))
 	if err := fresh.validateResumeRecoveryMode(t.Context(), child); err == nil {
 		t.Fatal("child accepted unapproved provider source")
 	}
-	fresh.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("fixed", false, fixedCalls, &origins, &captured))
+	fresh.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("fixed", "", fixedCalls, &origins, &captured))
 
 	fresh.executionRunID = "child-execution"
 	fresh.eventStore, err = NewEventStore(f.control, fresh.executionRunID, "generic-action")
@@ -400,16 +401,18 @@ func testNativeActionRecoveryChild(t *testing.T, rebuild bool) {
 }
 
 func TestContractRecoveryActionRefusesChangedAuthorityOrLostEvidence(t *testing.T) {
+	const taskCount = 2 // One accepted result and one failed action suffice.
+	failedTaskID := strconv.Itoa(taskCount)
 	for _, name := range []string{"unchanged_program", "unknown_family", "model", "static_payload", "schema", "stored_payload", "source_head", "cancelled", "missing_failure", "side_effect"} {
 		t.Run(name, func(t *testing.T) {
-			c, f, source, calls := nativeActionRecoveryFixture(t)
-			ctx := WithReadOnlyActionRepair(WithMetadataOnlyContractRecovery(t.Context()), "8")
+			c, f, source, calls := nativeActionRecoveryWithTasks(t, taskCount, nil)
+			ctx := WithReadOnlyActionRepair(WithMetadataOnlyContractRecovery(t.Context()), failedTaskID)
 			switch name {
 			case "unchanged_program":
-				c.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("original", false, new(int), nil))
+				c.session.ProviderRegistry.Register("structured-actions", actionRecoveryProvider("original", "", new(int), nil))
 			case "unknown_family":
 				c.session.Config.ActionProviders["unobserved"] = agent.ActionProviderConfig{Runtime: "golang", Source: "./other", Mode: golangruntime.TrustedStaticMode}
-				c.session.ProviderRegistry.Register("unobserved", actionRecoveryProvider("unrelated", false, new(int), nil))
+				c.session.ProviderRegistry.Register("unobserved", actionRecoveryProvider("unrelated", "", new(int), nil))
 			case "model":
 				c.session.Agents["worker"].Generation.Model = "ollama/other"
 			case "static_payload":
@@ -425,9 +428,9 @@ func TestContractRecoveryActionRefusesChangedAuthorityOrLostEvidence(t *testing.
 				ctx, cancel = context.WithCancel(ctx)
 				cancel()
 			case "missing_failure":
-				source.Session.Tasks[7].FailureEvent = nil
+				todoItemByID(source.Session.Tasks, failedTaskID).FailureEvent = nil
 			case "side_effect":
-				source.Session.Tasks[7].SideEffect = SideEffectExternalWrite
+				todoItemByID(source.Session.Tasks, failedTaskID).SideEffect = SideEffectExternalWrite
 			}
 			before := mustReadEvents(t, f.events)
 			plan, err := c.AssessContractRecovery(ctx, source)
@@ -440,7 +443,7 @@ func TestContractRecoveryActionRefusesChangedAuthorityOrLostEvidence(t *testing.
 			if err == nil {
 				t.Fatal("unsafe recovery accepted")
 			}
-			if *calls != 8 || !reflect.DeepEqual(before, mustReadEvents(t, f.events)) {
+			if *calls != taskCount || !reflect.DeepEqual(before, mustReadEvents(t, f.events)) {
 				t.Fatal("refusal executed work or changed history")
 			}
 		})

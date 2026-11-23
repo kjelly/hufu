@@ -67,7 +67,7 @@ func TestGoTestDeadlinesFitActionBudget(t *testing.T) {
 	}
 	limits := defaultGoTestLimits()
 	action := time.Duration(manifest.Spec.Providers["verify-review-tests"].Timeout) * time.Second
-	if limits.Package != 30*time.Minute || limits.Command < limits.Package+time.Minute || action < limits.Command+5*time.Minute || time.Duration(manifest.Spec.Timeout)*time.Second < action {
+	if limits.Package != 40*time.Minute || limits.Command != 50*time.Minute || action != 55*time.Minute || time.Duration(manifest.Spec.Timeout)*time.Second < action {
 		t.Fatalf("inconsistent test/command/action/worker deadlines: %+v, %s, %d", limits, action, manifest.Spec.Timeout)
 	}
 }

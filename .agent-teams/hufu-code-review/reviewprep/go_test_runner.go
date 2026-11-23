@@ -26,9 +26,9 @@ type goTestLimits struct {
 }
 
 func defaultGoTestLimits() goTestLimits {
-	// The team's action timeout is 40m. Leave time for snapshot preparation,
-	// command teardown and durable artifact publication; never inherit Go's 10m.
-	return goTestLimits{Package: 30 * time.Minute, Command: 35 * time.Minute, Reserve: 30 * time.Second, OutputBytes: 64 * 1024 * 1024}
+	// The team's 55m action timeout leaves time for snapshot preparation,
+	// command teardown and durable artifact publication.
+	return goTestLimits{Package: 40 * time.Minute, Command: 50 * time.Minute, Reserve: 30 * time.Second, OutputBytes: 64 * 1024 * 1024}
 }
 
 // goTestOutput retains the complete merged stream on disk and only a bounded

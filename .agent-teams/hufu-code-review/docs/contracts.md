@@ -698,6 +698,10 @@ Worksets contain package/directory file lists, assigned primary source ranges
 and bounded related caller/test context. Snapshot mode uses a single primary
 review route. The other routes emit explicit noops. Existing issues within the
 assigned primary ranges are valid findings at the original `repository/path:line`.
+Snapshot worksets include metadata for the same highest-ranked related
+candidates eligible for embedded context. The source bundle counts candidates
+outside the workset, and the complete snapshot inventory retains their tracked
+identities and primary coverage dispositions.
 The native gate checks each finding against those ranges. Diff review retains
 its changed-scope rules. Snapshot reference reports have zero deterministic
 link/path checks, so semantic review of the supplied source remains mandatory.
