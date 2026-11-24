@@ -2,6 +2,8 @@ package team
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -446,3 +448,102 @@ func TestStrandedDependentKeepsDelegationOpenAndReportsProducerOutcome(t *testin
 		})
 	}
 }
+
+func TestScaleDAGDiamondDependencyAndPartialFailureStranding(t *testing.T) {
+	t.Parallel()
+	coord := newTestCoordinator(t)
+	const workerCount = 16
+	totalTasks := 1 + workerCount + 1 // 1 planner (0), 16 workers (1..16), 1 aggregator (17)
+
+	tasks := make([]TaskDef, totalTasks)
+	tasks[0] = TaskDef{Agent: "planner", Goal: "plan work"}
+	allWorkers := make([]int, workerCount)
+	for i := 1; i <= workerCount; i++ {
+		tasks[i] = TaskDef{
+			Agent:     fmt.Sprintf("worker-%d", i),
+			Goal:      fmt.Sprintf("work %d", i),
+			DependsOn: []int{0},
+		}
+		allWorkers[i-1] = i
+	}
+	tasks[totalTasks-1] = TaskDef{
+		Agent:      "aggregator",
+		Goal:       "aggregate results",
+		DependsOn:  allWorkers,
+		OnFailure:  intPtr(0),
+		MaxRetries: 2,
+	}
+
+	specs := make([]TodoSpec, totalTasks)
+	for i := range tasks {
+		specs[i] = TodoSpec{Agent: tasks[i].Agent, Desc: tasks[i].Goal}
+	}
+	items := coord.taskTracker.TodoList().AddBatch(specs)
+
+	s := mustNewDAGScheduler(t, coord, tasks, items, nil)
+
+	if len(s.revDeps[0]) != workerCount {
+		t.Fatalf("expected %d reverse dependencies for planner, got %d", workerCount, len(s.revDeps[0]))
+	}
+	for i := 1; i <= workerCount; i++ {
+		if len(s.revDeps[i]) != 1 || s.revDeps[i][0] != totalTasks-1 {
+			t.Fatalf("expected reverse dependency to aggregator (%d) for worker %d, got %v", totalTasks-1, i, s.revDeps[i])
+		}
+	}
+
+	// Phase 1: Planner task succeeds
+	s.states[0] = TaskDone
+	coord.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskDone, "planner finished")
+
+	// Phase 2: Workers 1..15 succeed; worker 16 fails with TaskError
+	for i := 1; i < workerCount; i++ {
+		s.states[i] = TaskDone
+		coord.taskTracker.TodoList().UpdateStatus(items[i].ID, TaskDone, "worker completed")
+	}
+	failingWorkerIdx := workerCount
+	s.states[failingWorkerIdx] = TaskError
+	coord.taskTracker.TodoList().UpdateStatus(items[failingWorkerIdx].ID, TaskError, "unrecoverable worker failure")
+	s.results[failingWorkerIdx] = agentTaskResult{
+		agentName: tasks[failingWorkerIdx].Agent,
+		todoID:    items[failingWorkerIdx].ID,
+		task:      tasks[failingWorkerIdx].Goal,
+		err:       errors.New("unrecoverable worker failure"),
+		idx:       failingWorkerIdx,
+	}
+
+	// Phase 3: Mark stranded - aggregator depends on failed worker 16
+	s.markStranded()
+
+	aggregatorIdx := totalTasks - 1
+	aggregatorItem := coord.taskTracker.TodoList().Items()[aggregatorIdx]
+	if s.states[aggregatorIdx] != TaskBlocked {
+		t.Fatalf("expected aggregator scheduler state to be TaskBlocked, got %s", s.states[aggregatorIdx])
+	}
+	if aggregatorItem.Status != TaskBlocked {
+		t.Fatalf("expected aggregator todo item to be TaskBlocked, got %s", aggregatorItem.Status)
+	}
+	if !strings.Contains(aggregatorItem.Detail, "producer_status=error") || !strings.Contains(aggregatorItem.Detail, items[failingWorkerIdx].ID) {
+		t.Fatalf("expected aggregator detail to reference failed producer %s, got: %s", items[failingWorkerIdx].ID, aggregatorItem.Detail)
+	}
+	if coord.IsWrapUp() {
+		t.Fatal("stranded tasks without run conclusion must not set wrap-up")
+	}
+
+	// Phase 4: resetWave(ctx, 0) simulates DAG level rollback to planner
+	ctx := t.Context()
+	if err := s.resetWave(ctx, 0); err != nil {
+		t.Fatalf("resetWave failed: %v", err)
+	}
+
+	// Verify all tasks in the transitive diamond were reset to TaskPending
+	for i := 0; i < totalTasks; i++ {
+		if s.states[i] != TaskPending {
+			t.Fatalf("task %d scheduler state = %s, want TaskPending", i, s.states[i])
+		}
+		item := coord.taskTracker.TodoList().Items()[i]
+		if item.Status != TaskPending {
+			t.Fatalf("task %d todo item status = %s, want TaskPending", i, item.Status)
+		}
+	}
+}
+
