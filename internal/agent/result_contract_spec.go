@@ -13,6 +13,7 @@ import (
 type ResultContractSpec struct {
 	Schema            string `yaml:"schema" json:"schema"`
 	RequireStructured bool   `yaml:"require-structured" json:"require_structured,omitempty"`
+	Normalizer        string `yaml:"normalizer,omitempty" json:"normalizer,omitempty"`
 }
 
 // Clone returns an independent copy, or nil for a nil spec.
@@ -33,9 +34,9 @@ func (s *ResultContractSpec) UnmarshalYAML(node *yaml.Node) error {
 	}
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		switch key := node.Content[i].Value; key {
-		case "schema", "require-structured":
+		case "schema", "require-structured", "normalizer":
 		default:
-			return fmt.Errorf("result-contract: unknown key %q (supported: schema, require-structured)", key)
+			return fmt.Errorf("result-contract: unknown key %q (supported: schema, require-structured, normalizer)", key)
 		}
 	}
 	type plain ResultContractSpec

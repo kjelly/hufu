@@ -26,6 +26,7 @@ type ResultContractRef struct {
 	// SchemaSHA256 is the hex SHA-256 of the canonical schema bytes.
 	SchemaSHA256      string `json:"schema_sha256"`
 	RequireStructured bool   `json:"require_structured,omitempty"`
+	Normalizer        string `json:"normalizer,omitempty"`
 }
 
 func (r *ResultContractRef) clone() *ResultContractRef {

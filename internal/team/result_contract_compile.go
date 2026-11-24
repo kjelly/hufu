@@ -340,7 +340,9 @@ func compileTeamResultContracts(session *TeamSession) error {
 		} else {
 			schemas[compiled.ID] = compiled
 		}
-		return compiled.ref(spec.RequireStructured), compiled, nil
+		ref := compiled.ref(spec.RequireStructured)
+		ref.Normalizer = strings.TrimSpace(spec.Normalizer)
+		return ref, compiled, nil
 	}
 	decisionAgents := decisionRoleEligibleAgents(session)
 	checkBinding := func(owner string, def *agent.AgentDef, compiled *CompiledResultContract) error {

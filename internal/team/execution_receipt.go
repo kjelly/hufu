@@ -210,6 +210,7 @@ type ExecutionReceipt struct {
 	ResultContractID         string                `json:"result_contract_id,omitempty"`
 	ResultContractSHA256     string                `json:"result_contract_sha256,omitempty"`
 	ResultPayloadSHA256      string                `json:"result_payload_sha256,omitempty"`
+	ResultRawPayloadSHA256   string                `json:"result_raw_payload_sha256,omitempty"`
 	ResultValidation         ResultValidationState `json:"result_validation,omitempty"`
 	ResultValidationFailures int                   `json:"result_validation_failures,omitempty"`
 	// CandidateIndex is the execution-route candidate this attempt ran on,

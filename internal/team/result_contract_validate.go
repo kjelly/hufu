@@ -50,6 +50,8 @@ type ResultPayload struct {
 	// CollectionBindings are issued by the runtime after assembly, never
 	// accepted from the worker's structured_payload.
 	CollectionBindings []ResultCollectionBinding `json:"collection_bindings,omitempty"`
+	// RawSHA256 is the hex SHA-256 of the unnormalized payload, if a normalizer was applied.
+	RawSHA256 string `json:"raw_sha256,omitempty"`
 }
 
 // Keep the canonical validator's cause without exposing its unbounded error
@@ -286,6 +288,19 @@ func (c *Coordinator) validateStructuredPayloadClaims(todoID string, raw json.Ra
 		}
 		return nil, "", false
 	}
+	var rawSHA256 string
+	if ref.Normalizer != "" {
+		sum := sha256.Sum256(raw)
+		rawSHA256 = hex.EncodeToString(sum[:])
+		normalized, normErr := c.normalizeStructuredPayload(context.Background(), ref.Normalizer, raw)
+		if normErr != nil {
+			if recordFailure {
+				c.recordResultValidationFailure(todoID)
+			}
+			return nil, fmt.Sprintf("%s: normalizer %q failed: %s", structuredPayloadInvalidCode, ref.Normalizer, normErr.Error()), false
+		}
+		raw = normalized
+	}
 	plans, err := c.fixedCollectionPlans(todoID)
 	if err == nil {
 		item := c.todoItemByID(todoID)
@@ -334,6 +349,9 @@ func (c *Coordinator) validateStructuredPayloadClaims(todoID string, raw json.Ra
 	}
 	if err == nil {
 		payload.CollectionBindings = bindings
+		if rawSHA256 != "" {
+			payload.RawSHA256 = rawSHA256
+		}
 	}
 	if err == nil {
 		if bindingErr := c.validateSubmittedEvidenceInputs(todoID, payload); bindingErr != nil {
@@ -373,35 +391,6 @@ func (c *Coordinator) takeResultValidationFailures(todoID string) int {
 	count := c.resultValidationFailures[todoID]
 	delete(c.resultValidationFailures, todoID)
 	return count
-}
-
-// applyResultContractReceipt records the attempt's result contract outcome
-// on its receipt.
-func (c *Coordinator) applyResultContractReceipt(todoID string, result *TaskResult, receipt *ExecutionReceipt) {
-	if receipt == nil {
-		return
-	}
-	// Accumulate: a result-only repair re-applies the outcome to the same
-	// attempt's receipt after the worker turn already recorded its own.
-	receipt.ResultValidationFailures += c.takeResultValidationFailures(todoID)
-	var ref *ResultContractRef
-	if item := c.todoItemByID(todoID); item != nil {
-		ref = item.ResultContract
-	}
-	if ref == nil {
-		return
-	}
-	receipt.ResultContractID = ref.ID
-	receipt.ResultContractSHA256 = ref.SchemaSHA256
-	switch {
-	case result != nil && result.StructuredPayload != nil:
-		receipt.ResultPayloadSHA256 = result.StructuredPayload.SHA256
-		receipt.ResultValidation = ResultValidationValid
-	case receipt.ResultValidationFailures > 0:
-		receipt.ResultValidation = ResultValidationInvalid
-	default:
-		receipt.ResultValidation = ResultValidationAbsent
-	}
 }
 
 // providerVisibleResultPayloadSchema is the structured_payload property the
@@ -542,29 +531,6 @@ func resultContractPromptSection(ref *ResultContractRef, compiled *CompiledResul
 		}
 	}
 	return b.String()
-}
-
-// formatForContext renders a validated payload for the coordinator and
-// downstream task context, bounded to keep context budgets predictable.
-func (p *ResultPayload) formatForContext() string {
-	if p == nil {
-		return ""
-	}
-	header := fmt.Sprintf("Structured Payload (contract %s, sha256 %s):\n", p.Contract.ID, p.SHA256)
-	if len(p.Value) <= resultPayloadContextMaxBytes {
-		return header + string(p.Value) + "\n"
-	}
-	return header + utils.TruncateString(string(p.Value), resultPayloadContextMaxBytes) +
-		fmt.Sprintf("\n[structured payload truncated at %d bytes; the complete value is stored in the durable typed result]\n", resultPayloadContextMaxBytes)
-}
-
-// accumulateResultContractMetrics projects rejected structured payloads from
-// the run's receipts.
-func accumulateResultContractMetrics(metrics *RunMetrics, receipt ExecutionReceipt, runID string) {
-	if metrics == nil || (runID != "" && receipt.RunID != runID) {
-		return
-	}
-	metrics.StructuredResultValidationFailures += receipt.ResultValidationFailures
 }
 
 // attemptResultContractSchema resolves the loaded schema for an attempt's
