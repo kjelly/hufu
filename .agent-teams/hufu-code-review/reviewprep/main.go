@@ -843,11 +843,16 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 		paths = eligibleSnapshotPaths(identity)
 	}
 
+	testPaths := paths
+	if reviewRangeValue.isRepositorySnapshot() {
+		testPaths = snapshotPlannedTestPaths(snapshot, paths)
+	}
+
 	goTestEnvironment, err := sanitizedGoTestEnvironment(ctx)
 	if err != nil {
 		return actionResult{}, err
 	}
-	packages := targetedGoTestPackages(snapshot.root, paths)
+	packages := targetedGoTestPackages(snapshot.root, testPaths)
 	if err := os.MkdirAll(outputDir, 0o700); err != nil {
 		return actionResult{}, fmt.Errorf("create verification output directory: %w", err)
 	}
@@ -915,6 +920,27 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 			"passed":    receipt.Passed, "timed_out": receipt.TimedOut, "output_truncated": receipt.OutputTruncated,
 		},
 	}, Artifacts: []artifact{reportArtifact, outputArtifact}}, nil
+}
+
+func snapshotPlannedTestPaths(snapshot *reviewSourceSnapshot, fallback []string) []string {
+	if snapshot == nil || snapshot.identity == nil || snapshot.identity.Plan == nil {
+		return fallback
+	}
+	plannedPaths := make(map[string]struct{})
+	for _, ws := range snapshot.identity.Plan.Worksets {
+		for _, src := range ws.Sources {
+			plannedPaths[src.Path] = struct{}{}
+		}
+	}
+	if len(plannedPaths) == 0 {
+		return fallback
+	}
+	result := make([]string, 0, len(plannedPaths))
+	for p := range plannedPaths {
+		result = append(result, p)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func targetedGoTestPackages(snapshotRoot string, changed []string) []string {

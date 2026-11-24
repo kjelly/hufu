@@ -189,6 +189,29 @@ func TestTargetedGoTestPackagesFallsBackWhenScopeCannotBeNarrowed(t *testing.T) 
 	}
 }
 
+func TestSnapshotPlannedTestPathsNarrowsScope(t *testing.T) {
+	fallback := []string{"all/files/code.go", "go.mod"}
+	if got := snapshotPlannedTestPaths(nil, fallback); !slices.Equal(got, fallback) {
+		t.Fatalf("nil snapshot = %v, want %v", got, fallback)
+	}
+	snap := &reviewSourceSnapshot{}
+	if got := snapshotPlannedTestPaths(snap, fallback); !slices.Equal(got, fallback) {
+		t.Fatalf("nil identity = %v, want %v", got, fallback)
+	}
+	snap.identity = &repositorySnapshotManifest{
+		Plan: &snapshotPlan{
+			Worksets: []snapshotPlannedWorkset{
+				{Sources: []snapshotPlannedSource{{Path: "service/user.go"}, {Path: "service/auth.go"}}},
+				{Sources: []snapshotPlannedSource{{Path: "pkg/util.go"}}},
+			},
+		},
+	}
+	want := []string{"pkg/util.go", "service/auth.go", "service/user.go"}
+	if got := snapshotPlannedTestPaths(snap, fallback); !slices.Equal(got, want) {
+		t.Fatalf("planned paths = %v, want %v", got, want)
+	}
+}
+
 func TestEmbeddedRuntimeExecutesDocumentationRouting(t *testing.T) {
 	repo := newFixtureRepo(t)
 	writeFile(t, filepath.Join(repo, "README.md"), "See the [runtime documentation](docs/architecture/runtime.md).\n")
