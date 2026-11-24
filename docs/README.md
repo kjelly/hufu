@@ -124,6 +124,7 @@ to re-create an abstraction that already exists in the runtime.
 - [Operator CLI migration](guides/operator-cli-migration.md)
 - [Operator troubleshooting and recovery](guides/operator-troubleshooting.md)
 - [Operator experience preview and fallback](guides/operator-experience-preview.md)
+- [最小 Chrome 遠端桌面](guides/chrome-desktop.md) — noVNC／CRD 共用桌面與預設 CDP。
 - [SSH tool](guides/ssh-tool.md)
 - [Action providers](reference/action-providers.md) — team-owned command,
   embedded Go, and MCP tool adapters for structured runtime actions.
