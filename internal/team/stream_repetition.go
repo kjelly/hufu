@@ -5,16 +5,21 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"unicode"
 )
 
-// ErrDegenerateRepetitionLoop indicates that the LLM output has degenerated
-// into an infinite loop of repeating single runes or repeating n-gram phrases.
+// ErrDegenerateRepetitionLoop indicates that the LLM output exceeded a
+// repetition or consecutive whitespace limit.
 var ErrDegenerateRepetitionLoop = errors.New("model output trapped in degenerate repetition loop")
 
 const (
-	// DefaultMaxConsecutiveRunes is the maximum number of times a single rune
-	// may repeat consecutively in streaming output before triggering an abort.
+	// DefaultMaxConsecutiveRunes is the abort threshold for consecutive
+	// repetitions of the same non-whitespace rune.
 	DefaultMaxConsecutiveRunes = 100
+
+	// Allow ordinary indentation and formatting while bounding output that
+	// continues without producing any non-whitespace content.
+	maxConsecutiveWhitespaceRunes = 1024
 
 	// DefaultMaxRollingBufferRunes is the maximum history kept for n-gram cycle detection.
 	DefaultMaxRollingBufferRunes = 1024
@@ -23,12 +28,13 @@ const (
 // StreamRepetitionDetector tracks streaming output chunks to detect degenerate
 // repetition loops (e.g. single-character cascades like "////..." or repeating phrases).
 type StreamRepetitionDetector struct {
-	mu                  sync.Mutex
-	maxConsecutiveRunes int
-	maxBufferRunes      int
-	lastRune            rune
-	consecutiveCount    int
-	buffer              []rune
+	mu                    sync.Mutex
+	maxConsecutiveRunes   int
+	maxBufferRunes        int
+	lastRune              rune
+	consecutiveCount      int
+	consecutiveWhitespace int
+	buffer                []rune
 }
 
 // NewStreamRepetitionDetector creates a detector with default thresholds.
@@ -50,14 +56,22 @@ func (d *StreamRepetitionDetector) Process(chunk string) error {
 
 	runes := []rune(chunk)
 	for _, r := range runes {
-		if r == d.lastRune {
-			d.consecutiveCount++
-			if d.consecutiveCount >= d.maxConsecutiveRunes {
-				return fmt.Errorf("%w: rune %q repeated %d times", ErrDegenerateRepetitionLoop, r, d.consecutiveCount)
+		if unicode.IsSpace(r) {
+			d.consecutiveCount = 0
+			d.consecutiveWhitespace++
+			if d.consecutiveWhitespace >= maxConsecutiveWhitespaceRunes {
+				return fmt.Errorf("%w: %d consecutive whitespace runes", ErrDegenerateRepetitionLoop, d.consecutiveWhitespace)
 			}
-		} else {
+			continue
+		}
+		d.consecutiveWhitespace = 0
+		if r != d.lastRune {
 			d.lastRune = r
-			d.consecutiveCount = 1
+			d.consecutiveCount = 0
+		}
+		d.consecutiveCount++
+		if d.consecutiveCount >= d.maxConsecutiveRunes {
+			return fmt.Errorf("%w: rune %q repeated %d times", ErrDegenerateRepetitionLoop, r, d.consecutiveCount)
 		}
 	}
 
@@ -74,7 +88,9 @@ func (d *StreamRepetitionDetector) Process(chunk string) error {
 		maxPatternLen = bufLen / 2
 	}
 
-	for patternLen := 2; patternLen <= maxPatternLen; patternLen++ {
+	// Every suffix within the trailing whitespace run is covered by the
+	// whitespace limit. Longer suffixes include non-whitespace content.
+	for patternLen := max(2, d.consecutiveWhitespace+1); patternLen <= maxPatternLen; patternLen++ {
 		pattern := d.buffer[bufLen-patternLen:]
 		repeats := 1
 		for i := bufLen - 2*patternLen; i >= 0; i -= patternLen {

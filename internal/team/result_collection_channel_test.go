@@ -2,6 +2,7 @@ package team
 
 import (
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -131,6 +132,83 @@ func TestResultCollectionResponseChannelsPreserveAdmissionAndBudget(t *testing.T
 				if !foundOriginal {
 					t.Fatal("channel fallback lost original rejected arguments")
 				}
+			}
+		})
+	}
+}
+
+func TestResultCollectionStreamWhitespace(t *testing.T) {
+	const claimsPrefix = `{"status":`
+	const claimsSuffix = `"success","summary":"saved report"}`
+	const claims = claimsPrefix + claimsSuffix
+	reasoningPrefix := "Preparing claims" + strings.Repeat(" ", 75)
+	for _, test := range []struct {
+		name      string
+		reasoning []string
+		response  string
+		wantAbort bool
+	}{
+		{name: "reasoning in one delta", reasoning: []string{reasoningPrefix + "now"}, response: claims},
+		{name: "reasoning split after whitespace", reasoning: []string{reasoningPrefix, "now"}, response: claims},
+		{name: "whitespace in claims", response: claimsPrefix + strings.Repeat(" ", 100) + claimsSuffix},
+		{name: "reasoning without progress", reasoning: []string{strings.Repeat(" ", maxConsecutiveWhitespaceRunes-1), "\t"}, response: claims, wantAbort: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/chat/completions" {
+					_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 131072","capabilities":["completion","tools"]}`)
+					return
+				}
+				calls.Add(1)
+				w.Header().Set("Content-Type", "text/event-stream")
+				writeDelta := func(field, value string) {
+					_, _ = fmt.Fprintf(w, `data: {"id":"whitespace","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{%q:%q},"finish_reason":null}]}`+"\n\n", field, value)
+				}
+				for _, delta := range test.reasoning {
+					writeDelta("reasoning_content", delta)
+				}
+				writeDelta("content", test.response)
+				_, _ = fmt.Fprint(w, `data: {"id":"whitespace","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")
+			}))
+			t.Cleanup(server.Close)
+			c, item, ctx, receipt := resultCollectionProviderFixture(t, server.URL+"/v1", true, func(c *Coordinator) {
+				c.session.Config.CollectorResponseChannel = agent.CollectorResponseTextJSON
+			})
+			worker := scriptWorker(textTurn("must not repeat work"))
+			c.workerAgentOverride = worker
+			err := c.collectReturnedWork(ctx, c.session.Agents[item.Agent], receipt, "saved report", "original task")
+			if calls.Load() != 1 || worker.Calls() != 0 {
+				t.Fatal("collection repeated work or exceeded one call")
+			}
+			if test.wantAbort {
+				failure, ok := errors.AsType[*resultCollectionFailure](err)
+				if !ok || failure.Reason != repairFailureCollectionUnavailable || !errors.Is(err, ErrDegenerateRepetitionLoop) {
+					t.Fatalf("expected collection to abort on the whitespace limit, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			c = reopenRecoveryCoordinator(t, c)
+			item = c.todoItemByID(item.ID)
+			checkpoint := currentResultCollection(item)
+			if checkpoint.TurnsUsed != 1 ||
+				checkpoint.SourceRunID != receipt.RunID || checkpoint.ModelExecutionID != receipt.ModelExecutionID {
+				t.Fatal("collection changed the work identity or exceeded its budget")
+			}
+			accepted, err := c.acceptedCollectionResult(t.Context(), item, checkpoint)
+			if err != nil || accepted.Summary != "saved report" {
+				t.Fatalf("canonical admission after reopen: %v", err)
+			}
+			blob, err := c.readCollectionBlobRecord(t.Context(), checkpoint, "response", checkpoint.Response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(blob.Data) != test.response {
+				t.Errorf("saved collector response = %q, want %q", blob.Data, test.response)
 			}
 		})
 	}

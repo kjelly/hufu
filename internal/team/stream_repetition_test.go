@@ -23,6 +23,57 @@ func TestStreamRepetitionDetector_NormalText(t *testing.T) {
 	}
 }
 
+func TestStreamRepetitionDetector_WhitespaceWithProgress(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name       string
+		whitespace string
+	}{
+		{"75 spaces", strings.Repeat(" ", 75)},
+		{"100 spaces", strings.Repeat(" ", 100)},
+		{"mixed whitespace", strings.Repeat(" \t\n\r ", 20)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			output := `{"result":` + test.whitespace + `true}`
+			for split := 1; split <= len(output); split++ {
+				detector := NewStreamRepetitionDetector()
+				for _, chunk := range []string{output[:split], output[split:]} {
+					if err := detector.Process(chunk); err != nil {
+						t.Errorf("split after byte %d: %v", split, err)
+						break
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestStreamRepetitionDetector_ConsecutiveWhitespaceLimit(t *testing.T) {
+	t.Parallel()
+	belowLimit := strings.Repeat("\u2003", maxConsecutiveWhitespaceRunes-1)
+	for _, test := range []struct {
+		name   string
+		chunks []string
+	}{
+		{"whole run", []string{belowLimit + "\tresumed"}},
+		{"across chunks", []string{belowLimit, "\nresumed"}},
+		{"resets after non-whitespace", []string{belowLimit, "progress", belowLimit, "\rresumed"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			detector := NewStreamRepetitionDetector()
+			last := len(test.chunks) - 1
+			for _, chunk := range test.chunks[:last] {
+				if err := detector.Process(chunk); err != nil {
+					t.Fatalf("rejected before the whitespace limit: %v", err)
+				}
+			}
+			if err := detector.Process(test.chunks[last]); !errors.Is(err, ErrDegenerateRepetitionLoop) {
+				t.Fatalf("expected ErrDegenerateRepetitionLoop at the whitespace limit, got %v", err)
+			}
+		})
+	}
+}
+
 func TestStreamRepetitionDetector_SingleRuneRepetition(t *testing.T) {
 	t.Parallel()
 	d := NewStreamRepetitionDetector()
