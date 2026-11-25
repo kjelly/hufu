@@ -17,11 +17,12 @@ var (
 
 // taskOccurrenceController is the coordinator-owned transaction boundary for
 // one todo. mu protects the result reservation; projectionMu serializes the
-// two-phase projection commit with lifecycle lease closure. Neither mutex is
-// held while a TodoList checkpoint callback runs.
+// two-phase projection commit and bounded normalizer action with lifecycle
+// lease closure.
 type taskOccurrenceController struct {
-	mu           sync.Mutex
-	projectionMu sync.Mutex
+	mu              sync.Mutex
+	projectionMu    sync.Mutex
+	normalizationMu sync.Mutex
 
 	identity submitResultRuntimeIdentity
 	opened   bool
@@ -381,15 +382,20 @@ func (tx *taskResultOccurrenceTransaction) consumePending(refs []ArtifactRef) er
 	return nil
 }
 
-func (tx *taskResultOccurrenceTransaction) commit(result *TaskResult) error {
+func (tx *taskResultOccurrenceTransaction) commit(ctx context.Context, result *TaskResult) error {
 	if tx == nil || tx.controller == nil || tx.finished {
 		return errTaskResultStale
 	}
 	if result == nil {
 		return fmt.Errorf("task result is nil")
 	}
-	if err := tx.validateCommit(result); err != nil {
+	if err := tx.validateCommit(ctx, result); err != nil {
 		return err
+	}
+	tx.controller.projectionMu.Lock()
+	defer tx.controller.projectionMu.Unlock()
+	if err := artifactReadContextError(ctx); err != nil {
+		return rejectResultSourceRead(err)
 	}
 	copyResult := cloneTaskResult(result)
 	tx.controller.mu.Lock()
@@ -400,36 +406,58 @@ func (tx *taskResultOccurrenceTransaction) commit(result *TaskResult) error {
 	copyResult.TaskID = tx.identity.TaskID
 	copyResult.Attempt = tx.identity.Attempt
 	copyResult.Agent = tx.identity.Agent
+	tx.controller.mu.Unlock()
+	if err := tx.coordinator.checkpointAcceptedNormalizedSubmission(ctx, tx.identity, copyResult); err != nil {
+		return err
+	}
+	if err := tx.coordinator.checkpointNormalizedCorrection(ctx, copyResult); err != nil {
+		return err
+	}
+	tx.controller.mu.Lock()
 	tx.controller.result = copyResult
 	tx.controller.reserved = false
 	tx.controller.pending = nil
 	tx.controller.mu.Unlock()
-	if err := tx.coordinator.publishTaskResultProjection(tx.identity, copyResult); err != nil {
+	if err := tx.coordinator.publishTaskResultProjectionLocked(tx.identity, copyResult, tx.controller); err != nil {
 		tx.coordinator.clearPublishedTaskResult(tx.identity, copyResult)
 		return err
 	}
 	return nil
 }
 
-func (tx *taskResultOccurrenceTransaction) validateCommit(result *TaskResult) error {
+func (tx *taskResultOccurrenceTransaction) validateCommit(ctx context.Context, result *TaskResult) error {
+	if err := artifactReadContextError(ctx); err != nil {
+		return rejectResultSourceRead(err)
+	}
 	_, compiled, err := tx.coordinator.boundResultContract(tx.identity.TaskID)
 	if err != nil {
-		return err
+		return rejectLocalResult(RepairFailureContract, err)
 	}
 	// An unsuccessful completion claim carries its reason in the envelope.
 	// It claims no verified evidence payload and cannot satisfy a dependency.
 	withoutPayload := result.StructuredPayload == nil && runtimeCompletionFailure(compiled, result.Status)
 	if !withoutPayload && !tx.coordinator.boundDecisionBlockedEnvelope(tx.identity.TaskID, result) {
-		if err := tx.coordinator.validateSubmittedEvidenceInputs(tx.identity.TaskID, result.StructuredPayload); err != nil {
-			return err
+		if err := tx.coordinator.validateSubmittedEvidenceInputs(ctx, tx.identity.TaskID, result.StructuredPayload); err != nil {
+			return rejectResultSourceRead(err)
 		}
-		if err := tx.coordinator.validateResultReferenceReads(tx.identity.TaskID, result); err != nil {
-			return err
+		if err := tx.coordinator.validateResultReferenceReads(ctx, tx.identity.TaskID, result); err != nil {
+			return rejectResultSourceRead(err)
 		}
 	}
 	if taskResultStatusIsSuccessful(result.Status) {
-		if err := tx.coordinator.validateRequiredEvidenceDelivery(tx.identity.TaskID, tx.identity.Attempt, tx.identity.RunID); err != nil {
-			return err
+		source := tx.identity
+		_, historical, err := tx.coordinator.originalNormalizationEvidence(ctx, tx.identity.TaskID)
+		if err != nil {
+			return rejectResultSourceRead(err)
+		}
+		if historical {
+			source, err = tx.coordinator.resultSubmissionEvidenceIdentity(ctx, tx.identity.TaskID)
+			if err != nil {
+				return rejectResultSourceRead(err)
+			}
+		}
+		if err := tx.coordinator.validateRequiredEvidenceDelivery(ctx, tx.identity.TaskID, tx.identity.Attempt, source.RunID); err != nil {
+			return rejectResultSourceRead(err)
 		}
 	}
 	return nil
@@ -564,6 +592,11 @@ func (c *Coordinator) revokeTaskOccurrence(todoID string) {
 		return
 	}
 	controller.projectionMu.Lock()
+	c.revokeTaskOccurrenceLocked(todoID, controller)
+	controller.projectionMu.Unlock()
+}
+
+func (c *Coordinator) revokeTaskOccurrenceLocked(todoID string, controller *taskOccurrenceController) {
 	controller.mu.Lock()
 	controller.opened = false
 	controller.reserved = false
@@ -571,7 +604,6 @@ func (c *Coordinator) revokeTaskOccurrence(todoID string) {
 	controller.pending = nil
 	controller.identity = submitResultRuntimeIdentity{}
 	controller.mu.Unlock()
-	controller.projectionMu.Unlock()
 	c.clearTaskResultCache(todoID)
 }
 

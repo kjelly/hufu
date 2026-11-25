@@ -9,36 +9,41 @@ import (
 )
 
 func validateResultCollectionEvent(event RunEvent) error {
+	_, err := decodeResultCollectionEvent(event)
+	return err
+}
+
+func decodeResultCollectionEvent(event RunEvent) (resultCollectionEvent, error) {
 	var payload resultCollectionEvent
 	if err := json.Unmarshal(event.Payload, &payload, json.RejectUnknownMembers(true), collectionDurationFormat); err != nil {
-		return err
+		return payload, err
 	}
 	checkpoint := payload.Receipt.ResultCollection
 	if err := validateResultCollectionCheckpoint(checkpoint); err != nil {
-		return err
+		return payload, err
 	}
 	if event.TaskID != checkpoint.TaskID || effectiveBranchID(event.BranchID) != checkpoint.BranchID || event.Attempt != checkpoint.Attempt ||
 		payload.Receipt.RunID != checkpoint.SourceRunID || payload.Receipt.TaskID != checkpoint.TaskID || payload.Receipt.Attempt != checkpoint.Attempt ||
 		payload.Receipt.ModelExecutionID != checkpoint.ModelExecutionID || payload.Receipt.ExecutionTarget != checkpoint.ExecutionTarget {
-		return fmt.Errorf("result collection event identity mismatch")
+		return payload, fmt.Errorf("result collection event identity mismatch")
 	}
 	if (checkpoint.State == ResultCollectionCommitted) != (payload.Result != nil) {
-		return fmt.Errorf("result collection event has invalid accepted-result projection")
+		return payload, fmt.Errorf("result collection event has invalid accepted-result projection")
 	}
 	limit, err := collectionTurnLimit(&payload.Receipt)
 	if err != nil || limit != checkpoint.TurnLimit {
-		return fmt.Errorf("result collection event has an ungranted model budget")
+		return payload, fmt.Errorf("result collection event has an ungranted model budget")
 	}
 	if payload.Result != nil && (payload.Result.TaskID != checkpoint.TaskID || payload.Result.Attempt != checkpoint.Attempt || payload.Result.Agent != checkpoint.Agent || !isLocalSubmittedResultSource(payload.Result.Source)) {
-		return fmt.Errorf("result collection event has invalid canonical result identity")
+		return payload, fmt.Errorf("result collection event has invalid canonical result identity")
 	}
 	if payload.Result != nil && payload.Result.StructuredPayload != nil {
 		resultPayload := payload.Result.StructuredPayload
-		if payload.Receipt.ResultValidation != ResultValidationValid || payload.Receipt.ResultPayloadSHA256 != resultPayload.SHA256 || payload.Receipt.ResultContractID != resultPayload.Contract.ID || payload.Receipt.ResultContractSHA256 != resultPayload.Contract.SchemaSHA256 {
-			return fmt.Errorf("result collection event has invalid result contract receipt binding")
+		if payload.Receipt.ResultValidation != ResultValidationValid || !collectionReceiptMatchesResultPayload(&payload.Receipt, checkpoint, resultPayload) || payload.Receipt.ResultContractID != resultPayload.Contract.ID || payload.Receipt.ResultContractSHA256 != resultPayload.Contract.SchemaSHA256 {
+			return payload, fmt.Errorf("result collection event has invalid result contract receipt binding")
 		}
 	}
-	return nil
+	return payload, nil
 }
 
 // appendCollectionCheckpointLocked is called with both the task projection and

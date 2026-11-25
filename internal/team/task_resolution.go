@@ -119,7 +119,7 @@ func ValidatePersistedResultPayloadReceipt(resolver *TodoItem, runID string) err
 		payload.SHA256 != hex.EncodeToString(digest[:]) || receipt == nil ||
 		receipt.TaskID != resolver.ID || receipt.Attempt != resolver.TypedResult.Attempt || resolver.TypedResult.TaskID != resolver.ID ||
 		receipt.ResultValidation != ResultValidationValid || receipt.ResultContractID != payload.Contract.ID ||
-		receipt.ResultPayloadSHA256 != payload.SHA256 {
+		!receiptMatchesResultPayload(receipt, payload) {
 		return fmt.Errorf("resolving task %s structured payload has no matching successful validation receipt", resolver.ID)
 	}
 	return nil

@@ -27,6 +27,7 @@ type ResultContractRef struct {
 	SchemaSHA256      string `json:"schema_sha256"`
 	RequireStructured bool   `json:"require_structured,omitempty"`
 	Normalizer        string `json:"normalizer,omitempty"`
+	NormalizerSHA256  string `json:"normalizer_sha256,omitempty"`
 }
 
 func (r *ResultContractRef) clone() *ResultContractRef {
@@ -95,6 +96,8 @@ type ExecutionResultContractPolicySnapshot struct {
 	ID                string `json:"id"`
 	SchemaSHA256      string `json:"schema_sha256"`
 	RequireStructured bool   `json:"require_structured,omitempty"`
+	Normalizer        string `json:"normalizer,omitempty"`
+	NormalizerSHA256  string `json:"normalizer_sha256,omitempty"`
 }
 
 // executionPolicyResultContracts lists every result contract binding in a
@@ -108,6 +111,7 @@ func executionPolicyResultContracts(session *TeamSession) []ExecutionResultContr
 	for name, ref := range session.AgentResultContracts {
 		bindings = append(bindings, ExecutionResultContractPolicySnapshot{
 			Owner: "agent:" + name, ID: ref.ID, SchemaSHA256: ref.SchemaSHA256, RequireStructured: ref.RequireStructured,
+			Normalizer: ref.Normalizer, NormalizerSHA256: ref.NormalizerSHA256,
 		})
 	}
 	for _, task := range session.ContractTasks {
@@ -117,6 +121,7 @@ func executionPolicyResultContracts(session *TeamSession) []ExecutionResultContr
 		bindings = append(bindings, ExecutionResultContractPolicySnapshot{
 			Owner: "contract:" + strings.TrimSpace(task.ID), ID: task.ResultContract.ID,
 			SchemaSHA256: task.ResultContract.SchemaSHA256, RequireStructured: task.ResultContract.RequireStructured,
+			Normalizer: task.ResultContract.Normalizer, NormalizerSHA256: task.ResultContract.NormalizerSHA256,
 		})
 	}
 	sort.Slice(bindings, func(i, j int) bool { return bindings[i].Owner < bindings[j].Owner })

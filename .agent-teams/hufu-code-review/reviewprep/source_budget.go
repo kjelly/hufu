@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -14,7 +15,8 @@ import (
 
 const (
 	defaultMaxSourceSnapshotBytes  = 384 * 1024
-	defaultMaxReviewInputTokens    = 200_000
+	defaultMaxReviewInputTokens    = 16_000
+	reviewInputFramingTokens       = 256
 	maxRelatedSnapshotContentBytes = 64 * 1024
 )
 
@@ -24,9 +26,14 @@ type batchPart struct {
 	lines int
 }
 
-// Conservative planning estimate including UTF-8 and artifact framing.
+// Budget one token per UTF-8 byte, including text that falls back to byte
+// tokens. Per-item framing is budgeted separately.
 func estimateReviewInputTokens(byteCount int) int {
-	return byteCount/2 + byteCount%2
+	return byteCount
+}
+
+func estimateReviewItemTokens(diff, source, inventory int) int {
+	return reviewInputFramingTokens + estimateReviewInputTokens(diff+source+inventory)
 }
 
 func boundReviewBatches(artifactRoot, outputDir string, batches []*batch, snapshot *reviewSourceSnapshot, config Config, route string, verification *documentationVerification) ([]*batch, error) {
@@ -69,7 +76,7 @@ func visitBoundReviewBatch(current *batch, artifactRoot, outputDir string, snaps
 	if cap := config.MaxSourceSnapshotBytes / 8; cap < relatedBudget {
 		relatedBudget = cap
 	}
-	if cap := config.MaxReviewInputTokens / 4; cap < relatedBudget {
+	if cap := config.MaxReviewInputTokens / 8; cap < relatedBudget {
 		relatedBudget = cap
 	}
 	var primary []sourceEvidence
@@ -77,14 +84,36 @@ func visitBoundReviewBatch(current *batch, artifactRoot, outputDir string, snaps
 	if err != nil {
 		return err
 	}
-	tokens := estimateReviewInputTokens(len(source)) + estimateReviewInputTokens(len(inventory)) + estimateReviewInputTokens(current.diff.Len())
+	reportTokens := 0
 	if verification != nil {
 		entry := &item{Key: key, TouchedPaths: current.paths, Bindings: make(map[string]string)}
 		report, reportErr := itemReferenceReportData(route, entry, *verification)
 		if reportErr != nil {
 			return reportErr
 		}
-		tokens += estimateReviewInputTokens(len(report))
+		reportTokens = estimateReviewInputTokens(len(report))
+	}
+	tokens := estimateReviewItemTokens(current.diff.Len(), len(source), len(inventory)) + reportTokens
+	excess := tokens - config.MaxReviewInputTokens
+	if sourceExcess := len(source) - config.MaxSourceSnapshotBytes; sourceExcess > excess {
+		excess = sourceExcess
+	}
+	if excess > 0 && relatedBudget > 0 {
+		// Related source needs section framing as well as content bytes.
+		// Recover space from optional content before partitioning primary
+		// source. The inventory still identifies omitted candidates.
+		reduced := relatedBudget - excess
+		if reduced < 0 {
+			reduced = 0
+		}
+		compactSource, compactInventory, compactErr := snapshot.bundleDataWithPrimary(filepath.ToSlash(partition), current.paths, current.sourceScopes, reduced, &primary)
+		if compactErr != nil {
+			return compactErr
+		}
+		compactTokens := estimateReviewItemTokens(current.diff.Len(), len(compactSource), len(compactInventory)) + reportTokens
+		if len(compactSource) < len(source) || compactTokens < tokens {
+			source, inventory, tokens, relatedBudget = compactSource, compactInventory, compactTokens, reduced
+		}
 	}
 	if len(source) <= config.MaxSourceSnapshotBytes && tokens <= config.MaxReviewInputTokens {
 		current.sourceBundle = source
@@ -259,9 +288,9 @@ func splitDiffFragment(current *batch) (*batch, *batch) {
 	if len(data) < 256 {
 		return nil, nil
 	}
-	start := bytes.Index(data, []byte("@@"))
+	start := bytes.Index(data, []byte("\n@@ ")) + 1
 	headerEnd := 0
-	if start >= 0 {
+	if start > 0 {
 		if end := bytes.IndexByte(data[start:], '\n'); end >= 0 {
 			headerEnd = start + end + 1
 		}
@@ -275,15 +304,32 @@ func splitDiffFragment(current *batch) (*batch, *batch) {
 	if cut >= len(body) {
 		return nil, nil
 	}
+	if bytes.HasPrefix(body[cut:], []byte(`\ No newline at end of file`)) {
+		newline := bytes.IndexByte(body[cut:], '\n')
+		if newline < 0 || cut+newline+1 == len(body) {
+			return nil, nil
+		}
+		cut += newline + 1
+	}
+	leftHeader, rightHeader, splitHunk := splitDiffHunkHeader(string(data[start:headerEnd]), body[:cut])
 	left, right := cloneReviewBatch(current), cloneReviewBatch(current)
 	for index, target := range []*batch{left, right} {
 		target.diff.Reset()
-		target.diff.Write(data[:headerEnd])
 		from, to := 0, cut
 		if index == 1 {
 			from, to = cut, len(body)
 		}
-		fmt.Fprintf(&target.diff, "# review_diff_fragment original_parent_bytes=[%d,%d)\n", headerEnd+from, headerEnd+to)
+		if splitHunk {
+			target.diff.Write(data[:start])
+			if index == 0 {
+				target.diff.WriteString(leftHeader)
+			} else {
+				target.diff.WriteString(rightHeader)
+			}
+		} else {
+			target.diff.Write(data[:headerEnd])
+			fmt.Fprintf(&target.diff, "# review_diff_fragment original_parent_bytes=[%d,%d)\n", headerEnd+from, headerEnd+to)
+		}
 		target.diff.Write(body[from:to])
 		target.lines = bytes.Count(target.diff.Bytes(), []byte("\n"))
 		target.parts = nil
@@ -292,4 +338,68 @@ func splitDiffFragment(current *batch) (*batch, *batch) {
 		return nil, nil
 	}
 	return left, right
+}
+
+// Write a valid header for each fragment so original line coordinates remain
+// available when a single Git hunk exceeds the review item budget.
+func splitDiffHunkHeader(header string, first []byte) (string, string, bool) {
+	fields := strings.Fields(header)
+	if len(fields) < 4 || fields[0] != "@@" || fields[3] != "@@" {
+		return "", "", false
+	}
+	oldStart, oldCount := diffFragmentRange(fields[1], "-")
+	newStart, newCount := diffFragmentRange(fields[2], "+")
+	leftOld, leftNew := 0, 0
+	for _, line := range bytes.Split(first, []byte("\n")) {
+		if len(line) == 0 || line[0] == '\\' {
+			continue
+		}
+		switch line[0] {
+		case '-':
+			leftOld++
+		case '+':
+			leftNew++
+		case ' ':
+			leftOld++
+			leftNew++
+		default:
+			return "", "", false
+		}
+	}
+	if leftOld > oldCount || leftNew > newCount || (leftOld == oldCount && leftNew == newCount) {
+		return "", "", false
+	}
+	// An empty range names the preceding line rather than the first line.
+	splitRange := func(start, count, left int) (int, int) {
+		if count == 0 {
+			return start, start
+		}
+		if left == 0 {
+			return start - 1, start
+		}
+		if left == count {
+			return start, start + left - 1
+		}
+		return start, start + left
+	}
+	leftOldStart, rightOldStart := splitRange(oldStart, oldCount, leftOld)
+	leftNewStart, rightNewStart := splitRange(newStart, newCount, leftNew)
+	return fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", leftOldStart, leftOld, leftNewStart, leftNew),
+		fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", rightOldStart, oldCount-leftOld, rightNewStart, newCount-leftNew), true
+}
+
+func diffFragmentRange(field, sign string) (int, int) {
+	if !strings.HasPrefix(field, sign) {
+		return 0, -1
+	}
+	start, count, hasCount := strings.Cut(field[len(sign):], ",")
+	if !hasCount {
+		count = "1"
+	}
+	line, lineErr := strconv.Atoi(start)
+	n, countErr := strconv.Atoi(count)
+	if lineErr != nil || countErr != nil || line < 0 || n < 0 || (n > 0 && line == 0) || line+n < line {
+		return 0, -1
+	}
+	return line, n
 }

@@ -19,6 +19,15 @@ func (c *Coordinator) commitPreparedResultCandidate(ctx context.Context, item *T
 	if err != nil {
 		return submissionFailureResponse(RepairFailureSource, err.Error()), nil
 	}
+	data, err := json.Marshal(value, json.Deterministic(true))
+	if err != nil {
+		return fantasy.ToolResponse{}, err
+	}
+	ctx = context.WithValue(ctx, resultPatchBaseKey{}, item.ResultCandidate.SHA256)
+	return c.runLocalResultContinuation(ctx, item, item.ResultCandidate.Attempt, "candidate-"+item.ResultCandidate.SHA256, string(data))
+}
+
+func (c *Coordinator) runLocalResultContinuation(ctx context.Context, item *TodoItem, attempt int, callID, wire string) (fantasy.ToolResponse, error) {
 	canonical, err := c.canonicalWorkerAttemptContextForID(item.ID)
 	if err != nil {
 		return submissionFailureResponse(RepairFailureContract, err.Error()), nil
@@ -38,6 +47,9 @@ func (c *Coordinator) commitPreparedResultCandidate(ctx context.Context, item *T
 	}
 	evidence, err := c.restoreProtocolRepairToolEvidence(ctx, item)
 	if err != nil {
+		if hasSealedDirectNormalization(ctx) {
+			return submissionFailureResponse(localResultRejectionReason(rejectNormalizationRecoveryRead(err)), err.Error()), nil
+		}
 		return submissionFailureResponse(RepairFailureSource, err.Error()), nil
 	}
 	ctx = withProtocolRepairToolEvidence(ctx, evidence)
@@ -49,25 +61,20 @@ func (c *Coordinator) commitPreparedResultCandidate(ctx context.Context, item *T
 		ctx = context.WithValue(ctx, artifactAccessScopeKey, cloneArtifactAccessScope(item.ExecutionReceipt.ArtifactScope))
 	}
 	if item.ExecutionReceipt != nil && item.ExecutionReceipt.ModelExecutionID != "" {
-		manifest, err := authoritativeTaskContextManifest(item, item.ResultCandidate.Attempt, item.ExecutionReceipt.ModelExecutionID)
+		manifest, err := authoritativeTaskContextManifest(item, attempt, item.ExecutionReceipt.ModelExecutionID)
 		if err != nil {
 			return submissionFailureResponse(RepairFailureSource, err.Error()), nil
 		}
 		ctx = withInvocationMetadata(ctx, invocationMetadataFromManifest(manifest))
 	}
-	c.setCurrentTaskAttempt(item.ID, item.ResultCandidate.Attempt)
+	c.setCurrentTaskAttempt(item.ID, attempt)
 	identity, ok := c.activeTaskResultOccurrence(item.ID)
 	if !ok {
-		return submissionFailureResponse(RepairFailureSource, "candidate occurrence unavailable"), nil
+		return submissionFailureResponse(RepairFailureSource, "local continuation occurrence unavailable"), nil
 	}
 	ctx = withSubmitResultRuntimeIdentity(ctx, identity)
-	ctx = context.WithValue(ctx, resultPatchBaseKey{}, item.ResultCandidate.SHA256)
-	data, err := json.Marshal(value, json.Deterministic(true))
-	if err != nil {
-		return fantasy.ToolResponse{}, err
-	}
 	tool := &policyGatedTool{coordinator: c, inner: &submitResultTool{coordinator: c, todoID: item.ID}}
-	return tool.Run(ctx, fantasy.ToolCall{ID: "candidate-" + item.ResultCandidate.SHA256, Name: submitResultToolName, Input: string(data)})
+	return tool.Run(ctx, fantasy.ToolCall{ID: callID, Name: submitResultToolName, Input: wire})
 }
 
 func (c *Coordinator) resumePreparedResultCandidate(ctx context.Context, task TaskDef, item *TodoItem) (string, error) {

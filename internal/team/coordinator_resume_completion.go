@@ -10,6 +10,9 @@ func (c *Coordinator) resumeInvocationTasks(ctx context.Context, prompt string, 
 	if cause := context.Cause(ctx); cause != nil {
 		return "", true, c.finalizePublicInvocationFailureError(cause)
 	}
+	if resumeErr != nil && localResultRejectionReason(resumeErr) == RepairFailureCommit {
+		return "", true, c.finalizePublicInvocationFailureError(resumeErr)
+	}
 	if _, explicit := ctx.Value(resultOnlyRepairKey{}).(string); explicit && resumeErr != nil {
 		return "", true, c.finalizePublicInvocationFailureError(resumeErr)
 	}

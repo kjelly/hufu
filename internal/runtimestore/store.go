@@ -53,6 +53,11 @@ func Path(workspace string) string {
 	return filepath.Join(workspace, File)
 }
 
+// ArtifactRoot returns the content-addressed artifact directory of workspace.
+func ArtifactRoot(workspace string) string {
+	return filepath.Join(workspace, "logs", "artifacts")
+}
+
 // Store is an open runtime.sqlite handle.
 type Store struct {
 	db       *sql.DB

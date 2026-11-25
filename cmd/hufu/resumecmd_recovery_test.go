@@ -10,12 +10,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/auditverify"
 	"github.com/kjelly/hufu/internal/inspect"
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 	"github.com/spf13/cobra"
@@ -224,6 +226,17 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 	if tc.session.Scope.SubjectRoot != project {
 		t.Fatalf("initial subject root = %q, want %q", tc.session.Scope.SubjectRoot, project)
 	}
+	interruptedCorrection := succeeds && !upgradeContracts
+	if interruptedCorrection {
+		execResumeRecoveryFixtureSQL(t, workspace, `CREATE TRIGGER interrupt_correction_preparation BEFORE INSERT ON events
+			WHEN NEW.type = 'task_context_manifest'
+			AND json_extract(NEW.payload, '$.context_manifests[0].purpose') = 'result_collection'
+			AND EXISTS (SELECT 1 FROM events AS checkpoint
+				WHERE checkpoint.run_id = NEW.run_id AND checkpoint.task_id = NEW.task_id
+				AND checkpoint.type = 'task_result_collection_checkpointed'
+				AND json_extract(checkpoint.payload, '$.execution_receipt.result_collection.last_rejected_turn') = 1)
+			BEGIN SELECT RAISE(ABORT, 'fixture interrupted before correction reservation'); END`)
+	}
 	var direct *team.DirectAgentResult
 	var directErr error
 	if delegated {
@@ -233,6 +246,9 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 	}
 	if directErr == nil && (direct == nil || direct.Error == nil) {
 		t.Fatal("invalid collector claims unexpectedly accepted")
+	}
+	if interruptedCorrection {
+		execResumeRecoveryFixtureSQL(t, workspace, `DROP TRIGGER interrupt_correction_preparation`)
 	}
 	var blocked *team.TodoItem
 	for _, item := range tc.coordinator.TaskTracker().TodoList().Items() {
@@ -358,12 +374,24 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 	expectedDisposition := team.RecoveryRepairClaims
 	if upgradeContracts {
 		expectedDisposition = team.RecoveryCommitLocal
+	} else {
+		remainingTurns := 1
+		if !succeeds {
+			expectedDisposition, remainingTurns = team.RecoveryBlocked, 0
+		}
+		if a.Checkpoint == nil || a.Checkpoint.LastRejectedTurn != 2-remainingTurns || a.TurnsUsed != 2-remainingTurns ||
+			a.RemainingTurns != remainingTurns || a.AdditionalTurns != 0 ||
+			!slices.ContainsFunc(a.Checks, func(check team.ResultCollectionRecoveryCheck) bool {
+				return check.Code == "collection_schema_budget" && check.Passed == succeeds
+			}) {
+			t.Fatalf("preview did not enforce original correction budget: %+v", a)
+		}
 	}
 	if a.Disposition != expectedDisposition || a.TaskID != blocked.ID {
 		t.Fatalf("preview=%+v; subject=%q cwd=%q", a, project, currentWorkingDir())
 	}
 	if !reflect.DeepEqual(before, runtimeStoreFiles(t, workspace)) || beforeCalls != collectorCalls.Load() {
-		t.Fatal("positive CLI preview wrote state or called model")
+		t.Fatal("CLI preview wrote state or called model")
 	}
 	repair.Store(true)
 	opts.dryRun, opts.outputFormat = false, ""
@@ -387,7 +415,7 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 		additional = 0
 	}
 	if !succeeds {
-		expectedStatus, additional = team.TaskBlocked, 2
+		expectedStatus, additional = team.TaskBlocked, 0
 	}
 	expectedWork, expectedCollections := int32(1), beforeCalls+int32(additional)
 	if workflow && succeeds {
@@ -429,10 +457,26 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, item := range after.Session.Tasks {
-			if item.ID == blocked.ID && (item.ExecutionReceipt.ResultCollection.TurnsUsed != used || len(item.ExecutionReceipt.RepairProvenance.OperatorGrants) != 1) {
-				t.Fatal("ordinary resume changed consumed turns or added a grant")
-			}
+		index := slices.IndexFunc(after.Session.Tasks, func(item *team.TodoItem) bool { return item.ID == blocked.ID })
+		if index < 0 {
+			t.Fatal("original blocked task is missing")
 		}
+		if previous := after.Session.Tasks[index]; previous.Status != team.TaskBlocked ||
+			!reflect.DeepEqual(previous.ExecutionReceipt.ResultCollection, checkpoint) ||
+			len(previous.ExecutionReceipt.RepairProvenance.OperatorGrants) != 0 {
+			t.Fatal("exhausted resume changed the original collection or added a grant")
+		}
+	}
+}
+
+func execResumeRecoveryFixtureSQL(t *testing.T, workspace, statement string) {
+	t.Helper()
+	store, err := runtimestore.Open(t.Context(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if _, err := store.DB().ExecContext(t.Context(), statement); err != nil {
+		t.Fatal(err)
 	}
 }

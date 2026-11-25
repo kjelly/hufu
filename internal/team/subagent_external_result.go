@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -93,7 +96,7 @@ func validWorkerResultProposalStatus(status string) bool {
 }
 
 // DecodeWorkerResultProposal strictly decodes an external provider's raw
-// final JSON response. DisallowUnknownFields means any field this schema
+// final JSON response. Any field this schema
 // does not declare — including every trusted field the proposal type
 // deliberately omits — fails the decode instead of being silently dropped
 // (§9.1: "Any such fields supplied by the provider MUST cause strict schema
@@ -103,13 +106,11 @@ func DecodeWorkerResultProposal(data []byte) (*WorkerResultProposal, error) {
 }
 
 func decodeWorkerResultProposal(data []byte, runtimeCompletion bool) (*WorkerResultProposal, error) {
-	if _, err := decodeUniqueJSON(data); err != nil {
-		return nil, fmt.Errorf("decode worker result proposal: %w", err)
+	if jsontext.Value(data).Kind() != '{' {
+		return nil, fmt.Errorf("decode worker result proposal: expected a JSON object")
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
 	var proposal WorkerResultProposal
-	if err := dec.Decode(&proposal); err != nil {
+	if err := jsonv2.Unmarshal(data, &proposal, jsonv2.RejectUnknownMembers(true)); err != nil {
 		return nil, fmt.Errorf("decode worker result proposal: %w", err)
 	}
 	if err := json.Unmarshal(data, &proposal.suppliedFields); err != nil {
@@ -141,6 +142,23 @@ func decodeWorkerResultProposal(data []byte, runtimeCompletion bool) (*WorkerRes
 // untrusted external provider proposal (§9.3 rule 10, §19).
 const ExternalProviderProposalSource = "external_provider_proposal"
 
+type externalResultAdmissionError struct {
+	reason RepairFailureReason
+	cause  error
+}
+
+func (e *externalResultAdmissionError) Error() string { return e.cause.Error() }
+func (e *externalResultAdmissionError) Unwrap() error { return e.cause }
+
+// The correction outcome and the disposition of already performed work are
+// independent. Unwrapping exposes the actual outcome to the normal classifier.
+type externalResultRepairError struct {
+	cause error
+}
+
+func (e *externalResultRepairError) Error() string { return e.cause.Error() }
+func (e *externalResultRepairError) Unwrap() error { return e.cause }
+
 // ExternalResultCanonicalizer turns an external provider's untrusted
 // AttemptResult into a Hufu-owned canonical TaskResult
 // (docs/architecture/execution-runtime.md).
@@ -165,106 +183,25 @@ func NewExternalResultCanonicalizer() ExternalResultCanonicalizer {
 }
 
 func (defaultExternalResultCanonicalizer) Canonicalize(ctx context.Context, request AttemptRequest, result AttemptResult, delta WorkspaceDelta, workspaceRoot string) (*TaskResult, error) {
+	if err := artifactReadContextError(ctx); err != nil {
+		return nil, rejectResultSourceRead(err)
+	}
 	if strings.TrimSpace(request.Provider) == "" {
 		return nil, fmt.Errorf("canonicalize external result: attempt request has no provider binding")
 	}
 	if err := validateAttemptArtifactScope(request); err != nil {
-		return nil, fmt.Errorf("canonicalize external result: %w", err)
+		return nil, rejectResultSourceRead(fmt.Errorf("canonicalize external result: %w", err))
 	}
 	proposal := result.ResultProposal
 	if proposal == nil {
 		return nil, fmt.Errorf("canonicalize external result: provider result proposal is missing")
 	}
-	if compiled := request.resultContractSchema; hasRuntimeCompletion(compiled) {
-		bound := *proposal
-		var err error
-		bound.Status, bound.Summary, err = bindRuntimeCompletion(compiled.runtimeCompletion, proposal.Status, proposal.Summary, proposal.suppliedCompletionFields(), request.resultRuntimeInputs)
-		if err != nil {
-			return nil, err
-		}
-		if strings.TrimSpace(bound.Summary) == "" {
-			return nil, fmt.Errorf("unsuccessful result requires a summary")
-		}
-		proposal = &bound
-	}
-	if !validWorkerResultProposalStatus(proposal.Status) {
-		return nil, fmt.Errorf("canonicalize external result: unknown proposal status %q", proposal.Status)
-	}
-	if err := validateFindingSeverities(proposal.Findings); err != nil {
-		return nil, fmt.Errorf("canonicalize external result: %w", err)
-	}
-	if proposal.InvariantAssessments != nil {
-		if _, err := normalizedInvariantAssessmentClaims(proposal.InvariantAssessments); err != nil {
-			return nil, fmt.Errorf("canonicalize external result: %w", err)
-		}
-	}
-	if request.Task.InvariantVerification == "" && proposal.InvariantAssessments != nil {
-		return nil, fmt.Errorf("canonicalize external result: ordinary task must omit invariant_assessments or submit null")
-	}
-
 	requiresGrounded := request.Task.Execution.RequiresGroundedResult
 
-	addedOrModified := make(map[string]WorkspaceFileState, len(delta.Added)+len(delta.Modified))
-	for _, f := range delta.Added {
-		addedOrModified[f.Path] = f
-	}
-	for _, f := range delta.Modified {
-		addedOrModified[f.Path] = f
-	}
-	deleted := make(map[string]bool, len(delta.Deleted))
-	for _, p := range delta.Deleted {
-		deleted[p] = true
-	}
-	mentioned := make(map[string]bool, len(proposal.ProposedFiles))
-
-	var artifacts []ArtifactRef
-	for _, proposed := range proposal.ProposedFiles {
-		cleanPath, pathErr := sanitizeWorkspaceRelativePath(proposed.Path)
-		if pathErr != nil {
-			// provider_claimed_outside_workspace (§9.4).
-			if requiresGrounded {
-				return nil, fmt.Errorf("canonicalize external result: proposed artifact %q resolves outside the authorized workspace: %w", proposed.Path, pathErr)
-			}
-			continue
-		}
-		mentioned[cleanPath] = true
-
-		if state, ok := addedOrModified[cleanPath]; ok {
-			// SEC-08: a symlink resolving outside the authorized workspace
-			// must never be accepted as a result artifact — even though the
-			// snapshot itself now records such a symlink (as a placeholder
-			// identity, never its actual outside-root content) rather than
-			// hard-failing the whole workspace snapshot over it.
-			if fs.FileMode(state.Mode)&fs.ModeSymlink != 0 {
-				if requiresGrounded {
-					return nil, fmt.Errorf("canonicalize external result: proposed artifact %q is a symlink escaping the authorized workspace", cleanPath)
-				}
-				continue
-			}
-			artifacts = append(artifacts, canonicalArtifactRef(request, proposed, cleanPath, state.SHA256, state.Bytes))
-			continue
-		}
-		if deleted[cleanPath] {
-			// provider_claimed_missing_file: the file existed before this
-			// attempt but does not exist after it (§9.4).
-			if requiresGrounded {
-				return nil, fmt.Errorf("canonicalize external result: proposed artifact %q was deleted during this attempt", cleanPath)
-			}
-			continue
-		}
-		// Not part of the observed delta at all. It MAY be a legitimate
-		// reference to a pre-existing, untouched artifact
-		// (provider_claimed_unchanged_file) rather than a fabrication —
-		// check the live workspace before deciding which.
-		hash, size, statErr := hashWorkspaceFile(workspaceRoot, cleanPath)
-		if statErr != nil {
-			// provider_claimed_missing_file: never existed at all.
-			if requiresGrounded {
-				return nil, fmt.Errorf("canonicalize external result: proposed artifact %q does not exist: %w", cleanPath, statErr)
-			}
-			continue
-		}
-		artifacts = append(artifacts, canonicalArtifactRef(request, proposed, cleanPath, hash, size))
+	addedOrModified, deleted := externalResultWorkspacePaths(delta)
+	artifacts, err := canonicalExternalResultArtifacts(request, workspaceRoot, proposal.ProposedFiles, addedOrModified, deleted)
+	if err != nil {
+		return nil, rejectResultSourceRead(fmt.Errorf("canonicalize external result: %w", err))
 	}
 
 	// FilesModified always comes from actual delta (§19), independent of
@@ -279,7 +216,18 @@ func (defaultExternalResultCanonicalizer) Canonicalize(ctx context.Context, requ
 
 	filesRead, err := canonicalFilesReadForAttempt(ctx, request, proposal, addedOrModified, deleted, workspaceRoot, requiresGrounded)
 	if err != nil {
+		return nil, rejectResultSourceRead(err)
+	}
+	if err := validateExternalProposalClaims(request.Task, proposal); err != nil {
+		return nil, rejectExternalResultShape(request, proposal, filesRead, rejectLocalResult(RepairFailureInvalidSchema, err))
+	}
+	proposal, err = bindExternalCompletion(request, proposal, filesRead)
+	if err != nil {
 		return nil, err
+	}
+	if !validWorkerResultProposalStatus(proposal.Status) {
+		err := rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("canonicalize external result: unknown proposal status %q", proposal.Status))
+		return nil, rejectExternalResultShape(request, proposal, filesRead, err)
 	}
 	structuredPayload, err := canonicalExternalStructuredPayload(request, proposal, filesRead)
 	if err != nil {
@@ -300,6 +248,14 @@ func (defaultExternalResultCanonicalizer) Canonicalize(ctx context.Context, requ
 		summary = utils.TruncateRunes(summary, workerResultProposalMaxTextRunes)
 		if structuredPayload != nil && structuredPayload.EvidenceDowngrades > 0 {
 			summary = "Result includes claims without matching successful tool evidence; consult the structured payload for downgraded findings."
+		}
+	}
+	if err := artifactReadContextError(ctx); err != nil {
+		return nil, rejectResultSourceRead(err)
+	}
+	if request.sealFanoutResult && taskResultStatusIsSuccessful(proposal.Status) && len(artifacts) != 0 {
+		if err := stageExternalResultArtifacts(ctx, request, workspaceRoot, artifacts); err != nil {
+			return nil, err
 		}
 	}
 
@@ -329,6 +285,225 @@ func (defaultExternalResultCanonicalizer) Canonicalize(ctx context.Context, requ
 	}, nil
 }
 
+func validateExternalProposalClaims(task TaskDef, proposal *WorkerResultProposal) error {
+	if err := validateFindingSeverities(proposal.Findings); err != nil {
+		return err
+	}
+	if proposal.InvariantAssessments == nil {
+		return nil
+	}
+	if task.InvariantVerification == "" {
+		return fmt.Errorf("canonicalize external result: ordinary task must omit invariant_assessments or submit null")
+	}
+	_, err := normalizedInvariantAssessmentClaims(proposal.InvariantAssessments)
+	return err
+}
+
+func bindExternalCompletion(request AttemptRequest, proposal *WorkerResultProposal, reads []FileRef) (*WorkerResultProposal, error) {
+	compiled := request.resultContractSchema
+	if !hasRuntimeCompletion(compiled) {
+		return proposal, nil
+	}
+	bound := *proposal
+	var lookup func() (map[string]any, error)
+	if request.resultRuntimeInputs != nil {
+		lookup = func() (map[string]any, error) { return request.resultRuntimeInputs(compiled) }
+	}
+	status, summary, err := bindRuntimeCompletion(compiled.runtimeCompletion, proposal.Status, proposal.Summary, proposal.suppliedCompletionFields(), lookup)
+	if err != nil {
+		if localResultRejectionReason(err) != RepairFailureInvalidSchema {
+			return nil, err
+		}
+		return nil, rejectExternalResultShape(request, proposal, reads, err)
+	}
+	if strings.TrimSpace(summary) == "" {
+		err := rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("unsuccessful result requires a summary"))
+		return nil, rejectExternalResultShape(request, proposal, reads, err)
+	}
+	bound.Status, bound.Summary = status, summary
+	return &bound, nil
+}
+
+func externalResultWorkspacePaths(delta WorkspaceDelta) (map[string]WorkspaceFileState, map[string]bool) {
+	changed := make(map[string]WorkspaceFileState, len(delta.Added)+len(delta.Modified))
+	for _, file := range delta.Added {
+		changed[file.Path] = file
+	}
+	for _, file := range delta.Modified {
+		changed[file.Path] = file
+	}
+	deleted := make(map[string]bool, len(delta.Deleted))
+	for _, path := range delta.Deleted {
+		deleted[path] = true
+	}
+	return changed, deleted
+}
+
+// An outer format rejection cannot hide independently readable sources. Work
+// against the original frozen delta even for a rejected result-only turn.
+func authenticateRejectedExternalResult(ctx context.Context, request AttemptRequest, raw string, delta WorkspaceDelta, root string) error {
+	var fields []submissionSourceField
+	_, err := inspectProviderResultJSONFrames(raw, resultCollectionResponseMaxBytes, func(frame string) error {
+		return inspectProviderResultEnvelopeObjects(frame, 0, func(readable []submissionSourceField) {
+			fields = append(fields, readable...)
+		})
+	})
+	if err != nil {
+		return rejectResultSourceRead(err)
+	}
+	claims, proposed, err := readableExternalFileClaims(fields)
+	if err != nil {
+		return rejectResultSourceRead(err)
+	}
+	changed, deleted := externalResultWorkspacePaths(delta)
+	reads, err := canonicalFilesReadForAttempt(ctx, request, &WorkerResultProposal{FilesRead: claims}, changed, deleted, root, request.Task.Execution.RequiresGroundedResult)
+	if err != nil {
+		return rejectResultSourceRead(err)
+	}
+	if _, err := canonicalExternalResultArtifacts(request, root, proposed, changed, deleted); err != nil {
+		return rejectResultSourceRead(err)
+	}
+	compiled := request.resultContractSchema
+	if compiled == nil {
+		if request.Task.ResultContract != nil {
+			return rejectLocalResult(RepairFailureContract, fmt.Errorf("%s: result contract is not loaded", resultContractDriftCode))
+		}
+		return nil
+	}
+	sources, err := loadExternalResultPayloadSources(request, compiled)
+	if err != nil {
+		return rejectResultSourceRead(err)
+	}
+	for _, field := range fields {
+		if !sourceMemberMatches(field.name, "structured_payload_json", true) {
+			continue
+		}
+		var payload string
+		if err := json.Unmarshal(field.raw, &payload); err != nil {
+			// An object or array placed directly in the envelope can still
+			// contain readable claims despite failing the wire representation.
+			switch field.raw.Kind() {
+			case '{', '[':
+				payload = string(field.raw)
+			}
+		}
+		if strings.TrimSpace(payload) == "" {
+			continue
+		}
+		if err := authenticateExternalResultClaims(request, payload, reads, sources, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func readableExternalFileClaims(fields []submissionSourceField) (reads []string, proposed []ProposedFile, err error) {
+	for _, field := range fields {
+		switch {
+		case sourceMemberMatches(field.name, "files_read", true):
+			err = inspectProviderSourcePaths(field.raw, func(path string) { reads = append(reads, path) })
+		case sourceMemberMatches(field.name, "proposed_files", true):
+			err = inspectProviderSourceList(field.raw, 0, func(entry jsontext.Value) error {
+				for _, member := range readableSourceMembers(string(entry)) {
+					if sourceMemberMatches(member.name, "path", true) {
+						if err := inspectProviderSourcePaths(member.raw, func(path string) {
+							proposed = append(proposed, ProposedFile{Path: path})
+						}); err != nil {
+							return err
+						}
+					}
+				}
+				return nil
+			})
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return reads, proposed, nil
+}
+
+func inspectProviderSourcePaths(raw jsontext.Value, visit func(string)) error {
+	return inspectProviderSourceList(raw, 0, func(value jsontext.Value) error {
+		var path string
+		if value.Kind() == '"' && json.Unmarshal(value, &path) == nil && path != "" {
+			visit(path)
+		}
+		return nil
+	})
+}
+
+func canonicalExternalResultArtifacts(request AttemptRequest, workspace string, proposed []ProposedFile, changed map[string]WorkspaceFileState, deleted map[string]bool) ([]ArtifactRef, error) {
+	var artifacts []ArtifactRef
+	for _, file := range proposed {
+		ref, err := groundExternalResultArtifact(request, workspace, file, changed, deleted)
+		if err != nil && request.Task.Execution.RequiresGroundedResult {
+			return nil, err
+		}
+		if err == nil {
+			artifacts = append(artifacts, ref)
+		}
+	}
+	return artifacts, nil
+}
+
+func groundExternalResultArtifact(request AttemptRequest, workspace string, file ProposedFile, changed map[string]WorkspaceFileState, deleted map[string]bool) (ArtifactRef, error) {
+	path, err := sanitizeWorkspaceRelativePath(file.Path)
+	if err != nil {
+		return ArtifactRef{}, fmt.Errorf("proposed artifact %q resolves outside the authorized workspace: %w", file.Path, err)
+	}
+	if state, ok := changed[path]; ok {
+		if request.resultWorkspaceSnapshot != nil {
+			state, err = observedExternalSnapshotFile(request.resultWorkspaceSnapshot, path)
+		} else {
+			err = ensureExternalSnapshotFile(state, path)
+		}
+		if err != nil {
+			return ArtifactRef{}, err
+		}
+		return canonicalArtifactRef(request, file, path, state.SHA256, state.Bytes), nil
+	}
+	if deleted[path] {
+		return ArtifactRef{}, fmt.Errorf("proposed artifact %q was deleted during this attempt", path)
+	}
+	// An untouched file may be a legitimate reference. Check the original
+	// execution world before accepting it.
+	hash, size, err := observedExternalResultPath(request, workspace, path)
+	if err != nil {
+		return ArtifactRef{}, fmt.Errorf("proposed artifact %q does not exist: %w", path, err)
+	}
+	return canonicalArtifactRef(request, file, path, hash, size), nil
+}
+
+func observedExternalResultPath(request AttemptRequest, workspace, path string) (string, int64, error) {
+	if request.resultWorkspaceSnapshot == nil {
+		return hashWorkspaceFile(workspace, path)
+	}
+	state, err := observedExternalSnapshotFile(request.resultWorkspaceSnapshot, path)
+	if err != nil {
+		return "", 0, err
+	}
+	return state.SHA256, state.Bytes, nil
+}
+
+func observedExternalSnapshotFile(snapshot *WorkspaceSnapshot, path string) (WorkspaceFileState, error) {
+	if snapshot == nil {
+		return WorkspaceFileState{}, fmt.Errorf("workspace snapshot unavailable for %q", path)
+	}
+	state, err := snapshot.fileState(path)
+	if err != nil {
+		return WorkspaceFileState{}, err
+	}
+	return state, ensureExternalSnapshotFile(state, path)
+}
+
+func ensureExternalSnapshotFile(state WorkspaceFileState, path string) error {
+	if !fs.FileMode(state.Mode).IsRegular() {
+		return fmt.Errorf("workspace snapshot: %q is not a regular file", path)
+	}
+	return nil
+}
+
 func canonicalArtifactRef(request AttemptRequest, proposed ProposedFile, cleanPath, sha256Hex string, bytes int64) ArtifactRef {
 	return ArtifactRef{
 		Path: cleanPath, Description: utils.TruncateRunes(proposed.Description, workerResultProposalMaxTextRunes), Role: proposed.Role,
@@ -355,7 +530,7 @@ func canonicalFilesReadForAttempt(ctx context.Context, request AttemptRequest, p
 	}
 	claims := proposal.FilesRead
 	if len(claims) > workerResultProposalMaxFilesRead {
-		claims = claims[:workerResultProposalMaxFilesRead]
+		return nil, fmt.Errorf("files_read exceeds the source inspection limit of %d entries", workerResultProposalMaxFilesRead)
 	}
 	seen := make(map[string]bool, len(claims))
 	var refs []FileRef
@@ -384,27 +559,30 @@ func canonicalFilesReadForAttempt(ctx context.Context, request AttemptRequest, p
 		}
 		seen[cleanPath] = true
 
-		if _, ok := addedOrModified[cleanPath]; ok {
+		if err := verifyExternalReadPath(request, workspaceRoot, cleanPath, addedOrModified, deleted); err == nil {
 			refs = append(refs, FileRef{Path: cleanPath})
-			continue
-		}
-		if deleted[cleanPath] {
-			// The file existed before this attempt (it could have been read
-			// before being deleted), so the claim is plausible even though
-			// it no longer exists now.
-			refs = append(refs, FileRef{Path: cleanPath})
-			continue
-		}
-		if _, _, statErr := hashWorkspaceFile(workspaceRoot, cleanPath); statErr == nil {
-			refs = append(refs, FileRef{Path: cleanPath})
-			continue
-		}
-		if requiresGrounded {
-			return nil, fmt.Errorf("canonicalize external result: claimed files_read entry %q does not exist", cleanPath)
+		} else if requiresGrounded {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, fmt.Errorf("canonicalize external result: claimed files_read entry %q does not exist", cleanPath)
+			}
+			return nil, fmt.Errorf("canonicalize external result: claimed files_read entry %q: %w", cleanPath, err)
 		}
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].Path < refs[j].Path })
 	return refs, nil
+}
+
+func verifyExternalReadPath(request AttemptRequest, workspace, path string, changed map[string]WorkspaceFileState, deleted map[string]bool) error {
+	if deleted[path] {
+		// A legitimate content claim may describe a file read before deletion.
+		_, err := observedExternalSnapshotFile(request.resultWorkspaceBaseline, path)
+		return err
+	}
+	if state, ok := changed[path]; ok && request.resultWorkspaceSnapshot == nil {
+		return ensureExternalSnapshotFile(state, path)
+	}
+	_, _, err := observedExternalResultPath(request, workspace, path)
+	return err
 }
 
 func validateAttemptArtifactScope(request AttemptRequest) error {
@@ -459,13 +637,17 @@ func canonicalScopedFileRef(ctx context.Context, request AttemptRequest, raw, wo
 			}
 		}
 	}
-	if strings.HasPrefix(raw, "sha256-") || strings.HasPrefix(raw, "skill-") {
+	if looksLikeOpaqueArtifactID(raw) {
 		return FileRef{}, true, fmt.Errorf("canonicalize external result: opaque files_read reference %q is unknown or not authorized for this attempt", raw)
 	}
 	if artifactIDMetadataExists(raw, scope, workspaceRoot) {
 		return FileRef{}, true, fmt.Errorf("canonicalize external result: files_read reference %q resolves to an unauthorized artifact", raw)
 	}
 	return FileRef{}, false, nil
+}
+
+func looksLikeOpaqueArtifactID(raw string) bool {
+	return strings.HasPrefix(raw, "sha256-") || strings.HasPrefix(raw, "skill-") || strings.HasPrefix(raw, "external-result-")
 }
 
 func artifactIDMetadataExists(id string, scope *ArtifactAccessScope, workspaceRoot string) bool {
@@ -511,7 +693,7 @@ func verifyScopedArtifactEvidence(ctx context.Context, request AttemptRequest, s
 	if storeRoot == "" {
 		storeRoot = workspaceRoot
 	}
-	store, err := NewFileArtifactStore(storeRoot, storeRoot)
+	store, err := OpenFileArtifactStoreReadOnly(storeRoot, storeRoot)
 	if err != nil {
 		return fmt.Errorf("canonicalize external result: open %s evidence store: %w", kind, err)
 	}

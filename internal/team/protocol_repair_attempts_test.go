@@ -87,15 +87,15 @@ func TestResultRepairKeepsOneSchemaCorrectionAfterMissingCall(t *testing.T) {
 							t.Fatalf("prior repair not checkpointed: exists=%v err=%v", exists, err)
 						}
 						history := loaded.Tasks[0].ExecutionReceipt.RepairProvenance.History
-						if len(history) != 2 || history[1].FailureReason != RepairFailureInvalidSchema {
-							t.Fatal("next generation started before prior rejection was durable")
+						if len(history) != 3 || history[1].FailureReason != RepairFailureInvalidSchema || history[2].Attempt != 3 || history[2].FailureReason != RepairFailureInvalidSchema {
+							t.Fatal("next generation started before rejection and reservation were durable")
 						}
 						events, err := store.ReadEvents()
 						if err != nil {
 							t.Fatal(err)
 						}
 						projected := ReduceToTodoList(events)
-						if len(projected) != 1 || len(projected[0].ExecutionReceipt.RepairProvenance.History) != 2 {
+						if len(projected) != 1 || len(projected[0].ExecutionReceipt.RepairProvenance.History) != 3 {
 							t.Fatal("canonical replay lost the repair budget")
 						}
 						return third.stream(ctx, call)

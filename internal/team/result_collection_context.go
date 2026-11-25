@@ -79,6 +79,9 @@ func resultFixedCollectionPayloadSchema(ref ResultContractRef, compiled *Compile
 
 func fixedCollectionPayloadSchema(ref ResultContractRef, compiled *CompiledResultContract, plans []resultFixedCollectionPlan, portable, guidance bool) map[string]any {
 	base := visibleResultPayloadSchema(ref, compiled, guidance)
+	if ref.Normalizer != "" {
+		return base
+	}
 	for _, plan := range plans {
 		// Canonical provider guidance advertises arrays; submission accepts
 		// keyed decisions. Replace that shape while retaining sibling fields.
@@ -171,7 +174,7 @@ func (c *Coordinator) validateFixedCollectionInputJSON(todoID, input string) err
 // fixedCollectionSubmissionSchema is shared with local and result-only repair
 // tools. External workers receive the same manifest in their task prompt.
 func (c *Coordinator) fixedCollectionSubmissionSchema(todoID string, ref ResultContractRef, compiled *CompiledResultContract) map[string]any {
-	if compiled == nil || len(compiled.fixedCollections) == 0 {
+	if compiled == nil || ref.Normalizer != "" || len(compiled.fixedCollections) == 0 {
 		return providerVisibleResultPayloadSchema(ref, compiled)
 	}
 	plans, err := c.fixedCollectionPlans(todoID)

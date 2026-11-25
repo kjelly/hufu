@@ -125,17 +125,21 @@ func (o *WorkspaceSessionOps) recoverRestore(ctx context.Context, op versionstor
 	if node.State != versionstore.StatePublished {
 		return o.failOperation(ctx, op, "restore_not_committed", report)
 	}
-	if _, err = o.materialize(ctx, node.ID, op.FromSnapshotID); err != nil {
-		return fmt.Errorf("complete restore: %w", err)
+	if op.State != versionstore.OperationMaterialized {
+		if _, err = o.materialize(ctx, node.ID, op.FromSnapshotID); err != nil {
+			return fmt.Errorf("complete restore: %w", err)
+		}
+		if err = o.step(ctx, op, versionstore.OperationMaterialized, ""); err != nil {
+			return err
+		}
 	}
-	if err = o.step(ctx, op, versionstore.OperationCompleted, ""); err != nil {
-		return err
-	}
-	if err = o.clearRecovery(ctx); err != nil {
+	// A newer guard stays authoritative after the old restore completes.
+	// The next explicit restore or adopt will bind that guard.
+	if _, err = o.finishRestore(ctx, op, node); err != nil {
 		return err
 	}
 	report.Completed = append(report.Completed, op.ID)
-	return o.markMaterialized(ctx, node)
+	return nil
 }
 
 // recoverFork implements the §18.3 table.

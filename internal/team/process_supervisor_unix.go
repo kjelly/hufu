@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"syscall"
+	"time"
 )
 
 // unixProcessSupervisor uses a dedicated process group per §16.2's Unix
@@ -26,13 +27,32 @@ func (h *unixProcessHandle) Pid() int { return h.cmd.Process.Pid }
 
 func (h *unixProcessHandle) Wait() error { return h.cmd.Wait() }
 
-// waitRaw reaps the process directly (a plain wait4/waitid on the pid),
-// bypassing *exec.Cmd.Wait's join on any bridging io-copy goroutines it
-// spawned for non-*os.File Stdin/Stdout. See codex_process.go's
-// processRawWaiter doc comment for why this matters.
-func (h *unixProcessHandle) waitRaw() error {
-	_, err := h.cmd.Process.Wait()
-	return err
+func (h *unixProcessHandle) groupExists() (bool, error) {
+	err := signalProcessGroup(h.pgid, 0)
+	if errors.Is(err, syscall.ESRCH) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (h *unixProcessHandle) waitAfterGroupKill(ctx context.Context) error {
+	poll := time.NewTicker(10 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		exists, err := h.groupExists()
+		if !exists || err != nil {
+			return err
+		}
+		live, err := unixProcessGroupHasLiveMember(h.pgid)
+		if !live || err != nil {
+			return err
+		}
+		select {
+		case <-poll.C:
+		case <-ctx.Done():
+			return fmt.Errorf("process supervisor: process group %d did not exit: %w", h.pgid, ctx.Err())
+		}
+	}
 }
 
 func (unixProcessSupervisor) Start(_ context.Context, spec ProcessSpec) (ProcessHandle, error) {

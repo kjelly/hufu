@@ -163,7 +163,7 @@ func (c *Coordinator) assessLegacySubmission(ctx context.Context, source *Resume
 	p.SourceTaskSHA256, _ = collectionDigest(item)
 	p.OriginalTaskInputSHA256, _ = decisionTaskInputDigest(item)
 	p.ReceiptSHA256, _ = collectionDigest(r)
-	p.EvidenceSHA256, err = c.resultCollectionEvidenceHash(item)
+	p.EvidenceSHA256, err = c.resultCollectionEvidenceHash(ctx, item)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +172,7 @@ func (c *Coordinator) assessLegacySubmission(ctx context.Context, source *Resume
 	if err != nil {
 		return nil, err
 	}
-	body, err := c.legacySubmissionWork(item, p, args)
+	body, err := c.legacySubmissionWork(ctx, item, p, args)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +230,7 @@ func validateLegacySubmissionTranscript(item *TodoItem, t *taskTranscript, args 
 	return nil
 }
 
-func (c *Coordinator) legacySubmissionWork(item *TodoItem, p *LegacySubmissionRecovery, args []byte) ([]byte, error) {
+func (c *Coordinator) legacySubmissionWork(ctx context.Context, item *TodoItem, p *LegacySubmissionRecovery, args []byte) ([]byte, error) {
 	binding, err := legacyWorkBinding(p)
 	if err != nil {
 		return nil, err
@@ -243,7 +243,7 @@ func (c *Coordinator) legacySubmissionWork(item *TodoItem, p *LegacySubmissionRe
 	if def == nil {
 		return nil, fmt.Errorf("legacy worker missing")
 	}
-	sources, err := c.resultCandidateEvidenceSources(item)
+	sources, err := c.resultCandidateEvidenceSources(ctx, item)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +283,7 @@ func (c *Coordinator) persistLegacySubmissionWork(ctx context.Context, source *R
 			if err != nil {
 				return err
 			}
-			body, err := c.legacySubmissionWork(item, p, args)
+			body, err := c.legacySubmissionWork(ctx, item, p, args)
 			if err != nil {
 				return err
 			}
@@ -345,7 +345,7 @@ func (c *Coordinator) validateLegacyWork(ctx context.Context, item *TodoItem, cp
 	if receiptHash != p.ReceiptSHA256 || legacyBytesHash(work.Report) != p.ArgumentsSHA256 || cp.Work != p.Work {
 		return errResultCollectionStale
 	}
-	evidence, err := c.resultCollectionEvidenceHash(item)
+	evidence, err := c.resultCollectionEvidenceHash(ctx, item)
 	if err != nil || evidence != p.EvidenceSHA256 {
 		return errResultCollectionStale
 	}
@@ -362,7 +362,7 @@ func (c *Coordinator) validateLegacyWork(ctx context.Context, item *TodoItem, cp
 	if err != nil || string(args) != string(work.Report) {
 		return errResultCollectionStale
 	}
-	body, err := c.legacySubmissionWork(original, p, args)
+	body, err := c.legacySubmissionWork(ctx, original, p, args)
 	if err != nil || legacyBytesHash(body) != p.Work.SHA256 {
 		return errResultCollectionStale
 	}

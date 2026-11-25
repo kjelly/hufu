@@ -8,6 +8,7 @@ import (
 )
 
 type resultCollectionEvidenceKey struct{}
+type resultCollectionReadCheckpointKey struct{}
 
 // restoreCollectionContext reopens only the submission lease already persisted
 // by dispatch or an explicit operator grant. Original work identity is retained.
@@ -32,15 +33,16 @@ func (c *Coordinator) restoreCollectionContext(ctx context.Context, expected *Re
 	if err != nil {
 		return nil, err
 	}
-	if err := c.validateSelectedRepairContext(ctx, item, work.Receipt.ContextManifest); err != nil {
-		return nil, err
-	}
 	workspace, err := filepath.Abs(c.session.Workspace)
 	if err != nil || workspace != work.Workspace {
 		return nil, errResultCollectionStale
 	}
 	identity := submitResultRuntimeIdentity{RunID: expected.SourceRunID, TaskID: expected.TaskID, Attempt: expected.Attempt, Agent: expected.Agent,
 		OccurrenceRevision: expected.SubmissionRevision, DispatchID: expected.SubmissionDispatchID}
+	ctx, err = c.collectionReadContext(ctx, item, expected, work)
+	if err != nil {
+		return nil, err
+	}
 	if active, ok := c.activeTaskResultOccurrence(item.ID); ok {
 		if !sameTaskResultOccurrence(active, identity) {
 			return nil, errResultCollectionStale
@@ -54,21 +56,33 @@ func (c *Coordinator) restoreCollectionContext(ctx context.Context, expected *Re
 			return nil, err
 		}
 	}
+	return ctx, nil
+}
+
+// Construct read credentials from already authenticated work without opening
+// an occurrence or granting a result write. Parent fanout preflight uses this
+// context while its sibling slots still have private submission projections.
+func (c *Coordinator) collectionReadContext(ctx context.Context, item *TodoItem, cp *ResultCollectionCheckpoint, work *resultCollectionWork) (context.Context, error) {
+	if err := c.validateSelectedRepairContext(ctx, item, work.Receipt.ContextManifest); err != nil {
+		return nil, err
+	}
 	evidence, err := c.restoreTranscriptEvidence(ctx, &work.Receipt, work.Receipt.RunID)
 	if err != nil {
 		return nil, err
 	}
-	ctx = withSubmitResultRuntimeIdentity(ctx, identity)
-	ctx = context.WithValue(ctx, todoIDKey{}, expected.TaskID)
-	ctx = context.WithValue(ctx, executionAttemptKey{}, expected.Attempt)
-	ctx = context.WithValue(ctx, tools.AgentNameKey, expected.Agent)
-	ctx = withInvocationMetadata(ctx, InvocationMetadata{RunID: expected.SourceRunID, TaskID: expected.TaskID, Attempt: expected.Attempt,
-		AgentName: expected.Agent, AgentRole: "worker", ModelExecutionID: expected.ModelExecutionID})
+	ctx = withSubmitResultRuntimeIdentity(ctx, submitResultRuntimeIdentity{RunID: cp.SourceRunID, TaskID: cp.TaskID, Attempt: cp.Attempt, Agent: cp.Agent,
+		OccurrenceRevision: cp.SubmissionRevision, DispatchID: cp.SubmissionDispatchID})
+	ctx = context.WithValue(ctx, todoIDKey{}, cp.TaskID)
+	ctx = context.WithValue(ctx, executionAttemptKey{}, cp.Attempt)
+	ctx = context.WithValue(ctx, tools.AgentNameKey, cp.Agent)
+	ctx = withInvocationMetadata(ctx, InvocationMetadata{RunID: cp.SourceRunID, TaskID: cp.TaskID, Attempt: cp.Attempt,
+		AgentName: cp.Agent, AgentRole: "worker", ModelExecutionID: cp.ModelExecutionID})
 	ctx = context.WithValue(ctx, taskTranscriptKey{}, (*taskTranscript)(nil))
 	ctx = context.WithValue(ctx, resultCollectionEvidenceKey{}, evidence)
+	ctx = context.WithValue(ctx, resultCollectionReadCheckpointKey{}, cp)
 	ctx = c.withCollectedWorkArtifactScope(ctx, work)
 	if work.Receipt.ContextManifest != nil {
-		manifest, err := collectionContextManifest(item, expected, &work.Receipt)
+		manifest, err := collectionContextManifest(item, cp, &work.Receipt)
 		if err != nil {
 			return nil, err
 		}

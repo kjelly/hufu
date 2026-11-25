@@ -34,6 +34,11 @@ func resultPatchToolInfo(candidate *ResultCandidate) fantasy.ToolInfo {
 }
 
 func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	if !claimResultSubmissionTurn(ctx) {
+		return fantasy.WithResponseMetadata(fantasy.NewTextErrorResponse("only the first submit_result call in a model invocation is admitted"), resultSubmissionFailure{
+			Version: 1, Reason: ignoredSiblingSubmission,
+		}), nil
+	}
 	if t.candidate != nil {
 		return t.runPatch(ctx, call)
 	}
@@ -45,7 +50,7 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		return response, nil
 	}
 	item := t.coordinator.todoItemByID(t.todoID)
-	if item == nil || item.ResultContract == nil || t.coordinator.artifactStoreRootPath() == "" || len(call.Input) > resultCandidateMaxBytes {
+	if item == nil || item.ResultContract == nil || item.ResultContract.Normalizer != "" || t.coordinator.artifactStoreRootPath() == "" || len(call.Input) > resultCandidateMaxBytes {
 		return response, nil
 	}
 	// Capture only a structurally rejected object. Evidence/policy/verification

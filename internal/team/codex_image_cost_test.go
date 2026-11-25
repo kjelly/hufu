@@ -11,6 +11,7 @@ import (
 )
 
 func TestCodexNativeImagesUseOpaqueCostReservation(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	for _, scenario := range []string{"bounded", "budget denied", "unbounded"} {
 		t.Run(scenario, func(t *testing.T) {
 			data := mediaStorePNG(t)

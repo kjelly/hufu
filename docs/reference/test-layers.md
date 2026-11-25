@@ -20,12 +20,12 @@ promise that every short test is a pure unit test.
 | Reviewed process/PTY, persistence, architecture/generator cases | `mise run test-integration` | Separate `integration` job, with race and no short flag |
 | Complete offline regression | `mise exec -- go run ./scripts/testlayers -layer full` | Unchanged `cgo-free` job executes all tests with `CGO_ENABLED=0` and no short flag |
 | Active test inventory | `mise run test-inventory` | Every short/integration invocation validates the same discovered sources |
-| Live Codex smoke | `HUFU_CODEX_SMOKE=1 mise exec -- go test -p 2 -count=1 ./internal/team -run CodexSmoke` | Explicit operator opt-in, outside deterministic CI; requires installed/authenticated Codex |
+| Codex App Server integration | Paused | Dedicated offline and live tests report skipped because the backend is temporarily unsupported |
 
 `mise run test` retains its existing full core-suite behavior. The new full
-entry additionally includes diagnostic-pilot. Live smoke keeps its existing
-opt-in guard; moving it cannot accelerate default CI because it was already
-skipped there. All entry points retain normal Go build tags. Example tests and
+entry additionally includes diagnostic-pilot. Live Codex smoke tests report
+skipped even with `HUFU_CODEX_SMOKE=1`. Shared runtime tests continue to run.
+All entry points retain normal Go build tags. Example tests and
 fuzz seed corpora remain in short/full execution; shard zero owns them when
 sharding is enabled. The inventory lists top-level `Test` functions, while
 example/fuzz execution is retained separately. The inventory shows the tests active for the current GOOS/GOARCH, including external test

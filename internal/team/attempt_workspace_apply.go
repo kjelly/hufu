@@ -14,12 +14,15 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/kjelly/hufu/internal/workspace/versionstore"
 )
 
 // attemptWorkspaceConflictReportLimit bounds the paths a conflict names.
 const attemptWorkspaceConflictReportLimit = 50
+
+var errAttemptDeltaSourceChanged = errors.New("attempt world file changed after its delta was taken")
 
 // AttemptWorkspaceApplyResult summarizes an applied delta.
 type AttemptWorkspaceApplyResult struct {
@@ -105,7 +108,10 @@ func applyAttemptWorkspaceDelta(ctx context.Context, subjectRoot, worldRoot stri
 	}
 	for _, change := range delta.Changes {
 		current, err := observeAttemptEntry(canonical, change.Path)
-		if err != nil || !current.sameState(change.After) {
+		if err != nil {
+			return result, fmt.Errorf("%s: check applied path %s: %w", workspaceApplyIncompleteCode, change.Path, err)
+		}
+		if !current.sameState(change.After) {
 			return result, fmt.Errorf("%s: %s does not match the attempt's final state after apply", workspaceApplyIncompleteCode, change.Path)
 		}
 	}
@@ -120,6 +126,9 @@ func planAttemptWorkspaceApply(canonical *os.Root, changes []AttemptPathChange) 
 	for i, change := range changes {
 		current, err := observeAttemptEntry(canonical, change.Path)
 		if err != nil {
+			if !errors.Is(err, errAttemptPathIsDirectory) && !errors.Is(err, syscall.ENOTDIR) {
+				return nil, err
+			}
 			conflicts = append(conflicts, change.Path)
 			continue
 		}
@@ -187,6 +196,9 @@ func writeAttemptChange(canonical, world *os.Root, change AttemptPathChange) err
 func copyAttemptFileVerified(world, canonical *os.Root, name, tempName string, want *AttemptManifestEntry) error {
 	in, err := world.Open(name)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return errors.Join(errAttemptDeltaSourceChanged, err)
+		}
 		return err
 	}
 	defer func() { _ = in.Close() }()
@@ -202,7 +214,7 @@ func copyAttemptFileVerified(world, canonical *os.Root, name, tempName string, w
 		return err
 	}
 	if got := hex.EncodeToString(hash.Sum(nil)); got != want.SHA256 {
-		return fmt.Errorf("attempt world file changed after its delta was taken")
+		return errAttemptDeltaSourceChanged
 	}
 	return canonical.Chmod(tempName, fs.FileMode(want.Mode))
 }

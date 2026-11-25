@@ -35,7 +35,7 @@ func TestEvidenceSourceLimitIsBoundedAndKeepsDefault(t *testing.T) {
 	} {
 		t.Run(fmt.Sprint(tc.limit), func(t *testing.T) {
 			task := TaskDef{Agent: "writer", EvidenceFrom: ids, Execution: ExecutionContract{RequiresEvidence: true, MaxEvidenceSources: tc.limit}}
-			bound, err := c.bindEvidenceSources([]TaskDef{task})
+			bound, err := c.bindEvidenceSources(t.Context(), []TaskDef{task})
 			if tc.want != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.want) {
 					t.Fatalf("error=%v, want %q", err, tc.want)
@@ -50,7 +50,7 @@ func TestEvidenceSourceLimitIsBoundedAndKeepsDefault(t *testing.T) {
 	// Raising capacity never authorizes a missing or unfinished source.
 	unfinished := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reader"}})[0]
 	for _, id := range []string{"999", unfinished.ID} {
-		if _, err := c.bindEvidenceSources([]TaskDef{{Agent: "writer", EvidenceFrom: []string{id}, Execution: ExecutionContract{MaxEvidenceSources: 64}}}); err == nil {
+		if _, err := c.bindEvidenceSources(t.Context(), []TaskDef{{Agent: "writer", EvidenceFrom: []string{id}, Execution: ExecutionContract{MaxEvidenceSources: 64}}}); err == nil {
 			t.Fatalf("capacity override authorized unavailable source %s", id)
 		}
 	}

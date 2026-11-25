@@ -92,6 +92,9 @@ func (c *Coordinator) persistProviderSessionBinding(ctx context.Context, taskID 
 	if journal == nil {
 		return fmt.Errorf("persist provider session binding: event journal is unavailable")
 	}
+	if c.isModelFanoutLeaf(taskID) {
+		return c.persistFanoutBackendSession(ctx, taskID, binding)
+	}
 	target, err := c.sessionBindingTarget(taskID)
 	if err != nil {
 		return fmt.Errorf("persist provider session binding: %w", err)
@@ -133,6 +136,10 @@ func (c *Coordinator) persistProviderSessionBinding(ctx context.Context, taskID 
 			return fmt.Errorf("persist provider session binding: %w", err)
 		}
 	}
+	return c.applyProviderSessionBinding(taskID, target, binding)
+}
+
+func (c *Coordinator) applyProviderSessionBinding(taskID string, target execution.ExecutionTarget, binding ProviderBinding) error {
 	if c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return fmt.Errorf("persist provider session binding: task tracker is unavailable")
 	}
@@ -154,6 +161,9 @@ func backendSessionBoundKey(taskID string) string {
 // sessionBindingTarget is the frozen execution target a task's session
 // binding is recorded against.
 func (c *Coordinator) sessionBindingTarget(taskID string) (execution.ExecutionTarget, error) {
+	if c.isModelFanoutLeaf(taskID) {
+		return c.modelFanoutTarget(taskID)
+	}
 	item := c.todoItemByID(taskID)
 	if item == nil {
 		return execution.ExecutionTarget{}, fmt.Errorf("task %q is unavailable", taskID)

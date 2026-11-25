@@ -17,3 +17,14 @@ func openBoundedArtifact(path string) (*os.File, error) {
 	}
 	return os.Open(path)
 }
+
+func openGroundedArtifact(root *os.Root, path string) (*os.File, error) {
+	info, err := root.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("artifact must be a regular file")
+	}
+	return root.Open(path)
+}

@@ -72,7 +72,7 @@ func TestResumePreflightRetainsFrozenNativeOutputContext(t *testing.T) {
 				case "wrong_branch":
 					store.SetBranchID("main")
 				}
-				value, err := preview.resolveRuntimeOutputValue(FactRef{Name: "scope", TaskID: "source", RuntimeOutput: "scope"}, "scope")
+				value, err := preview.resolveRuntimeOutputValue(t.Context(), FactRef{Name: "scope", TaskID: "source", RuntimeOutput: "scope"}, "scope")
 				if kind == "selected" {
 					if err != nil || !sameCanonicalEvidence(value, map[string]any{"satisfied": true}) || preview.executionRunID == "source-run" {
 						t.Fatalf("frozen native output=%v error=%v", value, err)
@@ -158,7 +158,7 @@ func TestRecoveredArtifactOperatorDiagnosticPreservesModelBoundary(t *testing.T)
 	if _, _, err := c.newArtifactInputAuthorizer(t.Context(), c.taskTracker.TodoList().Items()).resolve(consumer, id); err == nil {
 		t.Fatal("operator preflight lost the underlying rejection")
 	}
-	if _, _, ok := c.authorizedWorksetInput(consumer, id); ok {
+	if _, _, ok := c.authorizedWorksetInput(t.Context(), consumer, id); ok {
 		t.Fatal("a diagnostic change admitted the missing canonical source")
 	}
 	if _, err := c.buildArtifactAccessScope(t.Context(), consumer.ID, 1); err == nil {

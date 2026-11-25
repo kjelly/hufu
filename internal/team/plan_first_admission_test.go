@@ -62,6 +62,7 @@ func TestValidatePlanFirstExecutionTarget(t *testing.T) {
 // under --plan a Codex worker never calls submit_plan, so its planning turn
 // used to do the work and finish the task before any plan was reviewed.
 func TestPlanFirstTaskIsNotDispatchedToCodex(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	worker := &agent.AgentDef{
 		Name: "worker", Role: "worker", SubagentProvider: "codex", SideEffect: "workspace_write",

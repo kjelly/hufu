@@ -2,12 +2,91 @@ package team
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"charm.land/fantasy"
+
 	"github.com/kjelly/hufu/internal/agent"
 )
+
+type interruptedAssumptionJournal struct {
+	*memoryJournal
+	err error
+}
+
+func (j *interruptedAssumptionJournal) Append(ctx context.Context, event RunEvent) (RunEvent, error) {
+	if event.Type == agent.EventAssumptionSupported && j.err != nil {
+		return RunEvent{}, j.err
+	}
+	return j.memoryJournal.Append(ctx, event)
+}
+
+func TestNormalizerRecoversFromInterruptedAssumptionCommit(t *testing.T) {
+	c := newTestCoordinator(t)
+	if err := c.mutateSessionData(func(*SessionData) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	journal := &interruptedAssumptionJournal{memoryJournal: &memoryJournal{}, err: errors.New("decision journal interrupted")}
+	c.SetEventJournal(journal)
+	compiled, ref := compiledReviewContract(t, true)
+	c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "review", ResultContract: &ref}})[0]
+	ctx := occurrenceTestContext(c, item.ID, 1)
+	record := &DecisionRecord{ID: "assumption-commit-decision", Assumptions: []DecisionAssumption{{ID: "A1", Statement: "declared check"}}}
+	index, err := c.decisionIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := index.Append(DecisionIndexEntry{DecisionID: record.ID, TaskID: item.ID, Assumptions: record.Assumptions}); err != nil {
+		t.Fatal(err)
+	}
+	policy := disciplinePolicy(CommitGatePolicy{}, StopPolicy{CheckpointEvery: 1}, ReplanPolicy{})
+	if err := c.armDiscipline(ctx, item.ID, TaskDef{ID: item.ID, Agent: item.Agent}, policy, record); err != nil {
+		t.Fatal(err)
+	}
+	const draft, output = `{"verdict":"APPROVE"}`, `{"verdict":"approve","findings":[]}`
+	calls := 0
+	bindTestNormalizer(t, c, item, &mockNormalizerProvider{fn: func(context.Context, []byte) ([]byte, error) {
+		calls++
+		return []byte(output), nil
+	}})
+	tool := &submitResultTool{coordinator: c, todoID: item.ID}
+	for _, checks := range []string{
+		`"Assumption_Checks":[{"assumption_id":"undeclared","status":"supported"}]`,
+		`"assumption_checks":[{"Assumption_Id":"undeclared","status":"supported"}]`,
+	} {
+		call := toolCallForTest(`{"status":"success","summary":"done",` + checks + `,"structured_payload":` + draft + `}`)
+		response, err := tool.Run(ctx, call)
+		if err != nil || !response.IsError || submissionFailureMetadata(response.Metadata) != RepairFailureSource || calls != 0 {
+			t.Fatalf("undeclared assumption reached normalization: calls=%d response=%+v err=%v", calls, response, err)
+		}
+	}
+	call := toolCallForTest(`{"status":"success","summary":"done","Assumption_Checks":[{"Assumption_Id":"A1","status":"supported"}],"structured_payload":` + draft + `}`)
+	response, err := tool.Run(ctx, call)
+	failure := decodeSubmissionFailure(response.Metadata)
+	stageRef := failure.Normalization
+	if err != nil || !response.IsError || !response.StopTurn || failure.Reason != RepairFailureCommit ||
+		stageRef.RawSHA256 != sha256HexBytes([]byte(draft)) || stageRef.OutputSHA256 != sha256HexBytes([]byte(output)) ||
+		stageRef.ProviderSHA256 != item.ResultContract.NormalizerSHA256 || c.GetTaskResult(item.ID) != nil {
+		t.Fatalf("interrupted assumption submission = %+v, failure=%+v, %v", response, failure, err)
+	}
+	stageEvidence := assertDirectNormalizationSubmission(t, c, stageRef, call.Input)
+	stage, found, err := c.readStagedNormalization(*item.ResultContract, stageRef.OccurrenceSHA256, stageRef.RawSHA256)
+	if err != nil || !found || stage.evidence() != stageEvidence || string(stage.Raw) != draft || string(stage.Output) != output || journal.count(agent.EventAssumptionSupported) != 0 {
+		t.Fatalf("stage after failed commit = %+v, found=%v, %v", stage, found, err)
+	}
+	journal.err = nil
+	response, err = tool.Run(ctx, call)
+	result := c.GetTaskResult(item.ID)
+	if err != nil || response.IsError || calls != 1 || journal.count(agent.EventAssumptionSupported) != 1 ||
+		result == nil || result.StructuredPayload == nil || result.StructuredPayload.Normalization.evidence() != stageEvidence {
+		t.Fatalf("resumed assumption commit = %+v, normalizations=%d result=%+v, %v", response, calls, result, err)
+	}
+}
 
 func armedAssumptionCoordinator(t *testing.T) (*Coordinator, *memoryJournal) {
 	t.Helper()
@@ -359,5 +438,51 @@ func TestDecisionIndexRebuildFromCanonicalJournal(t *testing.T) {
 	}
 	if len(entries) != 1 || !entries[0].Stale || entries[0].Assumptions[0].EffectiveStatus() != AssumptionContradicted {
 		t.Fatalf("rebuilt index = %#v, want stale contradicted decision", entries)
+	}
+}
+
+func TestDirectResultChecksDeclaredAssumptionBeforeOtherClaims(t *testing.T) {
+	c, journal := armedAssumptionCoordinator(t)
+	tool := &submitResultTool{coordinator: c, todoID: "todo-1"}
+	events := len(journal.events)
+	for _, tc := range []struct {
+		check string
+		want  RepairFailureReason
+	}{
+		{`{"assumption_id":"A1","status":"supported"}`, RepairFailureInvalidSchema},
+		{`{"assumption_id":"A1","status":"unknown"}`, RepairFailureInvalidSchema},
+		{`{"assumption_id":"forged","status":"supported","unknown":true}`, RepairFailureSource},
+		{`{"assumption_id":"forged","assumption_id":"A1","status":"unknown"}`, RepairFailureSource},
+		{`{"assumption_id":"A1","status":"unknown","evidence":[false,"forged-digest"]}`, RepairFailureSource},
+	} {
+		raw := fmt.Sprintf(`{"status":"success","summary":"checked","unknown":true,"assumption_checks":[%s]}`, tc.check)
+		resp, err := tool.Run(t.Context(), fantasy.ToolCall{Name: submitResultToolName, Input: raw})
+		if err != nil || submissionFailureMetadata(resp.Metadata) != tc.want {
+			t.Fatalf("assumption %s rejected as %s, %v, want %s", tc.check, resp.Metadata, err, tc.want)
+		}
+	}
+	if len(journal.events) != events {
+		t.Fatal("source preflight wrote an assumption transition")
+	}
+}
+
+func TestNormalizerRepairsFormatOfDeclaredAssumption(t *testing.T) {
+	var calls int
+	c, _, item := newDirectNormalizationRun(t, func(ctx context.Context, draft []byte) ([]byte, error) {
+		calls++
+		return echoNormalization(ctx, draft)
+	}, nil)
+	armNormalizationAssumption(t, c, item, true)
+	wire := func(status string) string {
+		return fmt.Sprintf(`{"status":"success","summary":"checked","assumption_checks":[{"assumption_id":"A1","status":%q}],"structured_payload":%s}`, status, approvedNormalizationDraft)
+	}
+	tool := &submitResultTool{coordinator: c, todoID: item.ID}
+	worker := &rejectedResultStreamModel{toolName: submitResultToolName, finish: fantasy.FinishReasonToolCalls, input: func(int) string { return wire("unknown") }}
+	repair := &rejectedResultStreamModel{toolName: submitResultToolName, finish: fantasy.FinishReasonToolCalls, input: func(int) string { return wire("supported") }}
+	c.workerAgentOverride = fantasy.NewAgent(worker, fantasy.WithTools(c.gatePolicyTools([]fantasy.AgentTool{tool})...), fantasy.WithMaxRetries(0))
+	c.repairAgentOverride = fantasy.NewAgent(repair, fantasy.WithTools(tool), fantasy.WithMaxRetries(0))
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(t.Context()), taskDefFromTodoItem(item), item.ID)
+	if err != nil || worker.calls != 1 || repair.calls != 1 || calls != 1 {
+		t.Fatalf("declared assumption format did not get one correction: work=%d repair=%d normalizer=%d error=%v", worker.calls, repair.calls, calls, err)
 	}
 }

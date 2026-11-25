@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -73,6 +74,12 @@ func TestResultCollectionRepairsRuntimeWorksetFieldsWithoutRepeatingWork(t *test
 }
 
 func TestResultCollectionRepairsWorksetPathReferences(t *testing.T) {
+	t.Run("direct payload", func(t *testing.T) { testResultCollectionRepairsWorksetPathReferences(t, false) })
+	t.Run("sealed normalizer output", func(t *testing.T) { testResultCollectionRepairsWorksetPathReferences(t, true) })
+}
+
+func testResultCollectionRepairsWorksetPathReferences(t *testing.T, normalized bool) {
+	t.Helper()
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
@@ -105,9 +112,13 @@ func TestResultCollectionRepairsWorksetPathReferences(t *testing.T) {
 			http.Error(w, "missing choices", http.StatusBadRequest)
 			return
 		}
-		var findings []map[string]string
-		for _, line := range []int{67, 81, 399} {
-			findings = append(findings, map[string]string{"location": fmt.Sprintf("%s:%d", matches[1], line), "summary": fmt.Sprintf("original issue %d retained", line)})
+		var findings []map[string]any
+		for index, line := range []int{67, 81, 399} {
+			location := any(fmt.Sprintf("%s:%d", matches[1], line))
+			if n == 1 && index == 0 {
+				location = line
+			}
+			findings = append(findings, map[string]any{"location": location, "summary": fmt.Sprintf("original issue %d retained", line)})
 		}
 		body, err := json.Marshal(map[string]any{"status": "success", "summary": "original issues retained", "structured_payload": map[string]any{"findings": findings}})
 		if err != nil {
@@ -122,9 +133,17 @@ func TestResultCollectionRepairsWorksetPathReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var normalizations atomic.Int32
 	c, _, _, _ := resultCollectionProviderFixture(t, server.URL+"/v1", true, func(c *Coordinator) {
 		c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
-		c.session.AgentResultContracts = map[string]ResultContractRef{"worker": compiled.ref(true)}
+		ref := compiled.ref(true)
+		if normalized {
+			bindTestNormalizer(t, c, &TodoItem{ResultContract: &ref}, &mockNormalizerProvider{fn: func(_ context.Context, input []byte) ([]byte, error) {
+				normalizations.Add(1)
+				return input, nil
+			}})
+		}
+		c.session.AgentResultContracts = map[string]ResultContractRef{"worker": ref}
 	})
 	c.providerBoundaryStart = func(context.Context, string) error { return nil }
 	c.delegatedTasks = make(map[string]int)
@@ -153,6 +172,9 @@ func TestResultCollectionRepairsWorksetPathReferences(t *testing.T) {
 	if item.Status != TaskDone || cp == nil || cp.State != ResultCollectionCommitted || worker.Calls() != 1 || calls.Load() != 2 || cp.TurnsUsed != 2 {
 		t.Fatalf("work=%d collection=%d task=%s checkpoint=%+v", worker.Calls(), calls.Load(), item.Status, cp)
 	}
+	if normalized && normalizations.Load() != 2 {
+		t.Fatalf("expected one normalization per response, got %d", normalizations.Load())
+	}
 	for _, line := range []int{67, 81, 399} {
 		if !strings.Contains(string(item.TypedResult.StructuredPayload.Value), fmt.Sprintf(`"location":"dir/source.go:%d","summary":"original issue %d retained"`, line, line)) {
 			t.Fatalf("consumer did not receive the exact frozen path and original claim at line %d", line)
@@ -165,7 +187,8 @@ func TestResultCollectionRepairsWorksetPathReferences(t *testing.T) {
 	}
 }
 
-func TestResultCollectionCompletesBoundWorksetWithResultContract(t *testing.T) {
+func TestResultCollectionCompletesBoundWorksetDiamond(t *testing.T) {
+	const leaves = 16
 	var workCalls, collectionCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
@@ -197,29 +220,60 @@ func TestResultCollectionCompletesBoundWorksetWithResultContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	boundary, err := CompileResultContractDocument("boundary.json", []byte(`{"type":"object","required":["rows"],"properties":{"rows":{"type":"array","maxItems":0}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	c, _, _, _ := resultCollectionProviderFixture(t, server.URL+"/v1", true, func(c *Coordinator) {
+		c.maxConcurrent = 4
 		c.session.Agents["worker"].ResultTransport = ""
 		c.session.Agents["worker"].Tools = "view"
+		edge := *c.session.Agents["worker"]
+		edge.Name = "boundary"
+		c.session.Agents[edge.Name] = &edge
 		c.coreTools = []fantasy.AgentTool{tools.NewViewTool(tools.WithArtifactOpener(c.openArtifactRef))}
-		c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
-		c.session.AgentResultContracts = map[string]ResultContractRef{"worker": compiled.ref(true)}
+		c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled, boundary.ID: boundary}
+		c.session.AgentResultContracts = map[string]ResultContractRef{"worker": compiled.ref(true), edge.Name: boundary.ref(true)}
 	})
 	c.providerBoundaryStart = func(context.Context, string) error { return nil }
 	c.delegatedTasks = make(map[string]int)
 	testTaskCache(c).entries = make(map[string][]cachedTaskEntry)
-	writeWorksetManifest(t, c.session.Workspace, `{"schema_version":1,"items":[{"key":"one","bindings":{"name":"one","target_ids":"[]"}},{"key":"two","bindings":{"name":"two","target_ids":"[]"}}]}`)
-	_, err = c.ExecuteTasks(t.Context(), []TaskDef{{ID: "reviews", Agent: "worker", Model: "ollama/test", SideEffect: SideEffectNone,
-		Execution: ExecutionContract{RequiresResult: true},
-		FanOut:    &FanOutSpec{Source: "manifest.json", GoalTemplate: "Review {name}; there are no assigned rows."}}})
+	manifest := WorksetManifest{SchemaVersion: WorksetSchemaVersion}
+	for i := range leaves {
+		name := fmt.Sprintf("item-%02d", i)
+		manifest.Items = append(manifest.Items, WorksetItem{Key: name, Bindings: map[string]string{"name": name, "target_ids": "[]"}})
+	}
+	body, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeWorksetManifest(t, c.session.Workspace, string(body))
+	root := TaskDef{ID: "prepare", Agent: "boundary", Model: "ollama/test", SideEffect: SideEffectNone,
+		Goal: "Confirm input scope.", Execution: ExecutionContract{RequiresResult: true}}
+	batch := root
+	batch.ID, batch.Agent, batch.DependsOn = "reviews", "worker", []int{0}
+	batch.FanOut = &FanOutSpec{Source: "manifest.json", GoalTemplate: "Review {name}; there are no assigned rows."}
+	final := root
+	final.ID, final.Goal, final.DependsOn = "aggregate", "Summarize accepted results.", []int{1}
+	_, err = c.ExecuteTasks(t.Context(), []TaskDef{root, batch, final})
 	if err != nil {
 		for _, item := range c.taskTracker.TodoList().Items()[1:] {
 			t.Logf("child %s: status=%s detail=%s output=%s", item.ID, item.Status, item.Detail, item.Output)
 		}
 		t.Fatal(err)
 	}
-	items := c.taskTracker.TodoList().Items()[1:]
-	if len(items) != 2 {
-		t.Fatalf("workset children=%d, want 2", len(items))
+	diamond := c.taskTracker.TodoList().Items()[1:]
+	if len(diamond) != leaves+2 {
+		t.Fatalf("diamond tasks=%d, want %d", len(diamond), leaves+2)
+	}
+	first, items, last := diamond[0], diamond[1:len(diamond)-1], diamond[len(diamond)-1]
+	if first.Status != TaskDone || last.Status != TaskDone || len(last.DependsOn) != leaves {
+		for _, item := range diamond {
+			if item.Status != TaskDone {
+				t.Logf("task %s: status=%s detail=%s", item.ID, item.Status, item.Detail)
+			}
+		}
+		t.Fatalf("diamond boundary states=%s/%s, aggregate dependencies=%d", first.Status, last.Status, len(last.DependsOn))
 	}
 	receipt := items[0].WorksetReceipt
 	if receipt == nil {
@@ -229,15 +283,22 @@ func TestResultCollectionCompletesBoundWorksetWithResultContract(t *testing.T) {
 		if item.Status != TaskDone || item.TypedResult == nil || item.TypedResult.Source != "collected" || item.WorksetBinding == nil || item.ExecutionReceipt.ResultValidation != ResultValidationValid || receipt.Children[item.WorksetBinding.ItemKey] != item.ID {
 			t.Fatalf("bound review incomplete: status=%s detail=%s", item.Status, item.Detail)
 		}
+		if !slices.Equal(item.DependsOn, []string{first.ID}) || !slices.Contains(last.DependsOn, item.ID) {
+			t.Fatalf("leaf %s lost its root or fan-in dependency", item.ID)
+		}
 	}
-	if workCalls.Load() != 2 || collectionCalls.Load() != 2 {
+	if workCalls.Load() != leaves+2 || collectionCalls.Load() != leaves+2 {
 		t.Fatalf("work=%d collection=%d, want one of each per item", workCalls.Load(), collectionCalls.Load())
 	}
 	events, err := c.EventJournal().ReadEvents(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	replayed := ReduceToTodoList(events)[1:]
+	replayedDiamond := ReduceToTodoList(events)[1:]
+	if len(replayedDiamond) != len(diamond) || replayedDiamond[len(replayedDiamond)-1].Status != TaskDone {
+		t.Fatal("replay lost the aggregate completion")
+	}
+	replayed := replayedDiamond[1 : len(replayedDiamond)-1]
 	if replayed[0].WorksetReceipt == nil || !equivalentWorksetReceipts(receipt, replayed[0].WorksetReceipt) {
 		t.Fatal("replay lost the workset expansion receipt")
 	}
@@ -245,6 +306,12 @@ func TestResultCollectionCompletesBoundWorksetWithResultContract(t *testing.T) {
 		if item.Status != TaskDone || item.TypedResult == nil || item.TypedResult.StructuredPayload == nil || item.WorksetBinding == nil || receipt.Children[item.WorksetBinding.ItemKey] != item.ID || item.ExecutionReceipt.ResultPayloadSHA256 != item.TypedResult.StructuredPayload.SHA256 {
 			t.Fatal("replay lost the accepted workset result or receipt")
 		}
+	}
+	if err := os.Remove(filepath.Join(c.session.Workspace, "manifest.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.validateAcceptedDependencyPayloadWithContext(t.Context(), items[0]); err != nil {
+		t.Fatalf("deleting the original workspace path invalidated its frozen snapshot: %v", err)
 	}
 }
 
@@ -358,14 +425,22 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration: mise run test-integration")
 	}
-	for _, scenario := range []string{"valid", "string_refs", "unknown", "corrupt", "runtime_owned", "runtime_full_id", "runtime_full_typo", "runtime_key_typo", "runtime_repeated_typo", "runtime_typo_corrupt", "runtime_typo_receipt", "runtime_review_typo", "runtime_documentation_typo", "runtime_supplement_typo", "runtime_documentation_empty", "runtime_full_repeated_typo", "runtime_review_invariant_typo", "runtime_review_invariant_foreign_typo"} {
+	for _, scenario := range []string{"valid", "escaped_key", "string_refs", "unknown", "corrupt", "runtime_owned", "runtime_full_id", "runtime_full_typo", "runtime_key_typo", "runtime_normalized_key_typo", "runtime_normalized_read_fault", "runtime_repeated_typo", "runtime_typo_corrupt", "runtime_typo_receipt", "runtime_review_typo", "runtime_documentation_typo", "runtime_supplement_typo", "runtime_documentation_empty", "runtime_full_repeated_typo", "runtime_review_invariant_typo", "runtime_review_invariant_foreign_typo"} {
 		t.Run(scenario, func(t *testing.T) {
 			var workCalls, collectionCalls atomic.Int32
-			var allowRepair atomic.Bool
+			var normalizations atomic.Int32
+			readFault := scenario == "runtime_normalized_read_fault"
+			if readFault && os.Geteuid() == 0 {
+				t.Skip("permission interruption requires a non-root process")
+			}
+			normalize := readFault || scenario == "runtime_normalized_key_typo" || scenario == "escaped_key"
 			var source ArtifactRef
 			var store *FileArtifactStore
+			var sourceFile string
+			var sourceMode os.FileMode
 			var issued string
 			reviewSchema := ""
+			sourcePath, sourceText := "source.txt", "review source evidence"
 			switch scenario {
 			case "runtime_review_typo", "runtime_review_invariant_typo", "runtime_review_invariant_foreign_typo":
 				reviewSchema = "schemas/review-v2.json"
@@ -373,6 +448,7 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 				reviewSchema = "schemas/documentation-review-v2.json"
 			case "runtime_supplement_typo":
 				reviewSchema = "schemas/supplement-review-v2.json"
+				sourcePath, sourceText = "source.go", "package source\n\nconst Value = 42\n"
 			}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/v1/chat/completions" {
@@ -402,11 +478,14 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 						}
 					}
 					body = fmt.Sprintf(`{"status":"success","summary":"reviewed","files_read":[{"path":%q}],"structured_payload":{"claims":[{"evidence":[%q]}]}}`, key, key)
+					if scenario == "escaped_key" {
+						body = strings.ReplaceAll(body, "ev_", `ev\u005f`)
+					}
 					if strings.HasPrefix(scenario, "runtime_") {
 						if scenario == "runtime_full_id" {
 							key = source.ID
 						}
-						if strings.Contains(scenario, "typo") && (turn == 1 || (strings.Contains(scenario, "repeated") && !allowRepair.Load())) {
+						if strings.Contains(scenario, "typo") && (turn == 1 || (strings.Contains(scenario, "repeated"))) {
 							key = "ev_000000000000"
 							if strings.Contains(scenario, "full_") {
 								last := "0"
@@ -416,14 +495,20 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 								key = source.ID[:len(source.ID)-1] + last
 							}
 						}
-						if turn > 1 && (!strings.Contains(messages, issued) || !strings.Contains(messages, "enum")) {
-							t.Error("repair request omitted exact observed choices")
+						if turn > 1 {
+							wantDiagnostic := "enum"
+							if normalize {
+								wantDiagnostic = "evidence_reference_unknown"
+							}
+							if !strings.Contains(messages, issued) || !strings.Contains(messages, wantDiagnostic) {
+								t.Error("repair request omitted exact observed choices")
+							}
 						}
 						body = fmt.Sprintf(`{"status":"success","summary":"reviewed","structured_payload":{"claims":[{"evidence":[%q],"note":"preserve this judgment"}]}}`, key)
 						if reviewSchema != "" {
 							findings := []any{}
 							if scenario != "runtime_documentation_empty" {
-								findings = append(findings, map[string]any{"summary": "original finding", "detail": "preserve this judgment", "severity": "info", "location": "source.txt:1", "requires_critique": false, "evidence": []string{key}})
+								findings = append(findings, map[string]any{"summary": "original finding", "detail": "preserve this judgment", "severity": "info", "location": sourcePath + ":1", "requires_critique": false, "evidence": []string{key}})
 							}
 							record := map[string]any{"findings": findings, "gaps": []any{}, "reference_assessments": []any{}, "invariant_assessments": []any{}}
 							if strings.Contains(scenario, "review_invariant") {
@@ -468,8 +553,8 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 					parameters := function["parameters"].(map[string]any)
 					arguments := fmt.Sprintf(`{"result":%s}`, body)
 					info := fantasy.ToolInfo{Name: "return_result", Parameters: parameters["properties"].(map[string]any), Required: []string{"result"}}
-					invalidSelection := strings.Contains(scenario, "typo") && (collectionCalls.Load() == 1 || (strings.Contains(scenario, "repeated") && !allowRepair.Load()))
-					if violation := validateToolArguments(arguments, info); (violation != nil) != invalidSelection {
+					invalidSelection := strings.Contains(scenario, "typo") && (collectionCalls.Load() == 1 || (strings.Contains(scenario, "repeated")))
+					if violation := validateToolArguments(arguments, info); (violation != nil) != (invalidSelection && !normalize) {
 						t.Errorf("serialized response schema did not constrain observed choices: %v", violation)
 					}
 					chunk, err := json.Marshal(map[string]any{"id": "collected", "object": "chat.completion.chunk", "created": 1, "model": "test", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"index": 0, "id": "return", "type": "function", "function": map[string]any{"name": "return_result", "arguments": arguments}}}}, "finish_reason": "tool_calls"}}})
@@ -510,15 +595,34 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 					t.Fatal("review contract does not validate native evidence before acceptance")
 				}
 			}
-			c, _, _, _ := resultCollectionProviderFixture(t, server.URL+"/v1", true, func(c *Coordinator) {
+			ref := compiled.ref(true)
+			c, seed, _, _ := resultCollectionProviderFixture(t, server.URL+"/v1", true, func(c *Coordinator) {
 				c.session.Agents["worker"].Tools = "view"
 				c.coreTools = []fantasy.AgentTool{tools.NewViewTool(tools.WithArtifactOpener(c.openArtifactRef))}
 				c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
 				c.session.AgentResultContracts = nil
+				if normalize {
+					ref.Normalizer, ref.NormalizerSHA256 = registerTestNormalizer(t, c, &mockNormalizerProvider{fn: func(_ context.Context, draft []byte) ([]byte, error) {
+						normalizations.Add(1)
+						if readFault {
+							if err := os.Chmod(sourceFile, 0); err != nil {
+								return nil, err
+							}
+						}
+						return draft, nil
+					}})
+				}
 				if strings.Contains(scenario, "review_invariant") {
 					c.session.InvariantCatalog = []InvariantDefinition{{ID: "safe", Statement: "Preserve the declared safety boundary", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}}
 				}
 			})
+			if readFault {
+				// Ordinary resume visits all interrupted tasks. The fixture's seed
+				// is outside this workset and must already be terminal.
+				if err := c.CommitTaskTransition(t.Context(), seed.ID, TaskInProgress, TaskDone, "", "fixture initialized", nil); err != nil {
+					t.Fatal(err)
+				}
+			}
 			c.providerBoundaryStart = func(context.Context, string) error { return nil }
 			c.delegatedTasks = make(map[string]int)
 			testTaskCache(c).entries = make(map[string][]cachedTaskEntry)
@@ -537,12 +641,12 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 				}
 			}
 			c.SetStructuredStepRunner(StructuredStepRunnerFunc(func(ctx context.Context, request StructuredStepRequest) (ExecutionStepResult, error) {
-				artifact, err := store.Put(ctx, PutArtifactRequest{Content: []byte("review source evidence"), Path: "source.txt", Kind: "input", RunID: c.executionRunID, TaskID: request.TaskID, Attempt: request.Attempt, Agent: "worker"})
+				artifact, err := store.Put(ctx, PutArtifactRequest{Content: []byte(sourceText), Path: sourcePath, Kind: "input", RunID: c.executionRunID, TaskID: request.TaskID, Attempt: request.Attempt, Agent: "worker"})
 				if err != nil {
 					return ExecutionStepResult{}, err
 				}
 				source = artifact.ArtifactRef
-				manifest, err := json.Marshal(WorksetManifest{SchemaVersion: 1, Items: []WorksetItem{{Key: itemKey, Bindings: map[string]string{"name": "one", "key": itemKey, "review_revision": "frozen-head", "lens": lens, "reference_candidate_ids": "[]"}, Inputs: []ArtifactRef{source}, TouchedPaths: []string{"source.txt"}}}})
+				manifest, err := json.Marshal(WorksetManifest{SchemaVersion: 1, Items: []WorksetItem{{Key: itemKey, Bindings: map[string]string{"name": "one", "key": itemKey, "review_revision": "frozen-head", "lens": lens, "reference_candidate_ids": "[]"}, Inputs: []ArtifactRef{source}, TouchedPaths: []string{sourcePath}}}})
 				if err != nil {
 					return ExecutionStepResult{}, err
 				}
@@ -552,14 +656,23 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 				}
 				return ExecutionStepResult{Artifacts: map[string]ArtifactRef{"manifest": manifestRef.ArtifactRef, "source": source}}, nil
 			}))
-			if err := os.WriteFile(filepath.Join(c.projectDir, "source.txt"), []byte("review source evidence"), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(c.projectDir, sourcePath), []byte(sourceText), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			_, err = c.ExecuteTasks(t.Context(), []TaskDef{{ID: "produce", Agent: "worker", Goal: "produce review evidence", Execution: ExecutionContract{Steps: []ExecutionStep{{ID: "produce", Tool: "producer", Effect: ExecutionEffectProduce, Outputs: []ExecutionStepOutput{{Name: "manifest", Kind: ExecutionOutputArtifact}, {Name: "source", Kind: ExecutionOutputArtifact}}}}}}})
 			if err != nil {
 				t.Fatalf("producer: %v; items=%+v", err, c.taskTracker.TodoList().Items())
 			}
-			_, err = c.ExecuteTasks(t.Context(), []TaskDef{{ID: "review", Agent: "worker", Model: "ollama/test", ResultContract: new(compiled.ref(true)), InvariantVerification: invariantMode, SideEffect: SideEffectNone, Execution: reviewExecution, VerifySpec: reviewVerification, FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "produce", Artifact: "manifest"}, GoalTemplate: "Read and review {name}"}}})
+			if readFault {
+				sourceFile = filepath.Join(store.root, "data", source.ID)
+				info, err := os.Stat(sourceFile)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sourceMode = info.Mode()
+				t.Cleanup(func() { _ = os.Chmod(sourceFile, sourceMode) })
+			}
+			_, err = c.ExecuteTasks(t.Context(), []TaskDef{{ID: "review", Agent: "worker", Model: "ollama/test", ResultContract: &ref, InvariantVerification: invariantMode, SideEffect: SideEffectNone, Execution: reviewExecution, VerifySpec: reviewVerification, FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "produce", Artifact: "manifest"}, GoalTemplate: "Read and review {name}"}}})
 			items := c.taskTracker.TodoList().Items()
 			item := items[len(items)-1]
 			wantCollections := int32(1)
@@ -568,6 +681,37 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 			}
 			if workCalls.Load() != 2 || collectionCalls.Load() != wantCollections {
 				t.Fatalf("work=%d collector=%d status=%s detail=%s err=%v", workCalls.Load(), collectionCalls.Load(), item.Status, item.Detail, err)
+			}
+			if normalize && normalizations.Load() != wantCollections {
+				t.Fatalf("normalizer ran %d times, want %d", normalizations.Load(), wantCollections)
+			}
+			if readFault {
+				checkpoint := currentResultCollection(item)
+				if err == nil || item.Status != TaskInProgress || item.TypedResult != nil || checkpoint == nil ||
+					checkpoint.State != ResultCollectionPrepared || checkpoint.Prepared == nil {
+					t.Fatalf("read interruption lost prepared claims: checkpoint=%+v, err=%v", checkpoint, err)
+				}
+				if err := os.Chmod(sourceFile, sourceMode); err != nil {
+					t.Fatal(err)
+				}
+				c = reopenRecoveryCoordinator(t, c)
+				replayed := currentResultCollection(c.todoItemByID(item.ID))
+				if replayed == nil || replayed.State != ResultCollectionPrepared || replayed.Work != checkpoint.Work {
+					t.Fatalf("read interruption did not replay as prepared: checkpoint=%+v", replayed)
+				}
+				c.executionRunID = "evidence-read-recovery"
+				worker := scriptWorker(textTurn("must never repeat original work"))
+				c.workerAgentOverride = worker
+				var recovered int
+				recovered, err = c.ResumeInterruptedTasks(WithSessionResume(t.Context()))
+				item = c.todoItemByID(item.ID)
+				if err != nil || recovered != 1 || worker.Calls() != 0 || workCalls.Load() != 2 || collectionCalls.Load() != 1 || normalizations.Load() != 1 {
+					t.Fatalf("local commit recovered %d tasks: %v, work/collection/normalizer calls=%d/%d/%d", recovered, err, workCalls.Load(), collectionCalls.Load(), normalizations.Load())
+				}
+				after := currentResultCollection(item)
+				if after == nil || after.Work != checkpoint.Work || after.Prepared == nil || *after.Prepared != *checkpoint.Prepared {
+					t.Fatalf("local commit replaced original evidence: checkpoint=%+v", after)
+				}
 			}
 			if scenario == "unknown" || scenario == "corrupt" || strings.Contains(scenario, "repeated") || scenario == "runtime_typo_corrupt" || scenario == "runtime_typo_receipt" || strings.Contains(scenario, "foreign") {
 				checkpoint := currentResultCollection(item)
@@ -586,25 +730,16 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 					}
 					return
 				}
-				if previewErr != nil || assessment.Disposition != RecoveryRepairClaims || assessment.AdditionalTurns != 2 || collectionCalls.Load() != 2 {
-					t.Fatalf("selection repair preview=%+v error=%v", assessment, previewErr)
+				if previewErr != nil || assessment.Disposition != RecoveryBlocked || assessment.AdditionalTurns != 0 || collectionCalls.Load() != 2 {
+					t.Fatalf("exhausted selection correction preview=%+v error=%v", assessment, previewErr)
 				}
 				c.executionRunID = "evidence-selection-recovery"
-				if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), item.ID)); err != nil {
-					t.Fatal(err)
+				if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), item.ID)); err == nil {
+					t.Fatal("explicit recovery approved a third correction turn")
 				}
-				c = reopenRecoveryCoordinator(t, c)
-				c.executionRunID = "evidence-selection-recovery"
-				worker := scriptWorker(textTurn("must never repeat original work"))
-				c.workerAgentOverride = worker
-				allowRepair.Store(true)
-				if _, err := c.executeTask(WithSessionResume(t.Context()), taskDefFromTodoItem(c.todoItemByID(item.ID)), item.ID); err != nil {
-					t.Fatal(err)
-				}
-				done := c.todoItemByID(item.ID)
-				committed := currentResultCollection(done)
-				if done.Status != TaskDone || worker.Calls() != 0 || workCalls.Load() != 2 || collectionCalls.Load() != 3 || committed.Work != checkpoint.Work || committed.TurnsUsed != 3 || done.ExecutionReceipt.TranscriptRef != item.ExecutionReceipt.TranscriptRef {
-					t.Fatal("recovery changed sealed work, repeated tools or lost the bounded turn history")
+				replayed := currentResultCollection(c.todoItemByID(item.ID))
+				if collectionCalls.Load() != 2 || workCalls.Load() != 2 || !sameCanonicalEvidence(replayed, checkpoint) {
+					t.Fatal("blocked recovery changed the original work or turn history")
 				}
 				return
 			}

@@ -58,7 +58,7 @@ func TestMixedCaseTaskReferencePolicyMatchesRuntimeFactAndFanOut(t *testing.T) {
 		}},
 	}
 
-	resolved, err := c.resolveFactRefs([]TaskDef{{
+	resolved, err := c.resolveFactRefs(t.Context(), []TaskDef{{
 		Agent: "worker", Goal: "use {value}", FactRefs: []FactRef{{Name: "value", TaskID: "producer", Fact: "answer"}},
 	}})
 	if err != nil {
@@ -68,7 +68,7 @@ func TestMixedCaseTaskReferencePolicyMatchesRuntimeFactAndFanOut(t *testing.T) {
 		t.Fatalf("resolved fact goal = %q, want %q", got, "use resolved")
 	}
 
-	expanded, err := c.expandFanOutTasks([]TaskDef{{
+	expanded, err := c.expandFanOutTasks(t.Context(), []TaskDef{{
 		Agent: "worker", FanOut: &FanOutSpec{
 			SourceArtifact: FactRef{TaskID: "producer", Artifact: manifest.ID}, GoalTemplate: "process {name}",
 		},

@@ -24,8 +24,9 @@ const codexImageRecoveryHome = "HUFU_TEST_CODEX_IMAGE_RECOVERY_HOME"
 // from the canonical CAS, including when the projection copy was reclaimed.
 func TestCodexNativeImageResumeInNewProcess(t *testing.T) {
 	if testing.Short() {
-		t.Skip("integration: mise run test-integration")
+		t.Skip(unsupportedCodexIntegrationReason)
 	}
+	skipUnsupportedCodexIntegration(t)
 	if mode := os.Getenv(codexImageRecoveryMode); mode != "" {
 		root, home := os.Getenv(codexImageRecoveryRoot), os.Getenv(codexImageRecoveryHome)
 		digest := sha256.Sum256(mediaStorePNG(t))

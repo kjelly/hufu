@@ -392,6 +392,19 @@ func TestEmbeddedReviewGateAndTeamContracts(t *testing.T) {
 	if err := json.Unmarshal(data, &current); err != nil {
 		t.Fatal(err)
 	}
+	var published team.ActionResult
+	if err := json.Unmarshal(raw(t, result), &published); err != nil {
+		t.Fatal(err)
+	}
+	if len(published.Artifacts) != 1 || published.Artifacts[0].Kind != "canonical_review_report" ||
+		published.Artifacts[0].Path != "canonical_report.json" || published.Artifacts[0].SHA256 != current.Tasks[4].Result.Payload.Hash {
+		t.Fatalf("canonical report evidence = %+v", published.Artifacts)
+	}
+	report, err := os.ReadFile(filepath.Join(workspace, published.Artifacts[0].Path))
+	want, canonicalErr := canonicalJSON(current.Tasks[4].Result.Payload.Value)
+	if err != nil || canonicalErr != nil || !bytes.Equal(report, want) || int64(len(report)) != published.Artifacts[0].Bytes {
+		t.Fatalf("published report differs from accepted report: file error=%v canonicalization error=%v", err, canonicalErr)
+	}
 	current.Tasks[2].Result.Status = "completed_with_gaps"
 	writeCheckpoint(t, root, raw(t, current))
 	result, err = provider.Execute(ctx, team.Action{Capability: "verify-review-report", Type: "verify_review_report", Payload: `{"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}`})

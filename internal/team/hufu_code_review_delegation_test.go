@@ -76,7 +76,7 @@ func TestHufuCodeReviewSupplementReusesReviewerAfterRestore(t *testing.T) {
 				// The coordinator must skip an empty supplemental manifest;
 				// expansion must still fail before a new Todo can be created.
 				contract := reviewFixtureContract(t, fresh, "review-supplement-workset")
-				if _, err := fresh.expandFanOutTasks([]TaskDef{contract}); err == nil {
+				if _, err := fresh.expandFanOutTasks(t.Context(), []TaskDef{contract}); err == nil {
 					t.Fatal("empty supplemental manifest was dispatched")
 				}
 			}
@@ -109,7 +109,7 @@ func TestHufuCodeReviewSupplementReusesReviewerAfterRestore(t *testing.T) {
 				if err := fresh.validateDelegationPolicy(bound); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := fresh.bindEvidenceSources(bound); err != nil {
+				if _, err := fresh.bindEvidenceSources(t.Context(), bound); err != nil {
 					t.Fatal(err)
 				}
 				addAcceptedReviewFixtureTask(t, fresh, "critic-review")
@@ -184,7 +184,7 @@ func expandReviewFixtureContract(t *testing.T, c *Coordinator, id string) []Task
 	if err != nil {
 		t.Fatal(err)
 	}
-	children, err := c.expandFanOutTasks(bound)
+	children, err := c.expandFanOutTasks(t.Context(), bound)
 	if err != nil {
 		t.Fatal(err)
 	}

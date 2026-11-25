@@ -20,10 +20,11 @@ func modelFanoutExecutionID(runID, taskID, agentName, model, slot string, retrie
 // modelFanoutBinding is installed only by the parent fanout dispatcher. DTOs,
 // model strings and tool arguments cannot create or retarget this binding.
 type modelFanoutBinding struct {
-	parent *Coordinator
-	taskID string
-	index  int
-	target execution.ExecutionTarget
+	parent             *Coordinator
+	taskID             string
+	index              int
+	target             execution.ExecutionTarget
+	sealExternalResult bool
 }
 
 func (c *Coordinator) isModelFanoutLeaf(taskID string) bool {

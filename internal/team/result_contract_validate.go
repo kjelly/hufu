@@ -51,7 +51,8 @@ type ResultPayload struct {
 	// accepted from the worker's structured_payload.
 	CollectionBindings []ResultCollectionBinding `json:"collection_bindings,omitempty"`
 	// RawSHA256 is the hex SHA-256 of the unnormalized payload, if a normalizer was applied.
-	RawSHA256 string `json:"raw_sha256,omitempty"`
+	RawSHA256     string               `json:"raw_sha256,omitempty"`
+	Normalization *resultNormalization `json:"normalization,omitempty"`
 }
 
 // Keep the canonical validator's cause without exposing its unbounded error
@@ -60,6 +61,10 @@ type resultPayloadSchemaError struct {
 	contract string
 	cause    error
 }
+
+type resultBindingShapeError struct{ error }
+
+func (e *resultBindingShapeError) Unwrap() error { return e.error }
 
 func (e *resultPayloadSchemaError) Error() string {
 	return fmt.Sprintf("%s: structured_payload does not satisfy result contract %q:\n%s", structuredPayloadInvalidCode, e.contract, formatResultPayloadValidationError(e.cause))
@@ -74,6 +79,7 @@ func (p *ResultPayload) clone() *ResultPayload {
 	clone := *p
 	clone.Value = append(json.RawMessage(nil), p.Value...)
 	clone.CollectionBindings = cloneResultCollectionBindings(p.CollectionBindings)
+	clone.Normalization = p.Normalization.clone()
 	return &clone
 }
 
@@ -222,6 +228,20 @@ func (c *Coordinator) compiledResultContract(ref *ResultContractRef) (*CompiledR
 	if ref == nil {
 		return nil, nil
 	}
+	compiled, err := c.matchingResultSchema(*ref)
+	if err != nil {
+		return nil, err
+	}
+	if ref.Normalizer != "" {
+		_, digest, err := resultNormalizerBinding(c.session, ref.Normalizer)
+		if err != nil || digest != ref.NormalizerSHA256 {
+			return nil, fmt.Errorf("%s: result normalizer %q changed after task admission", resultContractDriftCode, ref.Normalizer)
+		}
+	}
+	return compiled, nil
+}
+
+func (c *Coordinator) matchingResultSchema(ref ResultContractRef) (*CompiledResultContract, error) {
 	if c == nil || c.session == nil {
 		return nil, fmt.Errorf("%s: result contract %q has no loaded team", resultContractDriftCode, ref.ID)
 	}
@@ -265,66 +285,71 @@ func (c *Coordinator) structuredPayloadForSubmission(todoID string, raw json.Raw
 }
 
 func (c *Coordinator) structuredPayloadForAdmission(todoID string, raw json.RawMessage, observations ...[]taskTranscriptRecord) (*ResultPayload, string, bool) {
-	return c.validateStructuredPayloadClaims(todoID, raw, true, observations...)
+	payload, err, repairable := c.validateStructuredPayloadClaims(context.Background(), todoID, raw, true, observations...)
+	if err != nil {
+		return nil, err.Error(), repairable
+	}
+	return payload, "", repairable
 }
 
 // validateStructuredPayloadClaims shares canonical validation without recording
 // rejected submissions during read-only recovery assessment.
-func (c *Coordinator) validateStructuredPayloadClaims(todoID string, raw json.RawMessage, recordFailure bool, observations ...[]taskTranscriptRecord) (*ResultPayload, string, bool) {
+func (c *Coordinator) validateStructuredPayloadClaims(ctx context.Context, todoID string, raw json.RawMessage, recordFailure bool, observations ...[]taskTranscriptRecord) (*ResultPayload, error, bool) {
 	present := len(bytes.TrimSpace(raw)) > 0 && !bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 	ref, compiled, err := c.boundResultContract(todoID)
 	if err != nil {
-		return nil, "submit_result rejected: " + err.Error(), false
+		return nil, fmt.Errorf("submit_result rejected: %w", err), false
 	}
 	if ref == nil {
 		if present {
-			return nil, fmt.Sprintf("%s: structured_payload is not accepted for this task because it has no result contract; omit the field", structuredPayloadInvalidCode), false
+			return nil, fmt.Errorf("%s: structured_payload is not accepted for this task because it has no result contract; omit the field", structuredPayloadInvalidCode), false
 		}
-		return nil, "", false
+		return nil, nil, false
 	}
 	if !present {
 		if ref.RequireStructured {
-			return nil, fmt.Sprintf("%s: structured_payload is required by result contract %q; submit the result again with a structured_payload that satisfies its schema", structuredPayloadMissingCode, ref.ID), false
+			return nil, fmt.Errorf("%s: structured_payload is required by result contract %q; submit the result again with a structured_payload that satisfies its schema", structuredPayloadMissingCode, ref.ID), false
 		}
-		return nil, "", false
-	}
-	var rawSHA256 string
-	if ref.Normalizer != "" {
-		sum := sha256.Sum256(raw)
-		rawSHA256 = hex.EncodeToString(sum[:])
-		normalized, normErr := c.normalizeStructuredPayload(context.Background(), ref.Normalizer, raw)
-		if normErr != nil {
-			if recordFailure {
-				c.recordResultValidationFailure(todoID)
-			}
-			return nil, fmt.Sprintf("%s: normalizer %q failed: %s", structuredPayloadInvalidCode, ref.Normalizer, normErr.Error()), false
-		}
-		raw = normalized
+		return nil, nil, false
 	}
 	plans, err := c.fixedCollectionPlans(todoID)
 	if err == nil {
+		plans, err = c.resolveDecisionCollectionPlans(ctx, todoID, plans)
+	}
+	var values map[string]any
+	if err == nil {
+		values, err = c.resultRuntimeInputValuesWithContext(ctx, compiled, todoID)
+	}
+	var evidenceEntries []any
+	if err == nil && compiled.evidenceInputs.runtimeOwned() {
 		item := c.todoItemByID(todoID)
 		results := c.dependencyResultsForBinding(todoID)
-		if compiled.evidenceInputs != nil && compiled.evidenceInputs.runtimeOwned() {
-			err = c.validateDependencyPayloads(results)
-			if err == nil {
-				raw, err = assembleRuntimeEvidenceInputs(raw, compiled.evidenceInputs, item.EvidenceFrom, results)
-			}
+		err = c.validateDependencyPayloads(ctx, todoID, results)
+		if err == nil {
+			evidenceEntries, err = runtimeBoundEvidenceEntries(compiled.evidenceInputs, item.EvidenceFrom, results)
 		}
-	}
-	if err == nil {
-		plans, err = c.resolveDecisionCollectionPlans(context.Background(), todoID, plans)
 	}
 	var bindings []ResultCollectionBinding
 	var assembled []byte
 	if err == nil {
 		assembled, bindings, err = assembleResultFixedCollections(raw, plans)
 	}
+	if err == nil && compiled.evidenceInputs.runtimeOwned() {
+		// Read source references in the assembled fixed rows even if the
+		// model incorrectly supplied an evidence array or completion field.
+		raw = assembled
+		assembled, err = bindRuntimeEvidenceEntries(assembled, compiled.evidenceInputs, evidenceEntries)
+	}
 	if err == nil {
-		var values map[string]any
-		values, err = c.resultRuntimeInputValues(compiled, todoID)
-		if err == nil {
-			assembled, err = assembleResultRuntimeInputs(assembled, compiled.runtimeInputs, values)
+		raw = assembled
+		assembled, err = assembleResultRuntimeInputs(assembled, compiled.runtimeInputs, values)
+	}
+	repairable := false
+	if _, shape := errors.AsType[*resultBindingShapeError](err); shape {
+		if sourceErr := c.validatePayloadSourcesAfterBindingShape(ctx, todoID, compiled, raw, plans); sourceErr != nil {
+			err = sourceErr
+		} else {
+			repairable = true
 		}
 	}
 	if err != nil {
@@ -333,11 +358,11 @@ func (c *Coordinator) validateStructuredPayloadClaims(todoID string, raw json.Ra
 	// Source checks are independent of model formatting. Run them even when
 	// canonical schema validation would fail first, so a format error cannot
 	// conceal an invalid receipt, source reference, or settled decision.
-	repairable := false
 	if err == nil {
-		if bindingErr := c.validateAssembledEvidenceInputs(todoID, compiled, assembled, bindings); bindingErr != nil {
+		if bindingErr := c.validateAssembledEvidenceInputs(ctx, todoID, compiled, assembled, bindings); bindingErr != nil {
 			err = fmt.Errorf("%s: bind evidence inputs: %w", structuredPayloadInvalidCode, bindingErr)
-			repairable = isResultReferenceChoiceError(bindingErr)
+			_, referenceShape := errors.AsType[*resultEvidenceReferenceShapeError](bindingErr)
+			repairable = referenceShape || isResultEvidenceFormatError(bindingErr)
 		}
 	}
 	var payload *ResultPayload
@@ -349,12 +374,9 @@ func (c *Coordinator) validateStructuredPayloadClaims(todoID string, raw json.Ra
 	}
 	if err == nil {
 		payload.CollectionBindings = bindings
-		if rawSHA256 != "" {
-			payload.RawSHA256 = rawSHA256
-		}
 	}
 	if err == nil {
-		if bindingErr := c.validateSubmittedEvidenceInputs(todoID, payload); bindingErr != nil {
+		if bindingErr := c.validateSubmittedEvidenceInputs(ctx, todoID, payload); bindingErr != nil {
 			err = fmt.Errorf("%s: bind evidence inputs: %w", structuredPayloadInvalidCode, bindingErr)
 			repairable = isResultReferenceChoiceError(bindingErr)
 		}
@@ -363,9 +385,9 @@ func (c *Coordinator) validateStructuredPayloadClaims(todoID string, raw json.Ra
 		if recordFailure {
 			c.recordResultValidationFailure(todoID)
 		}
-		return nil, err.Error(), repairable
+		return nil, err, repairable
 	}
-	return payload, "", false
+	return payload, nil, false
 }
 
 func (c *Coordinator) recordResultValidationFailure(todoID string) {
@@ -403,6 +425,9 @@ func providerVisibleResultPayloadSchema(ref ResultContractRef, compiled *Compile
 }
 
 func visibleResultPayloadSchema(ref ResultContractRef, compiled *CompiledResultContract, guidance bool) map[string]any {
+	if ref.Normalizer != "" {
+		return draftResultPayloadSchema(ref)
+	}
 	description := fmt.Sprintf("Structured payload that must satisfy result contract %s (sha256 %s).", ref.ID, shortResultContractHash(ref.SchemaSHA256))
 	if compiled != nil {
 		if value, err := decodeResultContractJSON(compiled.CanonicalSchema); err == nil {
@@ -540,129 +565,6 @@ func (c *Coordinator) attemptResultContractSchema(task TaskDef) *CompiledResultC
 	return compiled
 }
 
-// canonicalExternalStructuredPayload applies the local submit_result payload
-// rules to an external provider's proposal, through the same validator.
-func canonicalExternalStructuredPayload(request AttemptRequest, proposal *WorkerResultProposal, filesRead []FileRef) (*ResultPayload, error) {
-	if runtimeOwnsFilesRead(request.resultContractSchema) {
-		return nil, fmt.Errorf("runtime-owned files_read requires native observations from the local runtime")
-	}
-	if hasResultDecisions(request.resultContractSchema) {
-		return nil, fmt.Errorf("bound decisions require the local runtime")
-	}
-	raw := ""
-	if proposal != nil && proposal.StructuredPayloadJSON != nil {
-		raw = strings.TrimSpace(*proposal.StructuredPayloadJSON)
-	}
-	ref := request.Task.ResultContract
-	if ref == nil {
-		if raw != "" {
-			return nil, fmt.Errorf("%s: structured_payload_json must be null because the task has no result contract", structuredPayloadInvalidCode)
-		}
-		return nil, nil
-	}
-	if request.resultContractSchema == nil {
-		return nil, fmt.Errorf("%s: result contract is not loaded", resultContractDriftCode)
-	}
-	if proposal != nil && runtimeCompletionFailure(request.resultContractSchema, proposal.Status) {
-		if raw != "" {
-			return nil, fmt.Errorf("%s: omit structured_payload_json for an unsuccessful runtime-completion result", structuredPayloadInvalidCode)
-		}
-		return nil, nil
-	}
-	if raw == "" {
-		if ref.RequireStructured {
-			return nil, fmt.Errorf("%s: result contract %q requires structured_payload_json", structuredPayloadMissingCode, ref.ID)
-		}
-		status := ""
-		if proposal != nil {
-			status = proposal.Status
-		}
-		return nil, validateResultEnvelope(request.resultContractSchema, &TaskResult{Status: status})
-	}
-	raw, pathSelection, pathErr := canonicalExternalWorksetPaths(request, raw)
-	if pathErr != nil {
-		return nil, pathErr
-	}
-	if spec := request.resultContractSchema.claimsProjection; spec != nil {
-		for name, p := range map[string]string{"findings": spec.Findings, "invariant_assessments": spec.Invariants} {
-			if _, supplied := proposal.suppliedFields[name]; p != "" && supplied {
-				return nil, fmt.Errorf("projected %s is runtime-owned; omit it entirely", name)
-			}
-		}
-		input := SubmitResultInput{StructuredPayload: []byte(raw)}
-		if proposal != nil {
-			input.Findings = proposal.Findings
-			input.InvariantAssessments = proposal.InvariantAssessments
-		}
-		var err error
-		if request.resultProjectClaims != nil {
-			input, err = request.resultProjectClaims(input)
-		} else if spec.InvariantSeverity {
-			return nil, fmt.Errorf("invariant projections require verified work context")
-		} else {
-			input, err = projectClaimsInput(input, request.resultContractSchema)
-		}
-		if err != nil {
-			return nil, err
-		}
-		raw = string(input.StructuredPayload)
-	}
-	plans, err := buildResultFixedCollections(request.resultContractSchema.fixedCollections, request.Task.EvidenceFrom, request.resultEvidenceInputs)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
-	}
-	assembled, bindings, err := assembleResultFixedCollections([]byte(raw), plans)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
-	}
-	assembled, err = assembleRuntimeEvidenceInputs(assembled, request.resultContractSchema.evidenceInputs, request.Task.EvidenceFrom, request.resultEvidenceInputs)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
-	}
-	var runtimeInputs map[string]any
-	if len(request.resultContractSchema.runtimeInputs) > 0 {
-		if request.resultRuntimeInputs == nil {
-			return nil, fmt.Errorf("%s: runtime input lookup is unavailable", structuredPayloadInvalidCode)
-		}
-		runtimeInputs, err = request.resultRuntimeInputs()
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
-		}
-	}
-	assembled, err = assembleResultRuntimeInputs(assembled, request.resultContractSchema.runtimeInputs, runtimeInputs)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
-	}
-	payload, err := validateStructuredResultPayload(request.resultContractSchema, *ref, assembled)
-	if err != nil {
-		return nil, err
-	}
-	payload.CollectionBindings = bindings
-	value, err := decodeResultContractJSON(payload.Value)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateResultRuntimeInputs(value, request.resultContractSchema.runtimeInputs, runtimeInputs); err != nil {
-		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
-	}
-	if err := validateResultWorksetInputs(value, request.resultContractSchema.worksetInputs, request.Task.WorksetBinding); err != nil {
-		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
-	}
-	if err := validateResultWorksetPaths(value, request.resultContractSchema.worksetPaths, pathSelection); err != nil {
-		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
-	}
-	if err := validateResultEvidenceInputs(value, request.resultContractSchema.evidenceInputs, request.Task.EvidenceFrom, request.resultEvidenceInputs); err != nil {
-		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
-	}
-	if err := validateResultEvidenceReferences(value, request.resultContractSchema.evidenceReferences, request.Task.EvidenceFrom, request.resultEvidenceInputs, &filesRead); err != nil {
-		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
-	}
-	if err := validateResultEnvelope(request.resultContractSchema, &TaskResult{Status: proposal.Status, Summary: proposal.Summary, StructuredPayload: payload}); err != nil {
-		return nil, err
-	}
-	return payload, nil
-}
-
 // collectionModelSchemaFailure runs only after source assembly and independent
 // provenance validation. Canonical JSON Schema errors in model-owned fields
 // are repairable even when portability projection omitted their constraints.
@@ -715,12 +617,23 @@ func collectionModelSchemaFailure(compiled *CompiledResultContract, plans []resu
 		for _, token := range node.InstanceLocation {
 			pointer += "/" + escapeJSONPointerToken(token)
 		}
-		for _, owned := range protected {
-			if resultPointersOverlap(pointer, owned) {
-				return false
+		isModelField := func(location string) bool {
+			for _, owned := range protected {
+				if resultPointersOverlap(location, owned) {
+					return false
+				}
 			}
+			return true
 		}
-		return true
+		if required, ok := node.ErrorKind.(*kind.Required); ok {
+			for _, missing := range required.Missing {
+				if !isModelField(pointer + "/" + escapeJSONPointerToken(missing)) {
+					return false
+				}
+			}
+			return len(required.Missing) > 0
+		}
+		return isModelField(pointer)
 	}
 	return visit(validation)
 }
@@ -728,7 +641,7 @@ func collectionModelSchemaFailure(compiled *CompiledResultContract, plans []resu
 // Source checks must see the same scalar normalization as canonical admission
 // (for example a schema-declared boolean submitted as "true"). This does not
 // perform schema repair or change any runtime-owned binding.
-func (c *Coordinator) validateAssembledEvidenceInputs(todoID string, compiled *CompiledResultContract, raw []byte, bindings []ResultCollectionBinding) error {
+func (c *Coordinator) validateAssembledEvidenceInputs(ctx context.Context, todoID string, compiled *CompiledResultContract, raw []byte, bindings []ResultCollectionBinding) error {
 	value, err := decodeUniqueJSON(raw)
 	if err != nil {
 		return err
@@ -741,5 +654,5 @@ func (c *Coordinator) validateAssembledEvidenceInputs(todoID string, compiled *C
 	if err != nil {
 		return err
 	}
-	return c.validateSubmittedEvidenceInputs(todoID, &ResultPayload{Value: normalized, CollectionBindings: bindings})
+	return c.validateSubmittedEvidenceInputs(ctx, todoID, &ResultPayload{Value: normalized, CollectionBindings: bindings})
 }

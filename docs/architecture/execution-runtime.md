@@ -249,12 +249,19 @@ all earlier consumed reservations. Ordinary resume does not grant that allowance
 Collection usage, including cache counters, is accounted
 separately from the frozen work usage.
 
-If cancellation or storage failure prevents the blocked checkpoint append, the
-terminal receipt records the collection stop against the current work and
-consumed turn count. Failure diagnostics identify `result_collection` from that
-receipt even while its last durable checkpoint remains pending, in flight,
-received or prepared. An earlier worker-tool error must not replace that cause;
-the checkpoint and its evidence remain unchanged for recovery.
+Temporary storage failures leave the last collection checkpoint open for
+ordinary recovery. The runtime seals the returned work before reopening its
+transcript and seals every returned collector response against the reserved
+invocation before publishing the received checkpoint. A restart can publish
+that response with the original usage and turn count. Cancellation records
+the collection stop against the current work and consumed turns. Failure
+diagnostics keep the collection failure distinct from earlier worker errors.
+
+Extra-model fanout captures fresh or resumed dispatch at the parent. On resume,
+each leaf uses the sealed work for its topology slot and current DAG attempt.
+The parent seals the aggregate against the accepted slots before recording
+completion. A restart after a completion write failure publishes the same
+aggregate without repeating leaf work or judge generation.
 
 Reopening a submission issues a random dispatch lease ID. Lease IDs must remain
 distinct across process restarts; a process-local counter can repeat a persisted
@@ -1340,9 +1347,10 @@ acceptance through normalization.
 Execution recomputes the assessment and atomically appends it with the grant and
 submission-only transition, fenced against the journal head. A competing writer
 must reassess rather than use stale authority. Valid durable claims receive no
-new model allowance; invalid Prepared claims can receive up to two collector
-turns. Consumed turns never decrease, and duplicate grants do not accumulate
-allowance. Historical failure events and old prepared/response CAS references
+new model allowance. Malformed claims may use the single remaining correction
+from the original collector budget. A reserved correction counts even when its
+response is lost. Saved grants replay with their original policy. Historical
+failure events and old prepared/response CAS references
 remain available through the saved assessment and event lineage. Replay validates
 the saved grant binding, not a new decision from current sources. Collector
 repairs retain the original target, settled verdicts and complete source payloads;
@@ -1597,8 +1605,10 @@ The execution world's `WorkspaceSnapshotter` observes one external-provider
 attempt: it hashes the workspace before and after the attempt so
 `ValidateExecutionWorldDelta` can reject writes outside the writable roots.
 Its snapshots live only in memory and it deliberately skips hufu bookkeeping
-directory names. It is not a version store. Durable, restorable snapshots of
-the subject root are the job of [workspace versioning](workspace-versioning.md),
+directory names. It records the literal destination of a symbolic link as
+part of the link's own identity, without traversing the link. Durable,
+restorable snapshots of the subject root are the job of
+[workspace versioning](workspace-versioning.md),
 which has its own inclusion policy and only checkpoints at run boundaries; a
 rejected provider delta there becomes a `recovery_required` marker instead
 of a snapshot.

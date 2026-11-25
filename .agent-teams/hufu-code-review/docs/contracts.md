@@ -88,7 +88,9 @@ authorize another supplement round or replay of accepted tasks.
 Each supplement binds the original task, gap, hash, revision,
 frozen manifest identity and requested paths. The native producer validates
 paths, ordered ranges, scope grants, source identity and byte limits before
-reading frozen bytes. Unavailable, excluded, stale, invalid or over-budget
+reading frozen bytes. Each supplemental workset shares the primary limit of
+16,000 budgeted input tokens, including serialized evidence and framing.
+Unavailable, excluded, stale, invalid or over-budget
 requests retain typed limitations. No missing source is evidence of absence.
 When different gaps materialize identical content, the producer declares that
 content ID once and reuses its canonical reference in every item's inputs and
@@ -423,17 +425,19 @@ hashes are generated from the final partitions. The existing total diff and
 splits never silently narrow the requested scope.
 
 The team's producer action explicitly sets `max_source_snapshot_bytes: 393216`
-(384 KiB) and `max_review_input_tokens: 200000`. The latter sums the planning
+(384 KiB) and `max_review_input_tokens: 16000`. The latter sums the planning
 estimate of each assigned diff, source snapshot, and reference report,
-including their headers. The estimate is one token per two UTF-8 bytes,
-rounded up per artifact; it is not provider-reported usage or a guarantee of
-the model's tokenizer. This leaves headroom under the unchanged 500,000-token
+including their headers. The producer budgets one token per UTF-8 byte and
+256 tokens per item for framing. This leaves headroom under the unchanged 500,000-token
 attempt guard for instructions, reasoning, result submission, rereads, and
 repairs. Each manifest item records `source_snapshot_bytes` and
 `estimated_review_input_tokens` for comparison with the actual artifacts.
 
-Go caller/test candidates are scoped to the owning directory and packages
-that import it directly or transitively in the frozen snapshot. Import aliases,
+Go caller candidates are scoped to the owning directory and packages that
+import it directly or transitively in the frozen snapshot. Go tests run in the
+primary packages and their active direct importers. The verifier reports
+`test_dependency_outside_snapshot` if an active module or workspace requires a
+local path unavailable inside the frozen snapshot. Import aliases,
 dot imports, nested modules and vendored identities are resolved from source
 and the nearest `go.mod`, without running `go list` or fetching dependencies.
 A shared identifier such as `Context` in an unrelated package is not a caller
@@ -498,7 +502,7 @@ retries does not repair an oversized evidence unit. The producer also emits a
 structured `workset_item_too_large` diagnosis on this failure. It reports
 primary/related content bytes, source metadata bytes, dependency path count,
 fixed per-item source bytes, inventory bytes, and observed/configured input
-planning units (one estimated token per two bytes, rounded per artifact).
+planning units (one budgeted token per UTF-8 byte plus framing).
 When fixed overhead or the inventory alone exceeds a limit, the explanation
 identifies why splitting primary source cannot solve it. These measurements
 are provider evidence, not recovery permission; the runtime retains and
@@ -582,6 +586,9 @@ runtime-owned payload metadata. Existing cross-workset artifact ownership/read
 checks run against that array. Replay, dependency delivery and final rendering
 reject stale provenance, even if replacement sources have the same gap count.
 The final report format and independent gap audit continue to consume arrays.
+After the final native audit passes, it publishes the accepted canonical JSON
+as the `canonical_review_report` artifact at `canonical_report.json`, with
+the audited payload's SHA-256.
 
 For the 51-gap regression, a proposed 52nd decision is rejected at submission;
 the runtime always generates exactly the 51 original identities. This change

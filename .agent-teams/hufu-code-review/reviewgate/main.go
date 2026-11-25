@@ -4,6 +4,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +20,9 @@ import (
 )
 
 type finding struct {
+	SourceExcerpt    string   `json:"source_excerpt,omitempty"`
+	SourceSide       string   `json:"source_side,omitempty"`
+	SourceRevision   string   `json:"source_revision,omitempty"`
 	Location         string   `json:"location"`
 	Summary          string   `json:"summary"`
 	Detail           string   `json:"detail"`
@@ -77,6 +82,7 @@ type gapResolution struct {
 }
 
 type payload struct {
+	CanonicalFindings  json.RawMessage   `json:"canonical_findings,omitempty"`
 	Scope              json.RawMessage   `json:"scope"`
 	Tests              json.RawMessage   `json:"test_verification"`
 	SnapshotCoverage   json.RawMessage   `json:"snapshot_coverage"`
@@ -88,6 +94,14 @@ type payload struct {
 	SupplementOutcomes json.RawMessage   `json:"supplement_outcomes,omitempty"`
 }
 
+type sourceArtifactRef struct {
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	SHA256 string `json:"sha256"`
+	Bytes  int64  `json:"bytes"`
+	TaskID string `json:"task_id"`
+}
+
 type sourceTask struct {
 	Workspace    string `json:"workspace"`
 	ID           string
@@ -95,13 +109,9 @@ type sourceTask struct {
 	ContractID   string   `json:"contract_id"`
 	EvidenceFrom []string `json:"evidence_from"`
 	Binding      *struct {
-		Bindings     map[string]string `json:"bindings"`
-		TouchedPaths []string          `json:"touched_paths"`
-		Inputs       []struct {
-			ID     string `json:"id"`
-			Kind   string `json:"kind"`
-			SHA256 string `json:"sha256"`
-		} `json:"inputs"`
+		Bindings     map[string]string   `json:"bindings"`
+		TouchedPaths []string            `json:"touched_paths"`
+		Inputs       []sourceArtifactRef `json:"inputs"`
 	} `json:"workset_binding"`
 	VerifiedResult  bool   `json:"verified_result"`
 	VerifiedOutputs bool   `json:"verified_outputs"`
@@ -127,9 +137,10 @@ type sourceTask struct {
 }
 
 type sourceSession struct {
-	Version int          `json:"version"`
-	InputID string       `json:"input_id"`
-	Tasks   []sourceTask `json:"tasks"`
+	Version               int          `json:"version"`
+	InputID               string       `json:"input_id"`
+	Tasks                 []sourceTask `json:"tasks"`
+	ArtifactDataDirectory string       `json:"artifact_data_directory"`
 }
 
 // Run is the only embedded action entrypoint. Runtime-owned action identity,
@@ -334,6 +345,14 @@ func verify(current sourceSession) (string, string, error) {
 	if report.Coverage != coverage || tasks[reportID].Result.Status != completion.Status {
 		return "", "", fmt.Errorf("report overstated coverage")
 	}
+	canonicalFindings, err := canonicalDraftFindings(current, tasks, records)
+	if err != nil {
+		return "", "", &sourceReviewError{cause: err}
+	}
+	if err := verifyCanonicalFindings(current, report, canonicalFindings); err != nil {
+		return "", "", err
+	}
+
 	if err := verifyReportCompletion(current, report, coverage, completion, tasks[reportID].Result.Summary); err != nil {
 		return "", "", err
 	}
@@ -343,24 +362,62 @@ func verify(current sourceSession) (string, string, error) {
 	return reportID, tasks[reportID].Result.Payload.Hash, nil
 }
 
+type targetedTestEvidence struct {
+	Completed       bool     `json:"completed"`
+	Passed          *bool    `json:"passed"`
+	ExitCode        *int     `json:"exit_code"`
+	TimedOut        bool     `json:"timed_out"`
+	OutputTruncated bool     `json:"output_truncated"`
+	Diagnostic      string   `json:"diagnostic"`
+	Gap             string   `json:"gap"`
+	TimeoutKind     string   `json:"timeout_kind"`
+	Command         []string `json:"command"`
+	Packages        []string `json:"packages"`
+}
+
+func validTestGap(tests targetedTestEvidence) bool {
+	if tests.Completed || *tests.Passed || tests.OutputTruncated || strings.TrimSpace(tests.Diagnostic) == "" {
+		return false
+	}
+	switch tests.Gap {
+	case "test_timeout_gap":
+		if !tests.TimedOut || len(tests.Packages) == 0 {
+			return false
+		}
+		switch tests.TimeoutKind {
+		case "preflight":
+			return *tests.ExitCode == -1 && len(tests.Command) == 0
+		case "test", "command":
+			return (*tests.ExitCode == 1 || *tests.ExitCode == -1) && len(tests.Command) > 0
+		}
+	case "test_scope_empty", "test_dependency_outside_snapshot":
+		return !tests.TimedOut && tests.TimeoutKind == "none" && *tests.ExitCode == -1 && len(tests.Command) == 0 &&
+			(len(tests.Packages) == 0) == (tests.Gap == "test_scope_empty")
+	}
+	return false
+}
+
 // A completed review may expose failing target tests. Execution failures remain
 // blocking; negative or truncated test evidence must remain visible as a gap.
 func verifyTestEvidence(data json.RawMessage) (bool, error) {
 	if len(data) == 0 {
 		return false, fmt.Errorf("missing verified execution output")
 	}
-	var tests struct {
-		Completed       bool   `json:"completed"`
-		Passed          *bool  `json:"passed"`
-		ExitCode        *int   `json:"exit_code"`
-		TimedOut        bool   `json:"timed_out"`
-		OutputTruncated bool   `json:"output_truncated"`
-		Diagnostic      string `json:"diagnostic"`
-	}
+	var tests targetedTestEvidence
 	if err := json.Unmarshal(data, &tests); err != nil {
 		return false, err
 	}
-	if !tests.Completed || tests.TimedOut || tests.Passed == nil || tests.ExitCode == nil || (*tests.ExitCode != 0 && *tests.ExitCode != 1) || *tests.Passed != (*tests.ExitCode == 0) {
+	if tests.Passed == nil || tests.ExitCode == nil {
+		return false, fmt.Errorf("targeted tests lack an outcome")
+	}
+	if tests.Gap != "" {
+		if !validTestGap(tests) {
+			return false, fmt.Errorf("targeted tests have inconsistent gap evidence")
+		}
+		return true, nil
+	}
+	if !tests.Completed || tests.TimedOut || (tests.TimeoutKind != "" && tests.TimeoutKind != "none") ||
+		(*tests.ExitCode != 0 && *tests.ExitCode != 1) || *tests.Passed != (*tests.ExitCode == 0) {
 		return false, fmt.Errorf("targeted tests lack consistent completed execution evidence")
 	}
 	if !*tests.Passed && strings.TrimSpace(tests.Diagnostic) == "" {
@@ -657,7 +714,41 @@ func runGateAction(ctx context.Context, actionType string, current sourceSession
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return json.NewEncoder(out).Encode(map[string]any{"outputs": map[string]any{"review_report_verification": map[string]any{"passed": true, "report_task_id": reportID, "report_payload_sha256": reportHash}}})
+	artifact, err := writeVerifiedReport(current, reportID, reportHash)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(out).Encode(map[string]any{
+		"outputs":   map[string]any{"review_report_verification": map[string]any{"passed": true, "report_task_id": reportID, "report_payload_sha256": reportHash}},
+		"artifacts": []snapshotInventoryReference{artifact},
+	})
+}
+
+func writeVerifiedReport(current sourceSession, reportID, reportHash string) (snapshotInventoryReference, error) {
+	workspace := os.Getenv("HUFU_WORKSPACE")
+	if workspace == "" {
+		return snapshotInventoryReference{}, fmt.Errorf("verified report requires the action workspace")
+	}
+	for _, item := range current.Tasks {
+		if item.ID != reportID || item.ContractID != "synthesize-review" {
+			continue
+		}
+		data, err := canonicalJSON(item.Result.Payload.Value)
+		if err != nil {
+			return snapshotInventoryReference{}, err
+		}
+		sum := sha256.Sum256(data)
+		hash := hex.EncodeToString(sum[:])
+		if hash != reportHash {
+			return snapshotInventoryReference{}, fmt.Errorf("verified report bytes differ from the accepted payload digest")
+		}
+		const name = "canonical_report.json"
+		if err := os.WriteFile(filepath.Join(workspace, name), data, 0o600); err != nil {
+			return snapshotInventoryReference{}, fmt.Errorf("write canonical report: %w", err)
+		}
+		return snapshotInventoryReference{ID: "sha256-" + hash, Kind: "canonical_review_report", Path: name, SHA256: hash, Bytes: int64(len(data))}, nil
+	}
+	return snapshotInventoryReference{}, fmt.Errorf("accepted report disappeared after verification")
 }
 
 func verifyReportHandoffEvidence(current sourceSession, report payload) error {

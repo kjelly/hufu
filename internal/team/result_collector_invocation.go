@@ -22,7 +22,7 @@ const resultCollectorTextSystem = "Return exactly one plain JSON object conformi
 func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCollectionCheckpoint, diagnostic string) (string, *resultCollectionWork, map[string]any, error) {
 	work, err := c.loadCollectionWork(ctx, c.todoItemByID(checkpoint.TaskID), checkpoint)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, nil, rejectNormalizationRecoveryRead(err)
 	}
 	_, compiled, err := c.boundResultContract(checkpoint.TaskID)
 	if err != nil {
@@ -30,24 +30,15 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 	}
 	pathContext, err := c.resultWorksetPathContext(ctx, checkpoint.TaskID, compiled)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, nil, rejectNormalizationRecoveryRead(err)
 	}
 	transcript, err := c.collectionPromptTranscript(ctx, work.Receipt.TranscriptRef)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, nil, rejectNormalizationRecoveryRead(err)
 	}
-	plans, err := c.fixedCollectionPlans(checkpoint.TaskID)
+	plans, decisionDiagnostic, err := c.collectionPromptDecisions(ctx, checkpoint.TaskID)
 	if err != nil {
 		return "", nil, nil, err
-	}
-	// Expose verified settled values as runtime-owned row data so the collector
-	// can satisfy conditional schema rules. An unsettled decision still permits
-	// a blocked envelope; admission remains the authority.
-	var decisionDiagnostic string
-	if settled, resolveErr := c.resolveDecisionCollectionPlans(ctx, checkpoint.TaskID, plans); resolveErr == nil {
-		plans = settled
-	} else {
-		decisionDiagnostic = schemaRepairDiagnostic(resolveErr.Error())
 	}
 	collectionContext, err := resultFixedCollectionContextForStage(plans, true, true)
 	if err != nil {
@@ -89,7 +80,7 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 	if runtimeOwnsFilesRead(compiled) {
 		refs, err := c.verifiedResultEvidenceKeyRefs(ctx, checkpoint.TaskID, compiled)
 		if err != nil {
-			return "", nil, nil, err
+			return "", nil, nil, rejectNormalizationRecoveryRead(err)
 		}
 		schema, _ := info.Parameters["structured_payload"].(map[string]any)
 		constrainResultEvidenceChoices(schema, compiled.evidenceKeys, refs)
@@ -114,7 +105,7 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 		var response *resultCollectionBlob
 		response, err = c.readCollectionBlobRecord(ctx, checkpoint, "response", checkpoint.Response)
 		if err != nil {
-			return "", nil, nil, err
+			return "", nil, nil, rejectNormalizationRecoveryRead(err)
 		}
 		previous, responseIssue = response.Data, response.ResponseIssue
 	}
@@ -127,12 +118,12 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 		original := checkpoint.ContractUpgrade.Original
 		acceptedResponse, err = c.readCollectionBlob(ctx, original, "response", original.Response)
 		if err != nil {
-			return "", nil, nil, err
+			return "", nil, nil, rejectNormalizationRecoveryRead(err)
 		}
 	}
 	workInput, err := c.historicalResultCollectionInput(ctx, checkpoint.TaskID, work.Input)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, nil, rejectNormalizationRecoveryRead(err)
 	}
 	feedback := resultCollectionFormatFeedback(previous, info)
 	if responseIssue != nil {
@@ -174,6 +165,23 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 		return "", nil, nil, err
 	}
 	return pathContext + collectionContext + invariants + "Collect the result of the already returned work. Do not repeat work, explore sources, or change its outcome to satisfy a format requirement. Use only these frozen authorized inputs. Result assertions use canonical stored paths: /structured_payload/value refers to your structured_payload, and /invariant_verification/assessments is attested from your invariant_assessments when the schema permits them. For equals_by_items, choose the configured empty or non_empty label from the referenced array; preserve every array item, finding and evidence reference when correcting the label. For equals_projection, match array order and only the fields declared by the projection; each representation must obey its own schema. Do not copy extra domain fields into the outer envelope. Do not independently paraphrase or omit findings. Fix all reported format_feedback issues together. Object hints are local examples, never complete submissions. Preserve legal namesake fields and evidence at other paths. A truncated list is incomplete; check the full claims_schema too. When the claims schema declares payload projections, submit the claims there once and omit the projected outer fields. For an invariant-bound finding with runtime-owned severity, omit severity; retain its finding_index and judgment. Otherwise finding_index must name a finding with the invariant definition's exact severity. Keep each invariant summary concise, well below its schema maxLength; put extended explanations in details. Preserve the original judgments, findings and evidence when fixing representation.\n" + fenceUntrusted("json", string(data)), work, claimsSchema, nil
+}
+
+// Authenticate decision sources before permitting any semantic "blocked"
+// outcome. The collector may describe unfinished work without settling it.
+func (c *Coordinator) collectionPromptDecisions(ctx context.Context, taskID string) ([]resultFixedCollectionPlan, string, error) {
+	plans, err := c.fixedCollectionPlans(taskID)
+	if err != nil {
+		return nil, "", rejectNormalizationRecoveryRead(err)
+	}
+	settled, err := c.resolveDecisionCollectionPlans(ctx, taskID, plans)
+	if err == nil {
+		return settled, "", nil
+	}
+	if _, unsettled := errors.AsType[unsettledResultDecision](err); unsettled {
+		return plans, schemaRepairDiagnostic(err.Error()), nil
+	}
+	return nil, "", rejectNormalizationRecoveryRead(err)
 }
 
 func (c *Coordinator) collectionPromptTranscript(ctx context.Context, transcriptID string) ([]byte, error) {
@@ -249,16 +257,40 @@ func (c *Coordinator) prepareCollectionInvocation(ctx context.Context, def *agen
 	return ctx, request, err
 }
 
-func (c *Coordinator) runCollectionInvocation(ctx context.Context, def *agent.AgentDef, checkpoint *ResultCollectionCheckpoint) (string, ExecutionUsage, error) {
+func (c *Coordinator) executeFrozenCollectionTurn(ctx, invocation context.Context, def *agent.AgentDef, prior *ResultCollectionCheckpoint, id string, encoded []byte) (*ResultCollectionCheckpoint, error) {
+	requestIdentity := *prior
+	requestIdentity.InvocationID = id
+	request, err := decodeFrozenCollectionRequest(encoded, &requestIdentity)
+	if err != nil {
+		return nil, c.collectionFailure(ctx, prior, RepairFailureSource, err)
+	}
+	checkpoint, err := c.reserveResultCollection(ctx, prior, id, encoded)
+	if err != nil {
+		return nil, c.collectionFailure(ctx, prior, localResultRejectionReason(rejectNormalizationRecoveryRead(err)), err)
+	}
+	response, usage, err := c.runCollectionInvocation(invocation, def, checkpoint, request)
+	var responseIssue *agent.StructuredResponseIssue
+	if errors.Is(err, errCollectionToolCall) {
+		// Preserve rejected SDK arguments and the diagnostic as evidence.
+		if failure, ok := errors.AsType[*agent.StructuredResponseError](err); ok {
+			response, responseIssue = failure.Arguments, new(failure.Issue)
+		} else {
+			response += "\ncollector_response_invalid: " + err.Error()
+		}
+		err = nil
+	}
+	if err != nil {
+		return nil, c.collectionFailure(ctx, checkpoint, repairFailureCollectionUnavailable, err)
+	}
+	received, err := c.recordCollectionResponseUsage(ctx, checkpoint, []byte(response), usage, responseIssue)
+	if err != nil {
+		return nil, c.collectionFailure(ctx, checkpoint, localResultRejectionReason(rejectNormalizationRecoveryRead(err)), err)
+	}
+	return received, nil
+}
+
+func (c *Coordinator) runCollectionInvocation(ctx context.Context, def *agent.AgentDef, checkpoint *ResultCollectionCheckpoint, request frozenCollectionRequest) (string, ExecutionUsage, error) {
 	if err := ctx.Err(); err != nil {
-		return "", ExecutionUsage{}, err
-	}
-	data, err := c.readCollectionBlob(ctx, checkpoint, "request", checkpoint.Request)
-	if err != nil {
-		return "", ExecutionUsage{}, err
-	}
-	request, err := decodeFrozenCollectionRequest(data, checkpoint)
-	if err != nil {
 		return "", ExecutionUsage{}, err
 	}
 	// Collection can inherit a coordinator or another worker's context. Bind
@@ -316,27 +348,4 @@ func (c *Coordinator) runCollectionInvocation(ctx context.Context, def *agent.Ag
 		err = fmt.Errorf("%w: %w", errCollectionToolCall, err)
 	}
 	return output, usageFromSteps(steps), err
-}
-
-func (c *Coordinator) recordCollectionResponseUsage(ctx context.Context, expected *ResultCollectionCheckpoint, response []byte, usage ExecutionUsage, issue *agent.StructuredResponseIssue) (*ResultCollectionCheckpoint, error) {
-	return c.updateResultCollection(ctx, expected, func(next *ResultCollectionCheckpoint, _ *ExecutionReceipt) error {
-		if next.State != ResultCollectionInFlight || next.InvocationRunID != c.executionRunID {
-			return errResultCollectionStale
-		}
-		ref, err := c.putCollectionBlobWithIssue(ctx, next, "response", response, issue)
-		if err != nil {
-			return err
-		}
-		next.State, next.Response = ResultCollectionReceived, ref
-		if next.ObservedUsage == nil {
-			next.ObservedUsage = &ExecutionUsage{}
-		}
-		next.ObservedUsage.InputTokens += usage.InputTokens
-		next.ObservedUsage.OutputTokens += usage.OutputTokens
-		next.ObservedUsage.TotalTokens += usage.TotalTokens
-		next.ObservedUsage.ProgressTokens += usage.ProgressTokens
-		next.ObservedUsage.CacheReadTokens += usage.CacheReadTokens
-		next.ObservedUsage.CacheCreationTokens += usage.CacheCreationTokens
-		return nil
-	})
 }

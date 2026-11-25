@@ -166,7 +166,7 @@ func TestBoundDecisionCoverageReplayAndAssembly(t *testing.T) {
 			if !strings.Contains(string(payload.Value), `"state":"reject"`) && count > 0 {
 				t.Fatal(string(payload.Value))
 			}
-			if err := f.c.validateSubmittedEvidenceInputs(f.item.ID, payload); err != nil {
+			if err := f.c.validateSubmittedEvidenceInputs(t.Context(), f.item.ID, payload); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -283,7 +283,7 @@ func TestBoundDecisionContractRevalidationPreservesAncestorScope(t *testing.T) {
 			}
 			// The strict admission path must never import that ancestor decision
 			// into a new submission, even if its payload is byte-for-byte equal.
-			if err := f.c.validateSubmittedEvidenceInputs(f.item.ID, payload); err == nil {
+			if err := f.c.validateSubmittedEvidenceInputs(t.Context(), f.item.ID, payload); err == nil {
 				t.Fatal("new submission imported an ancestor decision")
 			}
 			if _, rejection := f.c.structuredPayloadForSubmission(f.item.ID, f.submission(t, nil)); rejection == "" {
@@ -370,7 +370,7 @@ func TestBoundDecisionConcurrentAndDrift(t *testing.T) {
 		t.Fatal(rejection)
 	}
 	payload.CollectionBindings[0].Decisions[0].EventID = "forged"
-	if err := f.c.validateSubmittedEvidenceInputs(f.item.ID, payload); err == nil {
+	if err := f.c.validateSubmittedEvidenceInputs(t.Context(), f.item.ID, payload); err == nil {
 		t.Fatal("forged provenance accepted")
 	}
 	source := f.sources[0]
@@ -453,21 +453,33 @@ func TestDecisionPrimitiveNoNetKeepsInferenceGrants(t *testing.T) {
 
 func TestBoundDecisionBlockedEnvelopeDoesNotRequireSettledPayload(t *testing.T) {
 	t.Parallel()
-	for _, gated := range []bool{false, true} {
-		t.Run(fmt.Sprint(gated), func(t *testing.T) {
+	for _, scenario := range []struct {
+		name, input string
+		gated       bool
+	}{
+		{"direct", `{"status":"blocked","summary":"Required decision could not settle"}`, false},
+		{"gated", `{"status":"blocked","summary":"Required decision could not settle"}`, true},
+		{"direct legacy spelling", `{"Status":"blocked","Summary":"Required decision could not settle"}`, false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
 			f := newBoundDecisionFixture(t, 1)
 			ctx := tools.SetToolsAllowed(f.ctx, []string{"view", decisionPrimitiveToolName, submitResultToolName})
 			var tool fantasy.AgentTool = &submitResultTool{coordinator: f.c, todoID: f.item.ID}
-			if gated {
+			if scenario.gated {
 				tool = f.c.gatePolicyTools([]fantasy.AgentTool{tool})[0]
 			}
 			// The schema must permit a truthful failure without forcing an audit
 			// payload that cannot exist after an unsettled decision.
-			input := `{"status":"blocked","summary":"Required decision could not settle"}`
-			if err := validateToolArguments(input, tool.Info()); err != nil {
+			if err := validateToolArguments(`{"status":"blocked","summary":"Required decision could not settle"}`, tool.Info()); err != nil {
 				t.Fatal(err)
 			}
-			response, err := tool.Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: input})
+			if scenario.name == "direct legacy spelling" {
+				compiled, err := f.c.compiledResultContract(f.item.ResultContract)
+				if err != nil || submissionSourceOmissions(compiled, scenario.input, false).unsettledDecisions {
+					t.Fatalf("collector must keep its exact field spelling: %v", err)
+				}
+			}
+			response, err := tool.Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: scenario.input})
 			if err != nil || response.IsError {
 				t.Fatalf("blocked result: %#v %v", response, err)
 			}

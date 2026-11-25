@@ -40,7 +40,11 @@ func openRegularFile(path string) (*os.File, error) {
 	}
 	f := os.NewFile(uintptr(fileFD), "media-input")
 	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() {
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
 		_ = f.Close()
 		return nil, Reject(AccessDenied, "image source is not regular")
 	}

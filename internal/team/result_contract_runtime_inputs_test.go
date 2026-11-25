@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
 )
 
@@ -66,7 +67,9 @@ func TestRuntimeResultInputsSubmissionAndReplay(t *testing.T) {
 					return c.structuredPayloadForSubmission(consumer.ID, []byte(raw))
 				}
 				request := AttemptRequest{Task: taskDefFromTodoItem(consumer), resultContractSchema: compiled,
-					resultRuntimeInputs: func() (map[string]any, error) { return c.resultRuntimeInputValues(compiled, "") }}
+					resultRuntimeInputs: func(spec *CompiledResultContract) (map[string]any, error) {
+						return c.resultRuntimeInputValues(spec, "")
+					}}
 				payload, err := canonicalExternalStructuredPayload(request, &WorkerResultProposal{StructuredPayloadJSON: new(raw)}, nil)
 				if err != nil {
 					return nil, err.Error()
@@ -114,11 +117,11 @@ func TestRuntimeResultInputsSubmissionAndReplay(t *testing.T) {
 				t.Fatal("journal omitted bound payload")
 			}
 			restored := *record.TypedResult.StructuredPayload
-			if !bytes.Equal(payload.Value, restored.Value) || payload.SHA256 != restored.SHA256 || c.validateSubmittedEvidenceInputs(consumer.ID, &restored) != nil {
+			if !bytes.Equal(payload.Value, restored.Value) || payload.SHA256 != restored.SHA256 || c.validateSubmittedEvidenceInputs(t.Context(), consumer.ID, &restored) != nil {
 				t.Fatal("canonical binding did not survive persistence/replay")
 			}
 			setRuntimeInputObservation(t, c, source, map[string]any{"count": 3, "literal": "different verified output"})
-			if c.validateSubmittedEvidenceInputs(consumer.ID, &restored) == nil {
+			if c.validateSubmittedEvidenceInputs(t.Context(), consumer.ID, &restored) == nil {
 				t.Fatal("historical payload silently accepted a different verified source")
 			}
 		})
@@ -220,7 +223,9 @@ func TestRuntimeResultInputsExternalRechecksReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := AttemptRequest{Task: taskDefFromTodoItem(consumer), resultContractSchema: compiled,
-		resultRuntimeInputs: func() (map[string]any, error) { return c.resultRuntimeInputValues(compiled, "") }}
+		resultRuntimeInputs: func(spec *CompiledResultContract) (map[string]any, error) {
+			return c.resultRuntimeInputValues(spec, "")
+		}}
 	source.ExecutionReceipt.RuntimeOutputsHash = "sha256:changed-after-preflight"
 	if payload, err := canonicalExternalStructuredPayload(request, &WorkerResultProposal{StructuredPayloadJSON: new(`{"decision":true}`)}, nil); payload != nil || err == nil {
 		t.Fatal("external proposal bypassed a changed native receipt")
@@ -240,7 +245,8 @@ func TestRuntimeResultInputsExternalCompletion(t *testing.T) {
 			"type":"object","required":["status","summary"],"properties":{"status":{"type":"string"},"summary":{"type":"string"}}
 		}},
 		"x-hufu-runtime-inputs":[{"target":"/kind","source_kind":"const"},{"target":"/completion","source_task":"prepare-outputs","output":"observation"}],
-		"x-hufu-runtime-completion":"/completion"
+		"x-hufu-runtime-completion":"/completion",
+		"x-hufu-result-envelope":{"properties":{"status":{"enum":["success","completed_with_gaps","blocked"]}}}
 	}`)
 	setRuntimeInputObservation(t, c, source, map[string]any{"status": "completed_with_gaps", "summary": "One gap remains"})
 	c.session.ResultContracts[compiled.ID] = compiled
@@ -249,7 +255,9 @@ func TestRuntimeResultInputsExternalCompletion(t *testing.T) {
 	request.Task = taskDefFromTodoItem(consumer)
 	request.Task.ResultContract = &ref
 	request.resultContractSchema = compiled
-	request.resultRuntimeInputs = func() (map[string]any, error) { return c.resultRuntimeInputValues(compiled, "") }
+	request.resultRuntimeInputs = func(spec *CompiledResultContract) (map[string]any, error) {
+		return c.resultRuntimeInputValues(spec, "")
+	}
 	root := t.TempDir()
 	submit := func(raw string) (*TaskResult, error) {
 		proposal, err := decodeWorkerResultProposal([]byte(raw), true)
@@ -257,6 +265,9 @@ func TestRuntimeResultInputsExternalCompletion(t *testing.T) {
 			return nil, err
 		}
 		return NewExternalResultCanonicalizer().Canonicalize(t.Context(), request, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
+	}
+	if _, err := decodeWorkerResultProposal([]byte("null"), true); err == nil {
+		t.Fatal("accepted a non-object proposal through runtime completion")
 	}
 	completed, err := submit(`{"status":null,"summary":null,"structured_payload_json":"{\"decision\":true}"}`)
 	if err != nil || completed.Status != TaskResultStatusCompletedWithGaps || completed.Summary != "One gap remains" ||
@@ -277,9 +288,92 @@ func TestRuntimeResultInputsExternalCompletion(t *testing.T) {
 	if err != nil || blocked.Status != TaskResultStatusBlocked || blocked.Summary != "Source unavailable" || blocked.StructuredPayload != nil {
 		t.Fatalf("lost external blocker: %+v, %v", blocked, err)
 	}
+	if _, err := submit(`{"status":"failed","summary":"Source unavailable"}`); localResultRejectionReason(err) != RepairFailureInvalidSchema {
+		t.Fatalf("external failure bypassed its status envelope: %v", err)
+	}
+	admission := localResultAdmission{coordinator: c, todoID: consumer.ID}
+	rejected := &TaskResult{Status: TaskResultStatusFailed, Summary: "Source unavailable"}
+	if err := admission.bindResultEnvelope(t.Context(), compiled, SubmitResultInput{}, rejected, taskResultSubmissionContract{}, false); localResultRejectionReason(err) != RepairFailureInvalidSchema {
+		t.Fatalf("local failure bypassed its status envelope: %v", err)
+	}
 	source.ExecutionReceipt.RuntimeOutputsHash = "changed"
-	if _, err := submit(`{"structured_payload_json":"{\"decision\":true}"}`); err == nil {
-		t.Fatal("completion accepted a changed native receipt")
+	blocked, err = submit(`{"status":"blocked","summary":"Source unavailable"}`)
+	if err != nil || blocked == nil || blocked.Status != TaskResultStatusBlocked || blocked.StructuredPayload != nil {
+		t.Fatalf("blocker incorrectly required the successful completion source: %+v, %v", blocked, err)
+	}
+	for _, raw := range []string{
+		`{"structured_payload_json":"{\"decision\":true}"}`,
+		`{"status":"completed_with_gaps","summary":"One gap remains","structured_payload_json":"{\"decision\":true}"}`,
+	} {
+		if _, err := submit(raw); localResultRejectionReason(err) != RepairFailureSource {
+			t.Fatalf("changed native receipt was not a source failure: %v", err)
+		}
+	}
+}
+
+func TestRuntimeResultInputsExternalCompletionRequiresWorksetSourceBeforeRepair(t *testing.T) {
+	t.Parallel()
+	compiled := compileFixtureJSONSchema(t, "external-completion-workset", `{
+		"type":"object","required":["completion","location"],
+		"properties":{
+			"completion":{"type":"object","required":["status","summary"],
+				"properties":{"status":{"type":"string"},"summary":{"type":"string"}},
+				"const":{"status":"success","summary":"Verified"}},
+			"location":{"type":"string"}
+		},
+		"x-hufu-runtime-inputs":[{"target":"/completion","source_kind":"const"}],
+		"x-hufu-runtime-completion":"/completion",
+		"x-hufu-workset-paths":{"pointers":["/location"],"format":"path_line"}
+	}`)
+	request := scopedAttemptRequest("codex", "workset-consumer")
+	request.Task.ResultContract = new(compiled.ref(true))
+	request.resultContractSchema = compiled
+	c := newTestCoordinator(t)
+	request.resultRuntimeInputs = func(spec *CompiledResultContract) (map[string]any, error) {
+		return c.resultRuntimeInputValues(spec, "")
+	}
+	root := t.TempDir()
+	for _, tc := range []struct {
+		status   string
+		required bool
+	}{
+		{TaskResultStatusSuccess, true},
+		{TaskResultStatusBlocked, true},
+		{TaskResultStatusFailed, true},
+		{TaskResultStatusPartial, true},
+		{TaskResultStatusBlocked, false},
+	} {
+		request.Task.ResultContract = new(compiled.ref(tc.required))
+		proposal := &WorkerResultProposal{Status: tc.status, Summary: "workset unavailable"}
+		result, err := NewExternalResultCanonicalizer().Canonicalize(t.Context(), request, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
+		if result != nil || err == nil || localResultRejectionReason(err) != RepairFailureSource {
+			t.Fatalf("status %s: result=%+v error=%v", tc.status, result, err)
+		}
+	}
+}
+
+func TestExternalOptionalPayloadRechecksIndependentNativeSource(t *testing.T) {
+	t.Parallel()
+	c, source, consumer, compiled := runtimeInputResultFixture(t)
+	if _, err := c.resultRuntimeInputValues(compiled, ""); err != nil {
+		t.Fatal(err)
+	}
+	request := scopedAttemptRequest("codex", consumer.ID)
+	request.Task = taskDefFromTodoItem(consumer)
+	request.Task.ResultContract = new(compiled.ref(false))
+	request.resultContractSchema = compiled
+	request.resultRuntimeInputs = func(spec *CompiledResultContract) (map[string]any, error) {
+		return c.resultRuntimeInputValues(spec, "")
+	}
+	root := t.TempDir()
+	proposal := AttemptResult{ResultProposal: &WorkerResultProposal{Status: TaskResultStatusSuccess, Summary: "No payload needed"}}
+	canonicalizer := NewExternalResultCanonicalizer()
+	if result, err := canonicalizer.Canonicalize(t.Context(), request, proposal, WorkspaceDelta{}, root); err != nil || result == nil || result.StructuredPayload != nil {
+		t.Fatalf("optional envelope with a valid source was rejected: %+v, %v", result, err)
+	}
+	source.ExecutionReceipt.RuntimeOutputsHash = "changed"
+	if result, err := canonicalizer.Canonicalize(t.Context(), request, proposal, WorkspaceDelta{}, root); result != nil || err == nil || localResultRejectionReason(err) != RepairFailureSource {
+		t.Fatalf("optional envelope bypassed the changed source: %+v, %v", result, err)
 	}
 }
 
@@ -309,7 +403,9 @@ func TestRuntimeResultInputsExternalCompletionPreservesCanonicalSummary(t *testi
 			request.Task = taskDefFromTodoItem(consumer)
 			request.Task.ResultContract = &ref
 			request.resultContractSchema = compiled
-			request.resultRuntimeInputs = func() (map[string]any, error) { return c.resultRuntimeInputValues(compiled, "") }
+			request.resultRuntimeInputs = func(spec *CompiledResultContract) (map[string]any, error) {
+				return c.resultRuntimeInputValues(spec, "")
+			}
 			proposal := &WorkerResultProposal{StructuredPayloadJSON: &claim}
 			result, err := NewExternalResultCanonicalizer().Canonicalize(t.Context(), request, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, t.TempDir())
 			if err != nil {
@@ -362,5 +458,39 @@ func TestRuntimeResultInputsKeepAggregateBound(t *testing.T) {
 	consumer.ResultContract = &ref
 	if payload, rejection := c.structuredPayloadForSubmission(consumer.ID, []byte(`{"decision":true}`)); payload != nil || !strings.Contains(rejection, "byte limit") {
 		t.Fatalf("oversized runtime-bound result was accepted: %s", rejection)
+	}
+}
+
+func TestRuntimeResultInputsAllowLocalFailureWithoutSuccessfulReceipt(t *testing.T) {
+	const schema = `{
+		"type":"object","additionalProperties":false,"required":["completion"],
+		"properties":{"completion":{"type":"object","required":["status","summary"],"properties":{"status":{"type":"string"},"summary":{"type":"string"}}}},
+		"x-hufu-runtime-inputs":[{"target":"/completion","source_task":"missing-action","output":"report"}],
+		"x-hufu-runtime-completion":"/completion"
+	}`
+	for _, status := range []string{TaskResultStatusBlocked, TaskResultStatusPartial, TaskResultStatusFailed} {
+		t.Run(status, func(t *testing.T) {
+			raw := fmt.Sprintf(`{"status":%q,"summary":"Native action did not complete"}`, status)
+			c, item, ctx, cp := receivedCollectionClaimsFixture(t, schema, raw)
+			prepared, err := c.prepareCollectionClaims(ctx, cp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.commitPreparedCollection(ctx, prepared); err != nil {
+				t.Fatal(err)
+			}
+			if result := c.GetTaskResult(item.ID); result == nil || result.Status != status || result.StructuredPayload != nil {
+				t.Fatalf("collected result = %+v", result)
+			}
+			c, item, ctx, _ = receivedCollectionClaimsFixture(t, schema, raw)
+			tool := &submitResultTool{coordinator: c, todoID: item.ID}
+			response, err := tool.Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: raw})
+			if err != nil || response.IsError {
+				t.Fatalf("direct result = %+v, %v", response, err)
+			}
+			if result := c.GetTaskResult(item.ID); result == nil || result.Status != status || result.StructuredPayload != nil {
+				t.Fatalf("submitted result = %+v", result)
+			}
+		})
 	}
 }

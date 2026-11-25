@@ -920,6 +920,8 @@ type Coordinator struct {
 	// never held while a provider, artifact store, or event store is called.
 	decisionTerminalMu       sync.Mutex
 	decisionTerminal         decisionTerminalRuntime
+	workspaceRecoveryMu      sync.Mutex
+	pendingWorkspaceRecovery *workspaceProviderRecovery
 	lastEvidenceManifest     *EvidenceManifest
 	lastEvidenceManifestMu   sync.RWMutex
 	diagnosticPackets        []DiagnosticPacket

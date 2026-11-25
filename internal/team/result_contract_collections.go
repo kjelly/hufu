@@ -221,6 +221,35 @@ func (s resultFixedCollectionSpec) fixedFields() map[string]bool {
 	return names
 }
 
+func (s resultFixedCollectionSpec) validateDraftOwnership(value any) error {
+	items, err := resolveJSONPointer(value, s.ItemsPointer)
+	if err != nil {
+		return nil
+	}
+	decisions, ok := items.(map[string]any)
+	if !ok {
+		return fmt.Errorf("%s requires decisions keyed by runtime-issued item keys", s.ItemsPointer)
+	}
+	owned := s.fixedFields()
+	for _, group := range s.DecisionGroups {
+		for _, field := range group.Outputs {
+			owned[field] = true
+		}
+	}
+	for key, row := range decisions {
+		fields, ok := row.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%s/%s requires a decision object", s.ItemsPointer, key)
+		}
+		for field := range fields {
+			if owned[field] {
+				return fmt.Errorf("%s/%s contains runtime-owned field %s; omit it entirely", s.ItemsPointer, key, field)
+			}
+		}
+	}
+	return nil
+}
+
 // Object-only target paths keep assembly unambiguous. Complex schema branches
 // and array parents are rejected at load time rather than guessed at runtime.
 func fixedCollectionSchemaAt(root map[string]any, pointer string) (map[string]any, error) {
@@ -392,21 +421,21 @@ func assembleResultFixedCollections(raw []byte, plans []resultFixedCollectionPla
 		rawDecisions, err := resolveJSONPointer(value, plan.spec.ItemsPointer)
 		decisions, ok := rawDecisions.(map[string]any)
 		if err != nil || !ok {
-			return nil, nil, fmt.Errorf("%s requires an object keyed by runtime-issued item keys; submit decisions only, not an array or identity fields", plan.spec.ItemsPointer)
+			return nil, nil, &resultBindingShapeError{fmt.Errorf("%s requires an object keyed by runtime-issued item keys; submit decisions only, not an array or identity fields", plan.spec.ItemsPointer)}
 		}
 		if len(decisions) != len(plan.rows) {
-			return nil, nil, fmt.Errorf("%s requires exactly %d runtime-issued decision keys; got %d; resubmit using the fixed collection manifest", plan.spec.ItemsPointer, len(plan.rows), len(decisions))
+			return nil, nil, &resultBindingShapeError{fmt.Errorf("%s requires exactly %d runtime-issued decision keys; got %d; resubmit using the fixed collection manifest", plan.spec.ItemsPointer, len(plan.rows), len(decisions))}
 		}
 		rows := make([]any, 0, len(plan.rows))
 		for _, row := range plan.rows {
 			decision, ok := decisions[row.Key].(map[string]any)
 			if !ok {
-				return nil, nil, fmt.Errorf("%s/%s requires a decision object from the fixed collection manifest", plan.spec.ItemsPointer, row.Key)
+				return nil, nil, &resultBindingShapeError{fmt.Errorf("%s/%s requires a decision object from the fixed collection manifest", plan.spec.ItemsPointer, row.Key)}
 			}
 			merged := maps.Clone(decision)
 			for field, fixed := range row.Fixed {
 				if _, exists := decision[field]; exists {
-					return nil, nil, fmt.Errorf("%s/%s contains runtime-owned field %s; omit it and resubmit decisions only", plan.spec.ItemsPointer, row.Key, field)
+					return nil, nil, &resultBindingShapeError{fmt.Errorf("%s/%s contains runtime-owned field %s; omit it and resubmit decisions only", plan.spec.ItemsPointer, row.Key, field)}
 				}
 				merged[field] = fixed
 			}
@@ -419,6 +448,32 @@ func assembleResultFixedCollections(raw []byte, plans []resultFixedCollectionPla
 	}
 	encoded, err := json.Marshal(value)
 	return encoded, bindings, err
+}
+
+// Project readable decisions for source checks after strict membership fails.
+// Known keys get their frozen identities. Extra keys carry only the claims
+// present in their rejected rows and cannot establish collection membership.
+func projectFixedCollectionSourceRows(value any, plans []resultFixedCollectionPlan) error {
+	for _, plan := range plans {
+		raw, _ := resolveJSONPointer(value, plan.spec.ItemsPointer)
+		decisions, keyed := raw.(map[string]any)
+		if !keyed {
+			continue
+		}
+		for _, row := range plan.rows {
+			if decision, ok := decisions[row.Key].(map[string]any); ok {
+				maps.Copy(decision, row.Fixed)
+			}
+		}
+		rows := make([]any, 0, len(decisions))
+		for _, key := range slices.Sorted(maps.Keys(decisions)) {
+			rows = append(rows, decisions[key])
+		}
+		if err := setFixedCollectionValue(value, plan.spec.ItemsPointer, rows); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func setFixedCollectionValue(root any, pointer string, value any) error {

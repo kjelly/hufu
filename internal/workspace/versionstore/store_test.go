@@ -2,11 +2,14 @@ package versionstore
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kjelly/hufu/internal/sqlmigrate"
 )
 
 func openTestStore(t *testing.T) *Store {
@@ -67,6 +70,37 @@ func TestOpenReopenAndReadOnly(t *testing.T) {
 	defer func() { _ = readOnly.Close() }()
 	if _, err = readOnly.db.ExecContext(ctx, "DELETE FROM snapshots"); err == nil {
 		t.Fatal("read-only store accepted a write")
+	}
+}
+
+func TestOpenPreservesLegacyOperationWithoutRecoveryAuthority(t *testing.T) {
+	ctx := t.Context()
+	stateDir := t.TempDir()
+	legacy := &Store{layout: layout{root: StorageRoot(stateDir)}}
+	if err := legacy.layout.ensure(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", legacy.dsn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := sqlmigrate.Apply(ctx, db, "workspace versions", migrations[:1], time.Now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "INSERT INTO operations(id, workspace_id, kind, state, started_at, updated_at) VALUES('old','ws','restore','materialized',1,1)"); err != nil {
+		t.Fatal(err)
+	}
+	for _, readOnly := range []bool{true, false} {
+		store, err := Open(ctx, Options{StateDir: stateDir, ReadOnly: readOnly})
+		if err != nil {
+			t.Fatal(err)
+		}
+		op, err := store.GetOperation(ctx, "old")
+		_ = store.Close()
+		if err != nil || op.State != OperationMaterialized || op.RecoveryToken != "" {
+			t.Fatalf("legacy operation after read-only=%v: %+v, %v", readOnly, op, err)
+		}
 	}
 }
 

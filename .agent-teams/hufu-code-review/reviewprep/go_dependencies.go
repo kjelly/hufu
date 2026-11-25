@@ -2,7 +2,9 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"os"
@@ -100,6 +102,7 @@ type goSnapshotIndexEntry struct {
 	path        string
 	identifiers map[string]struct{}
 	packagePath string
+	imports     []string
 }
 
 type goReferenceScope struct {
@@ -271,6 +274,7 @@ func (s *reviewSourceSnapshot) ensureGoIndex() error {
 				if err != nil {
 					continue
 				}
+				indexed.imports = append(indexed.imports, imported)
 				if indexed.packagePath != "" {
 					if s.goReverseImports[imported] == nil {
 						s.goReverseImports[imported] = make(map[string]bool)
@@ -308,6 +312,153 @@ func (s *reviewSourceSnapshot) goPackageDependents(owner string) map[string]bool
 	return result
 }
 
+type snapshotGoTestPlan struct {
+	selected    map[string]bool
+	directories map[string]bool
+	importers   map[string]map[string][]goSnapshotIndexEntry
+}
+
+func (s *reviewSourceSnapshot) planSnapshotGoTests(paths []string) (snapshotGoTestPlan, error) {
+	selected := make(map[string]bool)
+	for _, name := range paths {
+		if path.Ext(name) == ".go" {
+			selected[path.Dir(name)] = true
+		}
+	}
+	if len(selected) == 0 {
+		return snapshotGoTestPlan{}, nil
+	}
+	if err := s.ensureGoIndex(); err != nil {
+		return snapshotGoTestPlan{}, err
+	}
+	directories := make(map[string]bool)
+	for _, entry := range s.goIndex {
+		dir := path.Dir(entry.path)
+		if !selected[dir] || directories[dir] {
+			continue
+		}
+		matched, err := matchesSnapshotGoBuild(s.root, entry)
+		if err != nil {
+			return snapshotGoTestPlan{}, err
+		}
+		if matched {
+			directories[dir] = true
+		}
+	}
+	importers, err := s.snapshotDirectImportCandidates(selected, directories)
+	return snapshotGoTestPlan{selected: selected, directories: directories, importers: importers}, err
+}
+
+func (p *snapshotGoTestPlan) packages() []string {
+	packages := make([]string, 0, len(p.directories))
+	for dir := range p.directories {
+		if dir != "." {
+			dir = "./" + dir
+		}
+		packages = append(packages, dir)
+	}
+	sort.Strings(packages)
+	return packages
+}
+
+func matchesSnapshotGoBuild(root string, entry goSnapshotIndexEntry) (bool, error) {
+	buildContext := &build.Default
+	for _, imported := range entry.imports {
+		if imported == "C" && !buildContext.CgoEnabled {
+			return false, nil
+		}
+	}
+	dir, name := path.Split(entry.path)
+	matched, err := buildContext.MatchFile(filepath.Join(root, filepath.FromSlash(dir)), name)
+	if err != nil {
+		return false, fmt.Errorf("evaluate Go build constraints for %q: %w", entry.path, err)
+	}
+	return matched, nil
+}
+
+func (s *reviewSourceSnapshot) snapshotDirectImportCandidates(selected, directories map[string]bool) (map[string]map[string][]goSnapshotIndexEntry, error) {
+	// Local replacements can change a frozen module's import prefix. The
+	// package suffix relative to that module is still stable.
+	suffixes, primary := make(map[string]bool), make(map[string]map[string]bool)
+	for dir := range selected {
+		root, _ := s.goModule(dir)
+		if root == "" || !directories[dir] {
+			continue
+		}
+		if primary[root] == nil {
+			primary[root] = make(map[string]bool)
+		}
+		if owner := s.goPackagePath(dir); owner != "" {
+			primary[root][owner] = true
+		}
+		if dir == root {
+			suffixes[""] = true
+		} else {
+			prefix := root + "/"
+			if root == "." {
+				prefix = ""
+			}
+			suffixes["/"+strings.TrimPrefix(dir, prefix)] = true
+		}
+	}
+	importers := make(map[string]map[string][]goSnapshotIndexEntry)
+	for _, entry := range s.goIndex {
+		dir := path.Dir(entry.path)
+		if selected[dir] || directories[dir] || len(entry.imports) == 0 || isExcludedTestDirectory(dir) {
+			continue
+		}
+		module, _ := s.goModule(dir)
+		if module == "" {
+			continue
+		}
+		for _, imported := range entry.imports {
+			if primary[module][imported] {
+				matched, err := matchesSnapshotGoBuild(s.root, entry)
+				if err != nil {
+					return nil, err
+				}
+				if matched {
+					directories[dir] = true
+				}
+				break
+			}
+			if !mayImportSelectedPackage(imported, suffixes) {
+				continue
+			}
+			// Ignore inactive files immediately. Report a constraint error
+			// only if frozen Go resolution confirms this imports the target.
+			if matched, err := matchesSnapshotGoBuild(s.root, entry); err == nil && !matched {
+				continue
+			}
+			if importers[module] == nil {
+				importers[module] = make(map[string][]goSnapshotIndexEntry)
+			}
+			importers[module][imported] = append(importers[module][imported], entry)
+		}
+	}
+	return importers, nil
+}
+
+func isExcludedTestDirectory(dir string) bool {
+	return strings.Contains("/"+dir+"/", "/vendor/") || strings.Contains("/"+dir+"/", "/testdata/")
+}
+
+func mayImportSelectedPackage(imported string, suffixes map[string]bool) bool {
+	switch imported {
+	case "C", "all", "cmd", "std", "tool":
+		return false
+	}
+	if strings.HasPrefix(imported, ".") || strings.Contains(imported, "...") {
+		return false
+	}
+	for suffix := range suffixes {
+		if len(imported) > len(suffix) && strings.HasSuffix(imported, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 // Resolve identities from the nearest frozen go.mod without executing go list
 // or downloading dependencies. A missing, unreadable or malformed declaration
 // is unknown, not evidence that cross-package callers do not exist.
@@ -331,32 +482,36 @@ func (s *reviewSourceSnapshot) resolveGoPackagePath(directory string) string {
 			return strings.Join(segments[i+1:], "/")
 		}
 	}
+	root, module := s.goModule(directory)
+	if module == "" || root == directory {
+		return module
+	}
+	if root == "." {
+		return module + "/" + directory
+	}
+	return module + "/" + strings.TrimPrefix(directory, root+"/")
+}
+
+func (s *reviewSourceSnapshot) goModule(directory string) (string, string) {
 	for current := directory; ; current = path.Dir(current) {
 		moduleFile := filepath.Join(s.root, filepath.FromSlash(current), "go.mod")
 		info, err := os.Lstat(moduleFile)
 		if err == nil {
 			if !info.Mode().IsRegular() {
-				return ""
+				return "", ""
 			}
 			data, readErr := os.ReadFile(moduleFile)
 			if readErr != nil {
-				return ""
+				return "", ""
 			}
 			module := goModulePath(data)
 			if module == "" {
-				return ""
+				return "", ""
 			}
-			relative, relErr := filepath.Rel(filepath.FromSlash(current), filepath.FromSlash(directory))
-			if relErr != nil {
-				return ""
-			}
-			if relative == "." {
-				return module
-			}
-			return module + "/" + filepath.ToSlash(relative)
+			return current, module
 		}
 		if !os.IsNotExist(err) || current == "." {
-			return ""
+			return "", ""
 		}
 	}
 }

@@ -468,6 +468,7 @@ func TestExecutionPolicySnapshotBlocksResumeOnPersistedConfigurationDrift(t *tes
 }
 
 func TestExecutionPolicySnapshotProvidesCodexNetworkPolicyForEverySelectableAgentRoute(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	tests := []struct {
 		name    string
 		options executionPolicySnapshotCoordinatorOptions
@@ -577,6 +578,7 @@ func TestExecutionPolicySnapshotBlocksResumedLLMBackendIdentityDriftBeforeProvid
 }
 
 func TestExecutionPolicySnapshotBlocksResumedCodexIdentityDriftBeforeChildProcess(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := t.TempDir()
 	first := newExecutionPolicySnapshotCoordinatorWithBackendOptions(t, workspace, 2, 3, "", "", defaultExecutionPolicyCodexConfig())
 	if err := first.AdmitExecutionPolicy(); err != nil {
@@ -611,6 +613,7 @@ func TestExecutionPolicySnapshotBlocksResumedCodexIdentityDriftBeforeChildProces
 }
 
 func TestExecutionPolicySnapshotBlocksResumedCodexExecutionWorldDriftBeforeChildProcess(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	launcherConfig := func(t *testing.T) (agent.SubagentProviderConfig, string) {
 		t.Helper()
 		marker := filepath.Join(t.TempDir(), "codex-child-started")
@@ -688,6 +691,7 @@ func TestExecutionPolicySnapshotBlocksResumedCodexExecutionWorldDriftBeforeChild
 }
 
 func TestCodexRunAttemptAdmitsExecutionPolicyBeforeChildProcess(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	markerConfig := func(t *testing.T) (agent.SubagentProviderConfig, string) {
 		t.Helper()
 		marker := filepath.Join(t.TempDir(), "codex-child-started")
@@ -915,6 +919,7 @@ func mustExecutionPolicyProjectRoot(t *testing.T) string {
 }
 
 func TestExecutionPolicyCodexIdentityCoversCommandAndProtocol(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	base := defaultExecutionPolicyCodexConfig()
 	baseIdentity := executionPolicyCodexIdentityHash(codexSubagentProviderName, base)
 	changedCommand := base

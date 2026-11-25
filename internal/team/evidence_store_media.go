@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/kjelly/hufu/internal/fsutil"
 	"github.com/kjelly/hufu/internal/media"
@@ -136,7 +137,7 @@ func createOrVerifyPrivateMedia(ctx context.Context, path string, data []byte, l
 func readPrivateMedia(ctx context.Context, path string, limits media.Limits) ([]byte, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
-		return nil, media.Reject(media.InputMissing, "private media is unavailable")
+		return nil, privateMediaLookupError(err)
 	}
 	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
 		return nil, media.Reject(media.AccessDenied, "unsafe private media file")
@@ -174,6 +175,13 @@ func readPrivateMedia(ctx context.Context, path string, limits media.Limits) ([]
 	return media.ReadFile(ctx, path, limits)
 }
 
+func privateMediaLookupError(err error) error {
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.ENOTDIR) {
+		return media.Reject(media.InputMissing, "private media is unavailable")
+	}
+	return media.Reject(media.DurabilityRequired, "cannot inspect private media storage")
+}
+
 const maxMediaMetadataBytes int64 = 64 << 10
 
 func (s *FileArtifactStore) mediaMetadata(ctx context.Context, id string) (immutableArtifactMetadata, error) {
@@ -183,7 +191,10 @@ func (s *FileArtifactStore) mediaMetadata(ctx context.Context, id string) (immut
 	}
 	for _, suffix := range []string{"media", "media/data", "media/meta"} {
 		info, err := os.Lstat(filepath.Join(s.root, filepath.FromSlash(suffix)))
-		if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		if err != nil {
+			return metadata, privateMediaLookupError(err)
+		}
+		if !info.IsDir() || info.Mode().Perm() != 0o700 {
 			return metadata, media.Reject(media.AccessDenied, "unsafe private media directory")
 		}
 	}

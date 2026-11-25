@@ -17,8 +17,13 @@ import (
 
 func frozenSupplementFixture(t *testing.T) (string, frozenSupplementRequest) {
 	t.Helper()
+	return frozenSupplementFixtureWithSource(t, "package sample\nfunc Target() {}\n")
+}
+
+func frozenSupplementFixtureWithSource(t *testing.T, content string) (string, frozenSupplementRequest) {
+	t.Helper()
 	source, producer := t.TempDir(), t.TempDir()
-	writeFile(t, filepath.Join(source, "source.go"), "package sample\nfunc Target() {}\n")
+	writeFile(t, filepath.Join(source, "source.go"), content)
 	snapshot := &reviewSourceSnapshot{root: source, revision: "frozen", baseRevision: "base"}
 	frozen, err := snapshot.persistFrozenSource(producer, filepath.Join(producer, "out"))
 	if err != nil {
@@ -124,9 +129,13 @@ func assertSupplementDeclarations(t *testing.T, root string, result actionResult
 }
 
 func TestSupplementWithoutItemsKeepsLimitationsWithoutManifest(t *testing.T) {
-	for _, kind := range []string{"no_requests", "no_paths", "unavailable", "budget"} {
+	for _, kind := range []string{"no_requests", "no_paths", "unavailable", "budget", "oversized_source", "oversized_metadata"} {
 		t.Run(kind, func(t *testing.T) {
-			producer, request := frozenSupplementFixture(t)
+			content := "package sample\nfunc Target() {}\n"
+			if kind == "oversized_source" {
+				content += strings.Repeat("// Ω\n", defaultMaxReviewInputTokens/2)
+			}
+			producer, request := frozenSupplementFixtureWithSource(t, content)
 			requests := []frozenSupplementRequest{request}
 			wantOutcomes, wantLimit := 1, "unavailable_path"
 			limit := maxSupplementItems
@@ -141,6 +150,11 @@ func TestSupplementWithoutItemsKeepsLimitationsWithoutManifest(t *testing.T) {
 				requests[0].RequestedEvidence[0].Path = "not-retained.go"
 			case "budget":
 				limit, wantLimit = 0, "budget_exhausted"
+			case "oversized_source":
+				wantLimit = "budget_exhausted"
+			case "oversized_metadata":
+				requests[0].Description = strings.Repeat("x", defaultMaxReviewInputTokens)
+				wantLimit = "budget_exhausted"
 			}
 			root := t.TempDir()
 			result, err := materializeReviewSupplement(t.Context(), root, producer, scopeAttestation{}, frozenSupplementRequests{Round: 1, Requests: requests}, limit)

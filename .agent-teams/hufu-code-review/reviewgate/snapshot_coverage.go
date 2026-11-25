@@ -97,7 +97,7 @@ func verifySnapshotCoverage(current sourceSession, coverage snapshotCoverage, re
 			if !equalJSON(encoded, bound) {
 				return &sourceReviewError{cause: fmt.Errorf("task %s substituted /snapshot_coverage", item.ID)}
 			}
-			if _, err := readSnapshotArtifact(item.Workspace, summary.Inventory); err != nil {
+			if _, err := readSnapshotArtifact(current.ArtifactDataDirectory, summary.Inventory); err != nil {
 				return &sourceReviewError{cause: fmt.Errorf("task %s: /snapshot_coverage/inventory %s: %w", item.ID, summary.Inventory.ID, err)}
 			}
 		}
@@ -220,7 +220,7 @@ func acceptedSnapshotScope(current sourceSession) (*snapshotAttestation, error) 
 			return nil, fmt.Errorf("snapshot producer lacks current accepted identity")
 		}
 		if candidate.Snapshot != nil && candidate.Snapshot.Inventory != nil {
-			if err := loadSnapshotInventory(item.Workspace, candidate.Snapshot); err != nil {
+			if err := loadSnapshotInventory(current.ArtifactDataDirectory, candidate.Snapshot); err != nil {
 				return nil, err
 			}
 		} else if candidate.Snapshot != nil && candidate.Snapshot.Plan != nil {
@@ -231,14 +231,13 @@ func acceptedSnapshotScope(current sourceSession) (*snapshotAttestation, error) 
 	return scope, nil
 }
 
-// The workspace is supplied by ActionSources from the verified producer's
-// original receipt, including runtime-admitted recovery origins.
-func loadSnapshotInventory(workspace string, summary *snapshotIdentity) error {
+// The producer's accepted receipt pins an inventory in the runtime CAS.
+func loadSnapshotInventory(artifactDataDirectory string, summary *snapshotIdentity) error {
 	ref := summary.Inventory
 	if len(summary.Files) != 0 || summary.Plan != nil || ref.Kind != "repository_snapshot_inventory" {
 		return fmt.Errorf("invalid snapshot inventory reference")
 	}
-	data, err := readSnapshotArtifact(workspace, *ref)
+	data, err := readSnapshotArtifact(artifactDataDirectory, *ref)
 	if err != nil {
 		return err
 	}
@@ -254,26 +253,22 @@ func loadSnapshotInventory(workspace string, summary *snapshotIdentity) error {
 	return nil
 }
 
-func readSnapshotArtifact(workspace string, ref snapshotInventoryReference) ([]byte, error) {
-	if workspace == "" || len(ref.SHA256) != 64 || ref.ID != "sha256-"+ref.SHA256 || ref.Bytes < 1 || ref.Bytes > maxSnapshotArtifactBytes {
+func readSnapshotArtifact(artifactDataDirectory string, ref snapshotInventoryReference) ([]byte, error) {
+	if artifactDataDirectory == "" || len(ref.SHA256) != 64 || ref.ID != "sha256-"+ref.SHA256 || ref.Bytes < 1 || ref.Bytes > maxSnapshotArtifactBytes {
 		return nil, fmt.Errorf("invalid snapshot artifact reference")
 	}
-	if ref.Path == "" || filepath.IsAbs(ref.Path) || strings.Contains(ref.Path, "\\") {
-		return nil, fmt.Errorf("invalid snapshot artifact path")
+	if _, err := hex.DecodeString(ref.SHA256); err != nil {
+		return nil, fmt.Errorf("invalid snapshot artifact digest: %w", err)
 	}
-	root, err := filepath.EvalSymlinks(workspace)
+	name := filepath.Join(artifactDataDirectory, ref.ID)
+	info, err := os.Lstat(name)
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := filepath.EvalSymlinks(filepath.Join(root, ref.Path))
-	if err != nil {
-		return nil, err
+	if !info.Mode().IsRegular() || info.Size() != ref.Bytes {
+		return nil, fmt.Errorf("invalid verified snapshot artifact file")
 	}
-	rel, err := filepath.Rel(root, resolved)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return nil, fmt.Errorf("snapshot artifact escapes producer workspace")
-	}
-	file, err := os.Open(resolved)
+	file, err := os.Open(name)
 	if err != nil {
 		return nil, fmt.Errorf("read snapshot artifact: %w", err)
 	}
@@ -346,6 +341,10 @@ func checkedSnapshotReviews(current sourceSession, identity *snapshotIdentity, f
 			return nil, nil, err
 		}
 		if err := verifyReview(item, review); err != nil {
+			return nil, nil, err
+		}
+		review, err = resolveDraftLocations(current, item, review)
+		if err != nil {
 			return nil, nil, err
 		}
 		if page != nil {

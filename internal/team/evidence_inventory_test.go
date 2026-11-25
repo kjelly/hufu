@@ -131,7 +131,7 @@ func TestHufuCodeReviewInventoryDispatch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rows, err := c.expandFanOutTasks(bound)
+			rows, err := c.expandFanOutTasks(t.Context(), bound)
 			if scenario.want != "" {
 				if err == nil || !strings.Contains(err.Error(), scenario.want) {
 					t.Fatalf("expected %q, got %v", scenario.want, err)
@@ -143,7 +143,7 @@ func TestHufuCodeReviewInventoryDispatch(t *testing.T) {
 			}
 			synth := c.inventoryContract("synthesize-review")
 			if len(rows) == 0 {
-				ids, _, err := c.inventoryFanIn(synth.EvidenceInventory)
+				ids, _, err := c.inventoryFanIn(t.Context(), synth.EvidenceInventory)
 				if err != nil || !slices.Equal(ids, all) {
 					t.Fatalf("empty required list blocked synthesis: %v %v", ids, err)
 				}
@@ -153,7 +153,7 @@ func TestHufuCodeReviewInventoryDispatch(t *testing.T) {
 				!slices.Equal(rows[1].OrderAfter, []int{0}) || rows[0].EvidenceInventoryBinding.OutputsHash != fixture.ExecutionReceipt.RuntimeOutputsHash {
 				t.Fatalf("wrong inventory ordering or binding: %+v", rows)
 			}
-			if _, _, err := c.inventoryFanIn(synth.EvidenceInventory); err == nil || !strings.Contains(err.Error(), "has no accepted critic-review child") {
+			if _, _, err := c.inventoryFanIn(t.Context(), synth.EvidenceInventory); err == nil || !strings.Contains(err.Error(), "has no accepted critic-review child") {
 				t.Fatalf("missing critiqued source did not block synthesis: %v", err)
 			}
 		})
@@ -389,7 +389,7 @@ func runInventoryWorkflow(t *testing.T, scenario string) {
 		t.Fatal("re-dispatch changed a settled child or duplicated the expansion")
 	}
 	if failCritique {
-		if _, _, err := c.inventoryFanIn(synth.EvidenceInventory); err == nil || !strings.Contains(err.Error(), "has no accepted critique child") {
+		if _, _, err := c.inventoryFanIn(t.Context(), synth.EvidenceInventory); err == nil || !strings.Contains(err.Error(), "has no accepted critique child") {
 			t.Fatalf("report evidence was assembled after the first critique failed: %v", err)
 		}
 		if c.phaseWorkflow.requireFinished() == nil {
@@ -692,9 +692,7 @@ func startInventoryWorkflow(t *testing.T, session *TeamSession, source *ResumeSo
 		id, _ := ctx.Value(todoIDKey{}).(string)
 		item := todoItemByID(c.taskTracker.TodoList().Items(), id)
 		*calls = append(*calls, item.ContractID)
-		submit := func(body string) (fantasy.ToolResponse, error) {
-			return (&submitResultTool{coordinator: c, todoID: id}).Run(ctx, fantasy.ToolCall{ID: "fixture-result", Name: submitResultToolName, Input: body})
-		}
+		tool := &submitResultTool{coordinator: c, todoID: id}
 		body := `{"status":"success","summary":"checked","structured_payload":{}}`
 		if item.ContractID == "synthesize" {
 			for _, override := range []string{
@@ -702,14 +700,15 @@ func startInventoryWorkflow(t *testing.T, session *TeamSession, source *ResumeSo
 				`{"structured_payload":{"details":"frozen evidence","coverage":"complete"}}`,
 				`{"structured_payload":{"details":"frozen evidence","audited":true}}`,
 			} {
-				response, err := submit(override)
+				// Probe claim validation without consuming the real model turn.
+				response, err := tool.runFull(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: override})
 				if err == nil && !response.IsError {
 					return nil, fmt.Errorf("accepted an override: %s", override)
 				}
 			}
 			body = `{"structured_payload":{"details":"frozen evidence"}}`
 		}
-		response, err := submit(body)
+		response, err := tool.Run(ctx, fantasy.ToolCall{ID: "fixture-result", Name: submitResultToolName, Input: body})
 		if err != nil || response.IsError {
 			return nil, fmt.Errorf("submit %s: %s (%v)", item.ContractID, response.Content, err)
 		}

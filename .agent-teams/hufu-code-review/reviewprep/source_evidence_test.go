@@ -201,6 +201,36 @@ func TestLargePrimarySourcePartitionsPreserveCompleteCoverageAndDependencies(t *
 	}
 }
 
+func TestSourcePartitionRecordsSyntaxFromCompleteGoFile(t *testing.T) {
+	root := t.TempDir()
+	const name = "nested.go"
+	const statement = "\t\treturn 42"
+	const source = "package fixture\nfunc target() int {\n\tif true {\n" +
+		"\t\t// The partition starts inside a nested statement body.\n" +
+		"\t\t// A comment must never become a syntax anchor.\n" +
+		statement + "\n\t}\n\treturn 0\n}\n"
+	writeFile(t, filepath.Join(root, name), source)
+	snapshot := &reviewSourceSnapshot{root: root, revision: "frozen"}
+	current := &batch{paths: []string{name}}
+	_, right, err := splitPrimarySource(current, snapshot)
+	if err != nil || right == nil {
+		t.Fatalf("split source: %v", err)
+	}
+	bundle, evidence, err := snapshot.bundleDataWithScopes("right", right.paths, right.sourceScopes, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inventory evidenceInventory
+	if err := json.Unmarshal(evidence, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	span := inventory.Sources[0].AvailableSpans[0]
+	if span.StartLine <= 2 || span.FirstFullLine > 7 || span.LastFullLine != 9 ||
+		!bytes.Contains(bundle[span.BundleStart:span.BundleEnd], []byte(statement)) || !slices.Equal(span.GoSyntaxLines, []int{6, 8}) {
+		t.Fatalf("clipped source anchors = %+v", span)
+	}
+}
+
 func TestEvidenceInventoryUTF8TruncationEmptyAndUnavailable(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "unicode.txt"), "世界\n")
@@ -224,14 +254,14 @@ func TestEvidenceInventoryUTF8TruncationEmptyAndUnavailable(t *testing.T) {
 	}
 }
 
-func TestRelatedPathCapRetainsOmittedDependencyInventory(t *testing.T) {
+func TestRelatedPathCapReportsOmittedCandidates(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "target.go"), "package sample\nfunc Target() {}\n")
 	for index := range maxSnapshotRelatedPaths + 2 {
 		writeFile(t, filepath.Join(root, fmt.Sprintf("caller%02d.go", index)), fmt.Sprintf("package sample\nfunc Caller%d() { Target() }\n", index))
 	}
 	snapshot := &reviewSourceSnapshot{root: root, revision: "frozen"}
-	_, data, err := snapshot.bundleDataWithScopes("unit", []string{"target.go"}, nil, 64*1024)
+	bundle, data, err := snapshot.bundleDataWithScopes("unit", []string{"target.go"}, nil, 64*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,13 +269,8 @@ func TestRelatedPathCapRetainsOmittedDependencyInventory(t *testing.T) {
 	if err := json.Unmarshal(data, &inventory); err != nil {
 		t.Fatal(err)
 	}
-	if len(inventory.Sources) != maxSnapshotRelatedPaths+3 {
-		t.Fatal("related path cap silently discarded dependency identities")
-	}
-	for _, row := range inventory.Sources[maxSnapshotRelatedPaths+1:] {
-		if !row.Omitted || !row.Truncated || row.ByteSize == 0 || row.SHA256 == "" || len(row.RequiredScopes) != 1 || len(row.AvailableSpans) != 0 {
-			t.Fatalf("omitted dependency is not recoverable by frozen source identity: %#v", row)
-		}
+	if len(inventory.Sources) != maxSnapshotRelatedPaths+1 || !bytes.Contains(bundle, []byte("related_candidates_outside_workset: 2")) {
+		t.Fatal("candidate cap did not preserve the workset limitation")
 	}
 }
 
@@ -354,15 +379,12 @@ func TestLargeDependencyInventoryDoesNotDuplicateOmittedMetadata(t *testing.T) {
 	if err = json.Unmarshal(data, &inventory); err != nil {
 		t.Fatal(err)
 	}
-	if len(inventory.Sources) != 1001 {
-		t.Fatalf("lost dependency inventory: %d", len(inventory.Sources))
+	if len(inventory.Sources) != maxSnapshotRelatedPaths+1 || !bytes.Contains(source, []byte("related_candidates_outside_workset: 984")) {
+		t.Fatalf("uncapped or undisclosed candidate inventory: %d", len(inventory.Sources))
 	}
-	for i, row := range inventory.Sources {
+	for _, row := range inventory.Sources {
 		if row.SHA256 == "" || row.ByteSize == 0 || len(row.RequiredScopes) != 1 {
 			t.Fatalf("lost source identity: %#v", row)
-		}
-		if i > maxSnapshotRelatedPaths && (!row.Omitted || len(row.AvailableSpans) != 0) {
-			t.Fatalf("omitted evidence misrepresented: %#v", row)
 		}
 		for _, span := range row.AvailableSpans {
 			if span.BundleEnd > int64(len(source)) {

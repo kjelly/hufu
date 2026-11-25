@@ -2,7 +2,9 @@ package team
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -17,7 +19,7 @@ import (
 func TestHufuCodeReviewRuntimeOwnsAll51GapIdentities(t *testing.T) {
 	t.Parallel()
 	session := loadHufuCodeReviewTeam(t)
-	c := newBudgetCoordinator(t)
+	c := newTestCoordinator(t)
 	c.session.ResultContracts = session.ResultContracts
 	sourceSchema := hufuCodeReviewLegacySchema(t, session, "schemas/review-v1.json")
 	reportSchema := hufuCodeReviewLegacySchema(t, session, "schemas/report-v2.json")
@@ -45,7 +47,7 @@ func TestHufuCodeReviewRuntimeOwnsAll51GapIdentities(t *testing.T) {
 			t.Fatal(err)
 		}
 		ref := schema.ref(true)
-		source := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", ResultContract: &ref, WorksetBinding: &WorksetBinding{Bindings: map[string]string{"reference_candidate_ids": "[]"}}}})[0]
+		source := seedReviewSourceWorkset(t, c, TodoSpec{Agent: "reviewer", ResultContract: &ref}, key, "head", lens)
 		payload, err := validateStructuredResultPayload(schema, ref, raw)
 		if err != nil {
 			t.Fatal(err)
@@ -97,7 +99,26 @@ func TestHufuCodeReviewRuntimeOwnsAll51GapIdentities(t *testing.T) {
 	if payload, rejection := c.structuredPayloadForSubmission(item.ID, raw); payload != nil || !strings.Contains(rejection, "exactly 51") {
 		t.Fatalf("52nd gap was not rejected before publication: %s", rejection)
 	}
+	decisions["invented_gap_2"] = map[string]any{"status": "resolved_cross_workset", "resolving_task_id": "foreign", "evidence": []any{"sha256-" + strings.Repeat("a", 64)}}
+	raw, err = json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload, err, repairable := c.validateStructuredPayloadClaims(t.Context(), item.ID, raw, false); payload != nil || err == nil || repairable || !strings.Contains(err.Error(), "foreign") {
+		t.Fatalf("foreign producer in an extra row was not independently rejected: %v (repairable=%t)", err, repairable)
+	}
 	delete(decisions, "invented_gap_2")
+	firstKey := plans[0].rows[0].Key
+	firstDecision := decisions[firstKey]
+	delete(decisions, firstKey)
+	raw, err = json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload, err, repairable := c.validateStructuredPayloadClaims(t.Context(), item.ID, raw, false); payload != nil || err == nil || !repairable || !strings.Contains(err.Error(), "exactly 51") {
+		t.Fatalf("missing model decision lost its shape diagnostic: %v (repairable=%t)", err, repairable)
+	}
+	decisions[firstKey] = firstDecision
 	raw, err = json.Marshal(report)
 	if err != nil {
 		t.Fatal(err)
@@ -153,9 +174,8 @@ func TestHufuCodeReviewEmptyCritiqueOwnsSource(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			session := loadHufuCodeReviewTeam(t)
-			c := newBudgetCoordinator(t)
+			c := newTestCoordinator(t)
 			c.session.ResultContracts = session.ResultContracts
-			c.session.Workspace = t.TempDir()
 			store, err := NewEventStore(c.session.Workspace, "empty-critique", "session")
 			if err != nil {
 				t.Fatal(err)
@@ -166,13 +186,13 @@ func TestHufuCodeReviewEmptyCritiqueOwnsSource(t *testing.T) {
 			sourceSchema := hufuCodeReviewLegacySchema(t, session, tc.schema)
 			criticSchema := hufuCodeReviewLegacySchema(t, session, "schemas/critique-v2.json")
 			sourceRef, criticRef := sourceSchema.ref(true), criticSchema.ref(true)
-			source := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", ResultContract: &sourceRef, WorksetBinding: &WorksetBinding{Bindings: map[string]string{"reference_candidate_ids": "[]"}}}})[0]
+			sourceSpec := TodoSpec{Agent: "reviewer", ResultContract: &sourceRef}
 			if tc.name == "documentation" {
 				// Match the source identity in the native final-audit fixture.
-				source.ID = "13"
-				source.ContractID = "review-documentation-workset"
-				c.taskTracker.TodoList().Restore([]*TodoItem{source})
+				c.taskTracker.TodoList().advanceIDFloor(12)
+				sourceSpec.ContractID = "review-documentation-workset"
 			}
+			source := seedReviewSourceWorkset(t, c, sourceSpec, tc.key, "frozen-head", tc.lens)
 			raw := fmt.Appendf(nil, `{"record":{"kind":"review","review_revision":"frozen-head","workset_key":%q,"lens":%q,"findings":[],"gaps":[],"invariant_assessments":[],"reference_assessments":[]}}`, tc.key, tc.lens)
 			payload, err := validateStructuredResultPayload(sourceSchema, sourceRef, raw)
 			if err != nil {
@@ -299,7 +319,7 @@ func TestHufuCodeReviewEmptyCritiqueOwnsSource(t *testing.T) {
 			if err := json.Unmarshal(encoded, &restored); err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Equal(restored.Value, reportPayload.Value) || restored.SHA256 != reportPayload.SHA256 || c.validateSubmittedEvidenceInputs(reportItem.ID, &restored) != nil {
+			if !bytes.Equal(restored.Value, reportPayload.Value) || restored.SHA256 != reportPayload.SHA256 || c.validateSubmittedEvidenceInputs(t.Context(), reportItem.ID, &restored) != nil {
 				t.Fatal("complete report receipts did not survive persistence/replay")
 			}
 			reportInputs := canonical["input_review"].([]any)
@@ -315,7 +335,6 @@ func TestHufuCodeReviewEmptyCritiqueOwnsSource(t *testing.T) {
 func bindHufuCodeReviewReceiptFixture(t *testing.T, c *Coordinator, report map[string]any, outcomes ...[]any) map[string]any {
 	t.Helper()
 	baseline, template := runtimeOutputRefFixture(t)
-	c.executionRunID = baseline.executionRunID
 	c.sessionData = baseline.sessionData
 	c.session.RunInputDefinitions = baseline.session.RunInputDefinitions
 	test := report["test_verification"].(map[string]any)
@@ -343,7 +362,7 @@ func bindHufuCodeReviewReceiptFixture(t *testing.T, c *Coordinator, report map[s
 		item.TypedResult = result
 		result.TaskID = id
 		receipt := *template.ExecutionReceipt
-		receipt.TaskID = id
+		receipt.TaskID, receipt.RunID = id, c.executionRunID
 		item.ExecutionReceipt = &receipt
 		output := field
 		if field == "test_verification" {
@@ -371,7 +390,7 @@ func TestHufuCodeReviewCriticSubmitsOnlyDecisionsForAllFindings(t *testing.T) {
 	for _, route := range []string{"local", "external"} {
 		t.Run(route, func(t *testing.T) {
 			session := loadHufuCodeReviewTeam(t)
-			c := newBudgetCoordinator(t)
+			c := newTestCoordinator(t)
 			c.session.ResultContracts = session.ResultContracts
 			sourceSchema := hufuCodeReviewLegacySchema(t, session, "schemas/review-v1.json")
 			// The active team uses v3 bound decisions. Retain v1 submission
@@ -391,7 +410,7 @@ func TestHufuCodeReviewCriticSubmitsOnlyDecisionsForAllFindings(t *testing.T) {
 				t.Fatal(err)
 			}
 			sourceRef := sourceSchema.ref(true)
-			source := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", ResultContract: &sourceRef, WorksetBinding: &WorksetBinding{Bindings: map[string]string{"reference_candidate_ids": "[]"}}}})[0]
+			source := seedReviewSourceWorkset(t, c, TodoSpec{Agent: "reviewer", ResultContract: &sourceRef}, "supplement-0002", "head", "general", "file.go")
 			sourcePayload, err := validateStructuredResultPayload(sourceSchema, sourceRef, raw)
 			if err != nil {
 				t.Fatal(err)
@@ -450,7 +469,7 @@ func TestHufuCodeReviewCriticSubmitsOnlyDecisionsForAllFindings(t *testing.T) {
 			if rejection != "" {
 				t.Fatal(rejection)
 			}
-			if err := c.validateSubmittedEvidenceInputs(item.ID, payload); err != nil {
+			if err := c.validateSubmittedEvidenceInputs(t.Context(), item.ID, payload); err != nil {
 				t.Fatal(err)
 			}
 			value, err := decodeResultContractJSON(payload.Value)
@@ -468,7 +487,7 @@ func TestHufuCodeReviewCriticSubmitsOnlyDecisionsForAllFindings(t *testing.T) {
 					t.Fatal("runtime did not preserve ascending finding indices")
 				}
 			}
-			record["review_revision"] = "replacement"
+			findings[0].(map[string]any)["summary"] = "replacement"
 			raw, err = json.Marshal(map[string]any{"record": record})
 			if err != nil {
 				t.Fatal(err)
@@ -477,7 +496,7 @@ func TestHufuCodeReviewCriticSubmitsOnlyDecisionsForAllFindings(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if c.validateSubmittedEvidenceInputs(item.ID, payload) == nil {
+			if c.validateSubmittedEvidenceInputs(t.Context(), item.ID, payload) == nil {
 				t.Fatal("old accepted result survived source replacement")
 			}
 			if _, rejection := submit(); rejection == "" {
@@ -509,7 +528,11 @@ func TestHufuCodeReviewContractSourcesReachCritiqueAndReport(t *testing.T) {
 				}
 				findings := make([]any, count)
 				for i := range count {
-					findings[i] = map[string]any{"summary": fmt.Sprintf("finding %d", i), "detail": "bounded observation", "severity": "info", "location": "doc.md:1", "evidence": []any{"sha256-" + strings.Repeat("a", 64)}, "requires_critique": false}
+					finding := map[string]any{"summary": fmt.Sprintf("finding %d", i), "detail": "bounded observation", "severity": "info", "location": "doc.md:1", "evidence": []any{"sha256-" + strings.Repeat("a", 64)}, "requires_critique": false}
+					if task.ID == "review-primary-workset" || task.ID == "review-supplement-workset" {
+						finding["location"], finding["source_excerpt"] = "./source.go: 2", "func Value() int { return 1 }"
+					}
+					findings[i] = finding
 				}
 				record := map[string]any{"findings": findings, "gaps": []any{map[string]any{"description": "bounded review", "missing_evidence": "caller", "kind": "semantic_uncertainty", "requested_evidence": []any{}, "limitations": []any{}}}, "invariant_assessments": []any{}, "reference_assessments": []any{}}
 				claims := map[string]any{"record": record}
@@ -554,6 +577,123 @@ func TestHufuCodeReviewContractSourcesReachCritiqueAndReport(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestHufuCodeReviewAuthenticatesReferencesWithInvalidGapStatus(t *testing.T) {
+	schema := loadHufuCodeReviewTeam(t).ResultContracts["schemas/report-v3.json"]
+	const sourceValue = `{"record":{"kind":"review"}}`
+	artifact := "sha256-" + strings.Repeat("a", 64)
+	sources := []TaskResult{{
+		TaskID: "other-review", Status: TaskResultStatusSuccess,
+		StructuredPayload: &ResultPayload{Value: []byte(sourceValue), SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(sourceValue)))},
+		FilesRead:         []FileRef{{Path: artifact}},
+	}}
+	const key = "gap-1"
+	plans := []resultFixedCollectionPlan{{
+		spec: schema.fixedCollections[0],
+		rows: []resultFixedCollectionRow{{Key: key, Fixed: map[string]any{"source_task_id": "original", "gap_index": 0}}},
+	}}
+	t.Run("missing model decision", func(t *testing.T) {
+		wire := []byte(`{"gap_resolutions":{}}`)
+		_, _, err := assembleResultFixedCollections(wire, plans)
+		if _, shape := errors.AsType[*resultBindingShapeError](err); !shape || !strings.Contains(err.Error(), "exactly 1") {
+			t.Fatalf("missing frozen row lost its repair diagnostic: %v", err)
+		}
+		value, err := decodeUniqueJSON(wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := projectFixedCollectionSourceRows(value, plans); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateResultEvidenceReferences(value, schema.evidenceReferences, []string{"original", "other-review"}, sources, nil); err != nil {
+			t.Fatalf("no readable rows claimed a source: %v", err)
+		}
+	})
+	for _, tc := range []struct {
+		name, status, producer string
+		evidence               []string
+		want                   RepairFailureReason
+	}{
+		{"retained", "retained", "", nil, ""},
+		{"resolved with accepted evidence", "resolved_cross_workset", "other-review", []string{artifact}, ""},
+		{"invalid status with accepted evidence", "unknown", "other-review", []string{artifact}, RepairFailureInvalidSchema},
+		{"invalid status with foreign producer", "unknown", "foreign", []string{artifact}, RepairFailureSource},
+		{"resolved with foreign producer", "resolved_cross_workset", "foreign", []string{artifact}, RepairFailureSource},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire, err := json.Marshal(map[string]any{
+				"gap_resolutions": map[string]any{
+					key: map[string]any{"status": tc.status, "resolving_task_id": tc.producer, "evidence": tc.evidence},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assembled, _, err := assembleResultFixedCollections(wire, plans)
+			if err != nil {
+				t.Fatal(err)
+			}
+			value, err := decodeUniqueJSON(assembled)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = validateResultEvidenceReferences(value, schema.evidenceReferences, []string{"original", "other-review"}, sources, nil)
+			var got RepairFailureReason
+			if err != nil {
+				got = RepairFailureSource
+				if _, shape := errors.AsType[*resultEvidenceReferenceShapeError](err); shape {
+					got = RepairFailureInvalidSchema
+				}
+			}
+			if got != tc.want {
+				t.Fatalf("classification = %q, want %q: %v", got, tc.want, err)
+			}
+		})
+	}
+}
+
+func TestResultEvidenceReferenceConditionUsesComposedSchema(t *testing.T) {
+	const template = `{"$defs":{"text":{"type":"string"}},"type":"object","properties":{"rows":{"type":"array","items":{"type":"object","properties":{"status":%s,"producer":{"type":"string"},"paths":{"type":"array","items":{"type":"string"}}}%s}%s}},"x-hufu-evidence-references":{"items_pointer":"/rows","task_id_pointer":"/producer","references_pointer":"/paths","when":{"pointer":"/status","value":"active"}}}`
+	const source = `{"verified":true}`
+	sources := []TaskResult{{TaskID: "accepted", Status: TaskResultStatusSuccess,
+		StructuredPayload: &ResultPayload{Value: []byte(source), SHA256: sha256HexBytes([]byte(source))},
+		FilesRead:         []FileRef{{Path: "source.go"}},
+	}}
+	for _, tc := range []struct{ name, field, itemSibling, arraySibling string }{
+		{"allOf row", `{"type":"string"}`, `,"allOf":[{"properties":{"status":{"enum":["active","inactive"]}}}]`, ""},
+		{"ref with sibling enum", `{"$ref":"#/$defs/text","enum":["active","inactive"]}`, "", ""},
+		{"array contains", `{"type":"string"}`, "", `,"contains":{"properties":{"status":{"const":"unknown"}}},"minContains":0,"maxContains":0`},
+		{"conditional rejection", `{"type":"string"}`, `,"if":{"properties":{"status":{"const":"unknown"}}},"then":false`, ""},
+		{"conditional property name", `{"type":"string"}`, `,"if":{"properties":{"status":{"const":"unknown"}}},"then":{"propertyNames":{"not":{"const":"status"}}}`, ""},
+		{"conditional disallowed property", `{"type":"string"}`, `,"if":{"properties":{"status":{"const":"unknown"}}},"then":{"properties":{"producer":true,"paths":true},"additionalProperties":false}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			compiled := compileFixtureJSONSchema(t, "composed-condition", fmt.Sprintf(template, tc.field, tc.itemSibling, tc.arraySibling))
+			for _, proof := range []struct {
+				status, producer string
+				want             RepairFailureReason
+			}{
+				{"inactive", "foreign", ""},
+				{"active", "accepted", ""},
+				{"unknown", "accepted", RepairFailureInvalidSchema},
+				{"unknown", "foreign", RepairFailureSource},
+			} {
+				row := map[string]any{"status": proof.status, "producer": proof.producer, "paths": []any{"source.go"}}
+				err := validateResultEvidenceReferences(map[string]any{"rows": []any{row}}, compiled.evidenceReferences, []string{"accepted"}, sources, nil)
+				var got RepairFailureReason
+				if err != nil {
+					got = RepairFailureSource
+					if _, shape := errors.AsType[*resultEvidenceReferenceShapeError](err); shape {
+						got = RepairFailureInvalidSchema
+					}
+				}
+				if got != proof.want {
+					t.Fatalf("%s / %s: got %q, want %q (%v)", proof.status, proof.producer, got, proof.want, err)
+				}
+			}
+		})
 	}
 }
 

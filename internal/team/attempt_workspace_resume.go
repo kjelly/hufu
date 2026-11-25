@@ -33,9 +33,9 @@ type attemptWorldRecord struct {
 	BaselineDigest    string
 	DeltaDigest       string
 	State             string
-	// ApplyStarted is the attempt_workspace_apply_started payload, which
-	// carries the verified result the task completes with.
-	ApplyStarted json.RawMessage
+	// ApplyStarted carries the verified result and its journal identity.
+	ApplyStarted RunEvent
+	Applied      RunEvent
 	// order is the index of the world's prepared event, for choosing the
 	// latest world of a task.
 	order int
@@ -88,7 +88,10 @@ func attemptWorldRecordsFromEvents(events []RunEvent) map[string]*attemptWorldRe
 		}
 		if state == attemptWorldStateApplying {
 			record.DeltaDigest = payload.DeltaDigest
-			record.ApplyStarted = append(json.RawMessage(nil), event.Payload...)
+			record.ApplyStarted = event
+		}
+		if state == attemptWorldStateApplied {
+			record.Applied = event
 		}
 		record.State = state
 	}
@@ -112,14 +115,22 @@ func (c *Coordinator) reopenIsolatedRepairWorld(ctx context.Context, item *TodoI
 	if err != nil {
 		return nil, fmt.Errorf("read attempt world events: %w", err)
 	}
+	visible := c.currentBranchEventIDs(events)
 	var latest *attemptWorldRecord
 	for _, record := range attemptWorldRecordsFromEvents(events) {
-		if record.TaskID == item.ID && (latest == nil || record.order > latest.order) {
+		if record.TaskID == item.ID && visible[record.PreparedEventID] && (latest == nil || record.order > latest.order) {
 			latest = record
 		}
 	}
 	if latest == nil || latest.OccurrenceAttempt != item.Retries+1 {
 		return nil, nil
+	}
+	normalized := normalizedDirectContinuationReceipt(item) || isNormalizedVerificationPending(item)
+	if normalized {
+		receipt := item.ExecutionReceipt
+		if receipt == nil || receipt.ExecutionWorldID != latest.WorldID || receipt.RunID != latest.RunID {
+			return nil, errors.New("normalization receipt does not identify the original isolated attempt world")
+		}
 	}
 	switch latest.State {
 	case attemptWorldStatePrepared:
@@ -131,6 +142,9 @@ func (c *Coordinator) reopenIsolatedRepairWorld(ctx context.Context, item *TodoI
 	world := NewIsolatedCopyExecutionWorld()
 	prepared, owner, err := world.Load(c.attemptWorldDirFor(latest.WorldID), latest.BaselineDigest)
 	if err != nil {
+		if normalized {
+			return nil, err
+		}
 		log.Printf("warning: attempt world %s of task %s cannot be reopened: %v", latest.WorldID, item.ID, err)
 		return nil, nil
 	}
@@ -170,6 +184,17 @@ func (c *Coordinator) redispatchIsolatedTask(ctx context.Context, task TaskDef, 
 // and applies that world; without it, the task is re-dispatched.
 func (c *Coordinator) resumeIsolatedProtocolRepair(ctx context.Context, task TaskDef, item *TodoItem) (context.Context, *isolatedAttempt, string, bool, error) {
 	attempt, err := c.reopenIsolatedRepairWorld(ctx, item)
+	if normalizedDirectContinuationReceipt(item) || isNormalizedVerificationPending(item) {
+		if err == nil && attempt == nil {
+			err = errors.New("cannot settle sealed normalization: the original isolated attempt world is unavailable")
+		}
+		if errors.Is(err, errIsolatedApplyPending) {
+			return ctx, nil, "", true, rejectLocalResultPersistence(err)
+		}
+		if err != nil {
+			return ctx, nil, "", true, c.settleNormalizedRecoveryRead(item, task, rejectNormalizationRecoveryRead(err))
+		}
+	}
 	if err != nil {
 		detail := c.FailureDetail(err, FailureSourceError)
 		c.PersistFailureWithClassAndStatusAndOutput(item.Agent, task.Goal, item.ID, detail, NeedsHuman, FailureExecution, TaskBlocked, item.Output)
@@ -180,6 +205,12 @@ func (c *Coordinator) resumeIsolatedProtocolRepair(ctx context.Context, task Tas
 		return ctx, nil, output, true, err
 	}
 	return c.withIsolatedAttempt(ctx, attempt), attempt, "", false, nil
+}
+
+func retainIsolatedNormalization(attempt *isolatedAttempt, sealed bool) {
+	if attempt != nil && sealed && attempt.state == isolatedAttemptPrepared {
+		attempt.state = isolatedAttemptRetained
+	}
 }
 
 // applyIsolatedProtocolRepair applies the repaired attempt's world before
@@ -200,8 +231,15 @@ func (c *Coordinator) applyIsolatedProtocolRepair(ctx context.Context, item *Tod
 	if err == nil {
 		return false, "", nil
 	}
+	if localResultRejectionReason(err) == RepairFailureCommit {
+		return true, "", err
+	}
+	if localResultRejectionReason(err) == RepairFailureSource {
+		return true, "", c.settleNormalizedRecoveryRead(c.todoItemByID(item.ID), task, err)
+	}
 	var conflict *AttemptWorkspaceConflictError
-	if errors.As(err, &conflict) && !isAttemptWorkspaceApplyIncomplete(err) {
+	if errors.As(err, &conflict) && !isAttemptWorkspaceApplyIncomplete(err) && !normalizedDirectContinuationReceipt(item) &&
+		!isNormalizedVerificationPending(item) && !isCommittedNormalizedCollection(item) {
 		redispatched, redispatchErr := c.redispatchIsolatedTask(ctx, task, item, conflict.Error())
 		return true, redispatched, redispatchErr
 	}

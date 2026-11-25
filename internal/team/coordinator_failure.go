@@ -229,6 +229,11 @@ func (c *Coordinator) terminalizeTaskErrorIfUnresolved(todoID string, err error,
 	if item.Status != TaskInProgress && item.Status != TaskVerifying {
 		return
 	}
+	if localResultRejectionReason(err) == RepairFailureCommit && (isCommittedNormalizedCollection(item) ||
+		returnedCollectionCanResume(item, err) || isNormalizedVerificationPending(item) || canResumeDirectNormalization(item) ||
+		normalizedWorkerVerificationHandoff(item.ResultContract, item.ExecutionReceipt, item.TypedResult)) {
+		return
+	}
 	status := TaskError
 	class := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err})
 	disposition := RetryNone

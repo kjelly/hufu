@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -39,7 +40,7 @@ func TestCharacterizationFanOutExpandsGenericWorkset(t *testing.T) {
 	writeCharacterizationWorkset(t, workspace, characterizationWorksetItems)
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
 
-	expanded, err := c.expandFanOutTasks([]TaskDef{{
+	expanded, err := c.expandFanOutTasks(t.Context(), []TaskDef{{
 		Agent:  "worker",
 		FanOut: &FanOutSpec{Source: "inputs/items.tsv", GoalTemplate: "process {item}"},
 	}})
@@ -65,7 +66,7 @@ func TestCharacterizationFanOutPermitsMissingItem(t *testing.T) {
 	writeCharacterizationWorkset(t, workspace, []string{"alpha", "beta"})
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
 
-	expanded, err := c.expandFanOutTasks([]TaskDef{{
+	expanded, err := c.expandFanOutTasks(t.Context(), []TaskDef{{
 		Agent:  "worker",
 		FanOut: &FanOutSpec{Source: "inputs/items.tsv", GoalTemplate: "process {item}"},
 	}})
@@ -93,7 +94,7 @@ func TestCharacterizationFanOutPermitsDuplicateItem(t *testing.T) {
 	writeCharacterizationWorkset(t, workspace, []string{"alpha", "beta", "beta"})
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
 
-	expanded, err := c.expandFanOutTasks([]TaskDef{{
+	expanded, err := c.expandFanOutTasks(t.Context(), []TaskDef{{
 		Agent:  "worker",
 		FanOut: &FanOutSpec{Source: "inputs/items.tsv", GoalTemplate: "process {item}"},
 	}})
@@ -117,14 +118,14 @@ func TestCharacterizationFanOutReReadsChangedSource(t *testing.T) {
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
 	task := TaskDef{Agent: "worker", FanOut: &FanOutSpec{Source: "inputs/items.tsv", GoalTemplate: "process {item}"}}
 
-	first, err := c.expandFanOutTasks([]TaskDef{task})
+	first, err := c.expandFanOutTasks(t.Context(), []TaskDef{task})
 	if err != nil {
 		t.Fatalf("first expansion: %v", err)
 	}
 	if err := os.WriteFile(path, []byte("item\nalpha\nbeta\ndelta\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	second, err := c.expandFanOutTasks([]TaskDef{task})
+	second, err := c.expandFanOutTasks(t.Context(), []TaskDef{task})
 	if err != nil {
 		t.Fatalf("second expansion: %v", err)
 	}
@@ -161,7 +162,7 @@ func TestExpandFanOutTasks_SubstitutesEachRow(t *testing.T) {
 		},
 	}
 
-	expanded, err := c.expandFanOutTasks(tasks)
+	expanded, err := c.expandFanOutTasks(t.Context(), tasks)
 	if err != nil {
 		t.Fatalf("expandFanOutTasks failed: %v", err)
 	}
@@ -191,12 +192,43 @@ func TestExpandFanOutTasks_NoFanOutTasksPassThroughUnchanged(t *testing.T) {
 	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir()}}
 	tasks := []TaskDef{{Agent: "a", Goal: "g1"}, {Agent: "b", Goal: "g2"}}
-	expanded, err := c.expandFanOutTasks(tasks)
+	expanded, err := c.expandFanOutTasks(t.Context(), tasks)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(expanded) != 2 || expanded[0].Goal != "g1" || expanded[1].Goal != "g2" {
 		t.Fatalf("expanded = %#v, want unchanged passthrough", expanded)
+	}
+}
+
+func TestExpandFanOutTasksPreservesSchedulingEdges(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	writeFanOutTSV(t, workspace, "records.tsv", []string{"name", "alpha", "beta"})
+	c := newTestCoordinator(t)
+	c.session.Workspace = workspace
+	tasks := []TaskDef{
+		{FanOut: &FanOutSpec{Source: "records.tsv", GoalTemplate: "{name}"}, DependsOn: []int{0}, OrderAfter: []int{0}, OnFailure: new(0)},
+		{Pipeline: true},
+		{DependsOn: []int{1}, OrderAfter: []int{0}, OnFailure: new(1)},
+	}
+	got, err := c.expandFanOutTasks(t.Context(), tasks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 || *got[0].OnFailure != 0 || *got[1].OnFailure != 1 ||
+		len(got[0].DependsOn) != 0 || len(got[1].DependsOn) != 0 || len(got[0].OrderAfter) != 0 || len(got[1].OrderAfter) != 0 ||
+		!slices.Equal(got[2].DependsOn, []int{0, 1}) ||
+		!slices.Equal(got[3].DependsOn, []int{2}) ||
+		!slices.Equal(got[3].OrderAfter, []int{0, 1}) || *got[3].OnFailure != 2 {
+		t.Fatalf("wrong expanded edges: %#v", got)
+	}
+	if !tasks[1].Pipeline || !slices.Equal(tasks[2].DependsOn, []int{1}) || *tasks[2].OnFailure != 1 {
+		t.Fatal("expansion mutated the requested edges")
+	}
+	tasks[2].OnFailure = new(0)
+	if _, err := c.expandFanOutTasks(t.Context(), tasks); err == nil {
+		t.Fatal("accepted an ambiguous failure target")
 	}
 }
 
@@ -210,7 +242,7 @@ func TestExpandFanOutTasks_UnmatchedPlaceholderFailsWholeDispatch(t *testing.T) 
 		{Agent: "other", Goal: "unrelated task"},
 		{Agent: "worker", Goal: "x", FanOut: &FanOutSpec{Source: "inputs/records.tsv", GoalTemplate: "Process {record_id} range {range_end}"}},
 	}
-	if _, err := c.expandFanOutTasks(tasks); err == nil || !strings.Contains(err.Error(), "range_end") {
+	if _, err := c.expandFanOutTasks(t.Context(), tasks); err == nil || !strings.Contains(err.Error(), "range_end") {
 		t.Fatalf("expected an error naming the unmatched placeholder, got %v", err)
 	}
 }
@@ -220,7 +252,7 @@ func TestExpandFanOutTasks_SourceEscapingWorkspaceIsRejected(t *testing.T) {
 	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir()}}
 	for _, source := range []string{"../outside.tsv", "/etc/passwd", "..", "sub/../../escape.tsv"} {
 		tasks := []TaskDef{{Agent: "a", Goal: "g", FanOut: &FanOutSpec{Source: source, GoalTemplate: "{x}"}}}
-		if _, err := c.expandFanOutTasks(tasks); err == nil {
+		if _, err := c.expandFanOutTasks(t.Context(), tasks); err == nil {
 			t.Fatalf("source %q should have been rejected as escaping the workspace", source)
 		}
 	}
@@ -230,7 +262,7 @@ func TestExpandFanOutTasks_MissingSourceFileFailsClosed(t *testing.T) {
 	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir()}}
 	tasks := []TaskDef{{Agent: "a", Goal: "g", FanOut: &FanOutSpec{Source: "does-not-exist.tsv", GoalTemplate: "{x}"}}}
-	if _, err := c.expandFanOutTasks(tasks); err == nil {
+	if _, err := c.expandFanOutTasks(t.Context(), tasks); err == nil {
 		t.Fatal("expected an error for a missing fan_out source file")
 	}
 }
@@ -244,7 +276,7 @@ func TestExpandFanOutTasks_RowFieldCountMismatchFailsClosed(t *testing.T) {
 	})
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
 	tasks := []TaskDef{{Agent: "a", Goal: "g", FanOut: &FanOutSpec{Source: "inputs/records.tsv", GoalTemplate: "{record_id}"}}}
-	if _, err := c.expandFanOutTasks(tasks); err == nil || !strings.Contains(err.Error(), "row 1") {
+	if _, err := c.expandFanOutTasks(t.Context(), tasks); err == nil || !strings.Contains(err.Error(), "row 1") {
 		t.Fatalf("expected a row-1 field-count error, got %v", err)
 	}
 }
@@ -252,11 +284,11 @@ func TestExpandFanOutTasks_RowFieldCountMismatchFailsClosed(t *testing.T) {
 func TestExpandFanOutTasks_EmptySourceOrTemplateFailsClosed(t *testing.T) {
 	t.Parallel()
 	c := &Coordinator{session: &TeamSession{Workspace: t.TempDir()}}
-	if _, err := c.expandFanOutTasks([]TaskDef{{Agent: "a", Goal: "g", FanOut: &FanOutSpec{GoalTemplate: "{x}"}}}); err == nil {
+	if _, err := c.expandFanOutTasks(t.Context(), []TaskDef{{Agent: "a", Goal: "g", FanOut: &FanOutSpec{GoalTemplate: "{x}"}}}); err == nil {
 		t.Fatal("expected an error for an empty source")
 	}
 	writeFanOutTSV(t, c.session.Workspace, "b.tsv", []string{"x", "1"})
-	if _, err := c.expandFanOutTasks([]TaskDef{{Agent: "a", Goal: "g", FanOut: &FanOutSpec{Source: "b.tsv"}}}); err == nil {
+	if _, err := c.expandFanOutTasks(t.Context(), []TaskDef{{Agent: "a", Goal: "g", FanOut: &FanOutSpec{Source: "b.tsv"}}}); err == nil {
 		t.Fatal("expected an error for an empty goal_template")
 	}
 }
@@ -272,7 +304,7 @@ func TestExpandFanOutTasks_RowCountAboveLimitFailsClosed(t *testing.T) {
 	writeFanOutTSV(t, workspace, "huge.tsv", lines)
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
 	tasks := []TaskDef{{Agent: "a", Goal: "g", FanOut: &FanOutSpec{Source: "huge.tsv", GoalTemplate: "{id}"}}}
-	if _, err := c.expandFanOutTasks(tasks); err == nil || !strings.Contains(err.Error(), "fan-out limit") {
+	if _, err := c.expandFanOutTasks(t.Context(), tasks); err == nil || !strings.Contains(err.Error(), "fan-out limit") {
 		t.Fatalf("expected a fan-out row limit error, got %v", err)
 	}
 }
@@ -310,7 +342,7 @@ func TestExpandFanOutTasks_BlankLinesSkippedAndHeaderHashStripped(t *testing.T) 
 	})
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
 	tasks := []TaskDef{{Agent: "a", Goal: "g", FanOut: &FanOutSpec{Source: "inputs/records.tsv", GoalTemplate: "{record_id}:{state}"}}}
-	expanded, err := c.expandFanOutTasks(tasks)
+	expanded, err := c.expandFanOutTasks(t.Context(), tasks)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

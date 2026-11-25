@@ -62,6 +62,13 @@ func (c *Coordinator) resultWorksetBindingValues(ctx context.Context, taskID str
 	return binding.Bindings, nil
 }
 
+type worksetSourceVerificationKey struct{}
+
+type worksetSourceVerification struct {
+	taskID string
+	parent *worksetSourceVerification
+}
+
 func (c *Coordinator) verifiedResultWorksetBinding(ctx context.Context, taskID string) (*WorksetBinding, error) {
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
@@ -69,6 +76,13 @@ func (c *Coordinator) verifiedResultWorksetBinding(ctx context.Context, taskID s
 	if owner := c.dependencyViewOwner(taskID); owner != c {
 		return owner.verifiedResultWorksetBinding(ctx, taskID)
 	}
+	parent, _ := ctx.Value(worksetSourceVerificationKey{}).(*worksetSourceVerification)
+	for source := parent; source != nil; source = source.parent {
+		if source.taskID == taskID {
+			return nil, fmt.Errorf("workset source verification contains a dependency cycle")
+		}
+	}
+	ctx = context.WithValue(ctx, worksetSourceVerificationKey{}, &worksetSourceVerification{taskID: taskID, parent: parent})
 	item := c.todoItemByID(taskID)
 	if item == nil || item.WorksetBinding == nil {
 		return nil, fmt.Errorf("workset runtime input requires a bound child")
@@ -84,7 +98,8 @@ func (c *Coordinator) verifiedResultWorksetBinding(ctx context.Context, taskID s
 		return nil, fmt.Errorf("workset runtime input has a mismatched expansion receipt")
 	}
 	ctx = c.withRecoveryEvidenceReplay(ctx)
-	if err := c.verifyWorksetSource(ctx, receipt); err != nil {
+	source, producerTaskID, err := c.verifiedWorksetSource(ctx, receipt)
+	if err != nil {
 		return nil, err
 	}
 	if receipt.RunID != c.executionRunID {
@@ -92,7 +107,11 @@ func (c *Coordinator) verifiedResultWorksetBinding(ctx context.Context, taskID s
 			return nil, err
 		}
 	}
-	data, source, err := c.readStructuredWorksetSource(ctx, TaskDef{FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: receipt.SourceArtifact.TaskID, Artifact: receipt.SourceArtifactID}}})
+	store, err := OpenFileArtifactStoreReadOnly(c.session.Workspace, c.session.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	data, err := readWorksetManifestArtifact(ctx, store, source)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +119,7 @@ func (c *Coordinator) verifiedResultWorksetBinding(ctx context.Context, taskID s
 	if err != nil {
 		return nil, err
 	}
-	manifest, err = c.validateWorksetInputs(ctx, manifest, receipt.SourceArtifact.TaskID)
+	manifest, err = c.validateWorksetInputs(ctx, manifest, producerTaskID)
 	if err != nil {
 		return nil, err
 	}

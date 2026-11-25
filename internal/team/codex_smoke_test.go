@@ -14,21 +14,8 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 )
 
-// Real Codex smoke tests (spec.md §38): opt-in, driven against the actually
-// installed `codex` binary and a real, pre-authenticated CODEX_HOME — never
-// run by default, never required by CI. Enable with:
-//
-//	HUFU_CODEX_SMOKE=1 go test ./internal/team -run CodexSmoke
-//
-// Every scenario here drives the exact same production RunAttempt path the
-// fake-server-driven unit tests already exercise in detail (cancellation,
-// crash/restart resume, protocol repair, completion-gate rejection); what
-// this suite adds is confirmation that the real app-server, not a scripted
-// stand-in, actually behaves the way those unit tests assume. Assertions are
-// deliberately loose on model *content* (a live model's wording is not
-// deterministic) and strict on protocol/safety outcomes (error class,
-// workspace delta, session identity, rejection) — the properties Hufu's own
-// invariants actually depend on.
+// Live Codex smoke tests are paused while Hufu support is suspended.
+// The opt-in flag and real-provider prerequisites are retained for when support resumes.
 const hufuCodexSmokeEnvVar = "HUFU_CODEX_SMOKE"
 
 // hufuCodexSmokeModelEnvVar lets the smoke suite target whatever model the
@@ -52,6 +39,7 @@ func codexSmokeModelID() string {
 // with a clear reason rather than failing when any of them is unmet.
 func codexSmokeRequireReady(t *testing.T) {
 	t.Helper()
+	skipUnsupportedCodexIntegration(t)
 	if os.Getenv(hufuCodexSmokeEnvVar) != "1" {
 		t.Skipf("skipping live Codex smoke test: set %s=1 to opt in (spec.md §38)", hufuCodexSmokeEnvVar)
 	}

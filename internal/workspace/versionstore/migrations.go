@@ -127,4 +127,9 @@ CREATE TABLE stat_cache (
     PRIMARY KEY(subject_key, path)
 );`,
 	},
+	{
+		Version: 2,
+		Name:    "bind_restore_recovery",
+		SQL:     "ALTER TABLE operations ADD COLUMN recovery_token TEXT NOT NULL DEFAULT '';",
+	},
 }

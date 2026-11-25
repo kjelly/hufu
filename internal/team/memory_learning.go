@@ -50,30 +50,58 @@ func (c *Coordinator) validateMemoryUseClaims(ctx context.Context, taskID string
 	if result.TaskID != "" && result.TaskID != taskID {
 		return fmt.Errorf("memory attribution cannot cross task %q to %q", result.TaskID, taskID)
 	}
-	attempt := result.Attempt
+	if cp, _ := ctx.Value(resultCollectionReadCheckpointKey{}).(*ResultCollectionCheckpoint); cp != nil && cp.TaskID == taskID {
+		return c.validateCollectedMemoryUses(ctx, cp, result)
+	}
+	manifest, err := c.directMemoryAttributionManifest(ctx, taskID, result.Attempt, result.MemoryUses[0].RetrievalID)
+	if err != nil {
+		return err
+	}
+	return c.bindMemoryUseClaims(ctx, taskID, manifest.Agent, manifest.Attempt, manifest, result)
+}
+
+func (c *Coordinator) directMemoryAttributionManifest(ctx context.Context, taskID string, attempt int, retrievalID string) (*MemoryInjectionManifest, error) {
+	if c == nil || c.taskTracker == nil || c.contextRepo == nil {
+		return nil, fmt.Errorf("memory attribution requires an active canonical context repository")
+	}
 	if attempt <= 0 {
 		attempt = c.currentTaskAttempt(taskID)
 	}
-	var manifest *MemoryInjectionManifest
-	var taskAgent string
-	for _, task := range c.taskTracker.TodoList().Items() {
-		if task == nil || task.ID != taskID {
-			continue
+	runID := c.executionRunID
+	modelExecutionID := c.modelExecutionID
+	_, recovering, err := c.originalNormalizationEvidence(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if recovering {
+		identity, err := c.resultSubmissionEvidenceIdentity(ctx, taskID)
+		if err != nil {
+			return nil, err
 		}
-		taskAgent = task.Agent
+		runID = identity.RunID
+		if metadata, ok := invocationMetadataFromContext(ctx); ok {
+			if metadata.RunID != runID {
+				return nil, fmt.Errorf("memory attribution source invocation does not match its original run")
+			}
+			modelExecutionID = metadata.ModelExecutionID
+		}
+	}
+	if task := c.todoItemByID(taskID); task != nil {
 		for i := range task.MemoryManifests {
 			candidate := &task.MemoryManifests[i]
-			if candidate.RunID == c.executionRunID && candidate.Attempt == attempt && (!c.isModelFanoutLeaf(taskID) || candidate.ModelExecutionID == c.modelExecutionID) {
-				manifest = candidate
-				break
+			if recovering && (retrievalID != "" && candidate.RetrievalID != retrievalID ||
+				candidate.ModelExecutionID != "" && candidate.ModelExecutionID != modelExecutionID) {
+				continue
+			}
+			if candidate.RunID == runID && candidate.Attempt == attempt && (!c.isModelFanoutLeaf(taskID) || candidate.ModelExecutionID == modelExecutionID) {
+				if candidate.TaskID != taskID || task.Agent != "" && candidate.Agent != task.Agent {
+					return nil, fmt.Errorf("memory attribution manifest identity mismatch")
+				}
+				return candidate, nil
 			}
 		}
-		break
 	}
-	if manifest == nil {
-		return fmt.Errorf("memory attribution has no manifest for task %q attempt %d", taskID, attempt)
-	}
-	return c.bindMemoryUseClaims(ctx, taskID, taskAgent, attempt, manifest, result)
+	return nil, fmt.Errorf("memory attribution has no manifest for task %q attempt %d", taskID, attempt)
 }
 
 func (c *Coordinator) bindMemoryUseClaims(ctx context.Context, taskID, taskAgent string, attempt int, manifest *MemoryInjectionManifest, result *TaskResult) error {
@@ -85,10 +113,7 @@ func (c *Coordinator) bindMemoryUseClaims(ctx context.Context, taskID, taskAgent
 	if manifest.TaskID != taskID || manifest.Attempt != attempt || (taskAgent != "" && manifest.Agent != taskAgent) {
 		return fmt.Errorf("memory attribution manifest identity mismatch")
 	}
-	allowed := make(map[string]MemoryInjectionItem, len(manifest.Items))
-	for _, item := range manifest.Items {
-		allowed[item.ContextItemID] = item
-	}
+	allowed := memoryUseManifestItems(manifest)
 	seen := make(map[string]bool, len(result.MemoryUses))
 	ids := make([]string, 0, len(result.MemoryUses))
 	for i := range result.MemoryUses {
@@ -96,7 +121,7 @@ func (c *Coordinator) bindMemoryUseClaims(ctx context.Context, taskID, taskAgent
 		// The prompt marks each injected record as id=context:<id> and never
 		// shows the runtime-owned retrieval ID, so accept that spelling and
 		// bind the attempt's retrieval when the claim omits it.
-		use.ContextItemID = strings.TrimPrefix(strings.TrimSpace(use.ContextItemID), "context:")
+		use.ContextItemID = memoryContextItemID(use.ContextItemID)
 		if use.RetrievalID == "" {
 			use.RetrievalID = manifest.RetrievalID
 		}
@@ -124,6 +149,18 @@ func (c *Coordinator) bindMemoryUseClaims(ctx context.Context, taskID, taskAgent
 		ids = append(ids, use.ContextItemID)
 	}
 	return c.validateMemoryUseRecords(ctx, manifest.Agent, ids, allowed)
+}
+
+func memoryUseManifestItems(manifest *MemoryInjectionManifest) map[string]MemoryInjectionItem {
+	items := make(map[string]MemoryInjectionItem, len(manifest.Items))
+	for _, item := range manifest.Items {
+		items[item.ContextItemID] = item
+	}
+	return items
+}
+
+func memoryContextItemID(id string) string {
+	return strings.TrimPrefix(strings.TrimSpace(id), "context:")
 }
 
 func (c *Coordinator) validateMemoryUseRecords(ctx context.Context, agentName string, ids []string, allowed map[string]MemoryInjectionItem) error {

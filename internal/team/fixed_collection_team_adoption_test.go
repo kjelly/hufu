@@ -154,7 +154,7 @@ func TestAdoptedFixedCollectionsPreserveMembershipAndAllowCorrection(t *testing.
 					if err != nil {
 						t.Fatal(err)
 					}
-					if err := c.validateSubmittedEvidenceInputs(item.ID, payload); err != nil {
+					if err := c.validateSubmittedEvidenceInputs(t.Context(), item.ID, payload); err != nil {
 						t.Fatal(err)
 					}
 					canonical, err := decodeResultContractJSON(payload.Value)
@@ -290,7 +290,7 @@ func TestAdoptedFixedCollectionSourceReplacementInvalidatesDecisions(t *testing.
 			if err := c.taskTracker.TodoList().SetTypedResult(source.ID, source.TypedResult); err != nil {
 				t.Fatal(err)
 			}
-			if err := c.validateSubmittedEvidenceInputs(item.ID, payload); err == nil {
+			if err := c.validateSubmittedEvidenceInputs(t.Context(), item.ID, payload); err == nil {
 				t.Fatal("old canonical result survived changed input evidence")
 			}
 			for _, external := range []bool{false, true} {

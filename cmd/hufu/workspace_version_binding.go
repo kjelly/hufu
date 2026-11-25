@@ -57,6 +57,17 @@ func resolveWorkspaceVersionContext(ctx context.Context, registry workspacepkg.R
 	if err != nil {
 		return team.WorkspaceVersionContext{}, fmt.Errorf("%w: subject root: %v", versionstore.ErrVersionedWorkspaceUnresolved, err)
 	}
+	if subject != project.SubjectRoot {
+		return team.WorkspaceVersionContext{}, fmt.Errorf("%w: registered subject root %q now resolves to %q",
+			versionstore.ErrVersionedWorkspaceUnresolved, project.SubjectRoot, subject)
+	}
+	subjectIdentity, err := os.Stat(subject)
+	if err != nil {
+		return team.WorkspaceVersionContext{}, fmt.Errorf("%w: stat subject root: %v", versionstore.ErrVersionedWorkspaceUnresolved, err)
+	}
+	if err := versionstore.CheckSubjectIdentity(subject, subjectIdentity); err != nil {
+		return team.WorkspaceVersionContext{}, err
+	}
 	control, err := filepath.EvalSymlinks(managed.ControlRoot)
 	if err != nil {
 		return team.WorkspaceVersionContext{}, fmt.Errorf("%w: control root: %v", versionstore.ErrVersionedWorkspaceUnresolved, err)
@@ -64,6 +75,7 @@ func resolveWorkspaceVersionContext(ctx context.Context, registry workspacepkg.R
 	version := team.WorkspaceVersionContext{
 		Mode: mode, WorkspaceID: managed.ID, ProjectID: managed.ProjectID, TeamName: managed.TeamName,
 		SubjectRoot: subject, ControlRoot: control, StateDir: project.StateDir,
+		SubjectIdentity: subjectIdentity,
 		Limits: versionstore.CaptureLimits{
 			MaxFiles:        cfg.WorkspaceVersioning.Capture.MaxFiles,
 			MaxFileBytes:    cfg.WorkspaceVersioning.Capture.MaxFileBytes,

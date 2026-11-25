@@ -23,6 +23,8 @@ type CaptureRequest struct {
 	WorkspaceID string
 	BranchID    string
 	Root        string
+	// SubjectIdentity pins a managed binding to its original filesystem identity.
+	SubjectIdentity os.FileInfo
 
 	// ExcludeSubtrees are root-relative subtrees that are unmanaged (the
 	// control root when it lies inside the subject root).
@@ -78,7 +80,8 @@ type capturePlan struct {
 	started   time.Time
 	statCache map[string]statCacheRow
 	// dryRun hashes without writing CAS objects (LiveRootTree).
-	dryRun bool
+	dryRun  bool
+	subject *subjectDirectory
 }
 
 // CanonicalRoot resolves root to the absolute, symlink-free directory path
@@ -132,6 +135,11 @@ func (s *Store) capture(ctx context.Context, req CaptureRequest, unchangedRoot s
 	if err != nil {
 		return Snapshot{}, false, CaptureStats{}, err
 	}
+	plan.subject, err = openSubjectDirectory(plan.root, req.SubjectIdentity)
+	if err != nil {
+		return Snapshot{}, false, CaptureStats{}, err
+	}
+	defer func() { _ = plan.subject.close() }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -183,7 +191,7 @@ func newCapturePlan(ctx context.Context, q queryRower, req CaptureRequest, start
 	if !req.Reason.Valid() {
 		return capturePlan{}, fmt.Errorf("capture: invalid reason %q", req.Reason)
 	}
-	root, err := CanonicalRoot(req.Root)
+	root, err := operationSubjectRoot(req.Root, req.SubjectIdentity)
 	if err != nil {
 		return capturePlan{}, fmt.Errorf("capture: %w", err)
 	}
@@ -206,17 +214,11 @@ func newCapturePlan(ctx context.Context, q queryRower, req CaptureRequest, start
 
 // captureOnce performs one full pass. errCaptureRaced asks for a retry.
 func (s *Store) captureOnce(ctx context.Context, plan capturePlan) (captureResult, error) {
-	candidates, err := discoverCandidates(ctx, plan.root, plan.policy)
+	candidates, err := discoverCandidates(ctx, plan.subject.discoveryPath(), plan.policy)
 	if err != nil {
 		return captureResult{}, err
 	}
-	root, err := os.OpenRoot(plan.root)
-	if err != nil {
-		return captureResult{}, fmt.Errorf("open workspace root: %w", err)
-	}
-	defer func() { _ = root.Close() }()
-
-	run := &captureRun{store: s, plan: plan, root: root}
+	run := &captureRun{store: s, plan: plan, root: plan.subject.root}
 	for _, rel := range candidates.paths {
 		captured, skip, leafErr := run.captureLeaf(ctx, rel)
 		if leafErr != nil {
@@ -235,6 +237,9 @@ func (s *Store) captureOnce(ctx context.Context, plan capturePlan) (captureResul
 		return captureResult{}, err
 	}
 	if err = run.revalidate(); err != nil {
+		return captureResult{}, err
+	}
+	if err = plan.subject.verify(); err != nil {
 		return captureResult{}, err
 	}
 	return captureResult{leaves: run.leaves, rootTreeHash: rootHash, stats: run.stats}, nil
@@ -569,6 +574,11 @@ func (s *Store) LiveRootTree(ctx context.Context, req CaptureRequest) (string, e
 		return "", err
 	}
 	plan.dryRun = true
+	plan.subject, err = openSubjectDirectory(plan.root, req.SubjectIdentity)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = plan.subject.close() }()
 	for attempt := 1; ; attempt++ {
 		result, captureErr := s.captureOnce(ctx, plan)
 		if captureErr == nil {

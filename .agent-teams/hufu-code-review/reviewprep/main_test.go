@@ -189,26 +189,77 @@ func TestTargetedGoTestPackagesFallsBackWhenScopeCannotBeNarrowed(t *testing.T) 
 	}
 }
 
-func TestSnapshotPlannedTestPathsNarrowsScope(t *testing.T) {
-	fallback := []string{"all/files/code.go", "go.mod"}
-	if got := snapshotPlannedTestPaths(nil, fallback); !slices.Equal(got, fallback) {
-		t.Fatalf("nil snapshot = %v, want %v", got, fallback)
+func TestSnapshotTestPackagesIncludeOnlySelectedAndDirectImporters(t *testing.T) {
+	repo := newFixtureRepo(t)
+	writeFile(t, filepath.Join(repo, "go.mod"), "module example.com/review\n\ngo 1.27\n")
+	for i := range 54 {
+		name := fmt.Sprintf("package%02d", i)
+		source := "package " + name + "\n"
+		switch {
+		case i > 0 && i <= 18:
+			source += "import _ \"example.com/review/package00\"\n"
+		case i == 19:
+			source += "import _ \"example.com/review/package01\"\n"
+		}
+		source += "func Value() int { return 1 }\n"
+		writeFile(t, filepath.Join(repo, name, "code.go"), source)
 	}
-	snap := &reviewSourceSnapshot{}
-	if got := snapshotPlannedTestPaths(snap, fallback); !slices.Equal(got, fallback) {
-		t.Fatalf("nil identity = %v, want %v", got, fallback)
+	commit(t, repo, "synthetic repository", "2025-01-02T00:00:00Z")
+	scope := resolverScope{Kind: "repository_snapshot", Head: "HEAD", History: "first_parent", Batch: 2}
+	workspace := t.TempDir()
+	config := fixtureConfig(repo, filepath.Join(workspace, "out"))
+	config.ArtifactRoot, config.Scope, config.MaxWorksetItems = workspace, scope, 3
+	config.MaxPaths = 1
+	result, err := Prepare(t.Context(), config)
+	if err != nil {
+		t.Fatal(err)
 	}
-	snap.identity = &repositorySnapshotManifest{
-		Plan: &snapshotPlan{
-			Worksets: []snapshotPlannedWorkset{
-				{Sources: []snapshotPlannedSource{{Path: "service/user.go"}, {Path: "service/auth.go"}}},
-				{Sources: []snapshotPlannedSource{{Path: "pkg/util.go"}}},
-			},
-		},
+	attestation := result.Outputs["scope"].(scopeAttestation)
+	frozen := attestation.RepositorySnapshot
+	originalInventory := filepath.Join(workspace, filepath.FromSlash(frozen.Inventory.Path))
+	inventoryBytes, err := os.ReadFile(originalInventory)
+	if err != nil {
+		t.Fatal(err)
 	}
-	want := []string{"pkg/util.go", "service/auth.go", "service/user.go"}
-	if got := snapshotPlannedTestPaths(snap, fallback); !slices.Equal(got, want) {
-		t.Fatalf("planned paths = %v, want %v", got, want)
+	frozen.artifactDataDirectory = t.TempDir()
+	casPath := filepath.Join(frozen.artifactDataDirectory, frozen.Inventory.ID)
+	writeFile(t, casPath, string(inventoryBytes))
+	if err := os.Remove(originalInventory); err != nil {
+		t.Fatal(err)
+	}
+	review := reviewRange{Start: attestation.Resolved.Base, End: attestation.Resolved.Head, Source: "repository_snapshot"}
+	snapshot, err := createReviewSourceSnapshot(t.Context(), repo, review, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(snapshot.Close)
+	observed, err := repositorySnapshotInventory(t.Context(), repo, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := snapshotSelectedTestPaths(frozen, observed)
+	if err != nil || !slices.Equal(paths, []string{"package00/code.go"}) {
+		t.Fatalf("selected paths = %v, err = %v", paths, err)
+	}
+	plan, err := snapshot.planSnapshotGoTests(paths)
+	got := plan.packages()
+	want := make([]string, 19)
+	for i := range want {
+		want[i] = fmt.Sprintf("./package%02d", i)
+	}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("targeted packages = %v, err = %v", got, err)
+	}
+	inventoryBytes[0] = ' '
+	writeFile(t, casPath, string(inventoryBytes))
+	if _, err := snapshotSelectedTestPaths(frozen, observed); err == nil {
+		t.Fatal("unverified inventory was accepted")
+	}
+	if err := os.Remove(casPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := snapshotSelectedTestPaths(frozen, observed); err == nil {
+		t.Fatal("missing inventory was accepted")
 	}
 }
 
@@ -382,6 +433,21 @@ func TestPrepareReviewsOnlySelectedConventionalFeatureCommits(t *testing.T) {
 	patch, err := os.ReadFile(filepath.Join(repo, "out-features", filepath.FromSlash(manifest.Items[0].DiffPath)))
 	if err != nil {
 		t.Fatal(err)
+	}
+	units := splitDiff(patch)
+	if len(units) != 2 {
+		t.Fatalf("selected commit patches lost their boundaries: %q", units)
+	}
+	for i, selected := range manifest.Range.Commits {
+		parent, err := firstParentOrEmptyTree(t.Context(), repo, selected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		marker := "hufu-old-revision " + parent + "\n"
+		if bytes.Count(units[i], []byte("hufu-old-revision ")) != 1 || !bytes.Contains(units[i], []byte(marker)) ||
+			!bytes.Contains(units[i], []byte(fmt.Sprintf("-const Feature = %d\n", i+1))) {
+			t.Fatalf("selected commit %s lost its old coordinates: %s", selected, units[i])
+		}
 	}
 	for _, expected := range []string{"+const Feature = 2", "+const Feature = 3"} {
 		if !strings.Contains(string(patch), expected) {

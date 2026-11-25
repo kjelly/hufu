@@ -2,6 +2,7 @@ package team
 
 import (
 	"encoding/json/v2"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -45,17 +46,29 @@ func TestResultClaimsProjectionRecoveryUsesFrozenInvariantScope(t *testing.T) {
 		want        RepairFailureReason
 	}{
 		{"out-of-scope attestation", `{"invariant_id":"excluded","status":"preserved","summary":"observed"}`, RepairFailureInvalidSchema},
-		{"out-of-scope violation", `{"invariant_id":"excluded","status":"violated","summary":"observed","finding_index":0}`, RepairFailureContract},
-		{"unrecognized ID", `{"invariant_id":"unknown","status":"preserved","summary":"observed"}`, RepairFailureContract},
+		{"out-of-scope violation", `{"invariant_id":"excluded","status":"violated","summary":"observed","finding_index":0}`, RepairFailureSource},
+		{"unrecognized ID", `{"invariant_id":"unknown","status":"preserved","summary":"observed"}`, RepairFailureSource},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			claims := SubmitResultInput{StructuredPayload: []byte(`{"findings":[{"summary":"retain this finding","severity":"info"}],"assessments":[{"invariant_id":"safe","status":"preserved","summary":"verified"},` + tc.extra + `]}`)}
 			if _, err := c.projectResultClaims(t.Context(), item.ID, claims); localResultRejectionReason(err) != tc.want {
 				t.Fatalf("submission result: %v", err)
 			}
+			request := scopedAttemptRequest("codex", item.ID)
+			request.Task = taskDefFromTodoItem(item)
+			request.resultContractSchema = compiled
+			request.resultProjectClaims = func(input SubmitResultInput) (SubmitResultInput, error) {
+				return c.projectResultClaims(t.Context(), item.ID, input)
+			}
+			outer := mustProjectionJSON(t, map[string]any{"status": "success", "summary": "", "structured_payload_json": string(claims.StructuredPayload)})
+			formatErr := &CodexProtocolIncompleteError{Reason: errors.New("summary is required")}
+			externalErr := classifyRejectedCodexResult(t.Context(), request, CodexTurnResult{RawFinalOutput: string(outer)}, WorkspaceDelta{}, t.TempDir(), formatErr)
+			if localResultRejectionReason(externalErr) != tc.want {
+				t.Fatalf("outer format rejection hid the external projection source: %v", externalErr)
+			}
 			independent, err := c.projectResultClaimsWithRecovery(t.Context(), item.ID, claims, true)
-			if tc.want == RepairFailureContract {
-				if localResultRejectionReason(err) != RepairFailureContract {
+			if tc.want == RepairFailureSource {
+				if localResultRejectionReason(err) != tc.want {
 					t.Fatalf("independent check admitted an unproven violation or invariant ID: %v", err)
 				}
 				return
@@ -363,6 +376,69 @@ func TestResultClaimsProjectionNormalizesScalarsAcrossTransports(t *testing.T) {
 			}
 			if local.InvariantAssessments == nil || (*local.InvariantAssessments)[0].FindingIndex == nil || *(*local.InvariantAssessments)[0].FindingIndex != 0 {
 				t.Fatal("canonical finding index lost")
+			}
+		})
+	}
+}
+
+func TestOmittedPayloadStillRejectsProjectedEnvelopeFields(t *testing.T) {
+	t.Parallel()
+	for _, status := range []string{"success", "blocked"} {
+		t.Run(status, func(t *testing.T) {
+			schema := projectionTestSchema
+			if status == "blocked" {
+				schema = strings.Replace(schema, `"properties":{"findings"`, `"properties":{
+					"completion":{"type":"object","required":["status","summary"],"properties":{"status":{"type":"string"},"summary":{"type":"string"}}},
+					"findings"`, 1)
+				schema = strings.Replace(schema, `"required":["findings","assessments"]`, `"required":["findings","assessments","completion"],
+					"x-hufu-runtime-inputs":[{"target":"/completion","source_task":"prepare-outputs","output":"observation"}],
+					"x-hufu-runtime-completion":"/completion"`, 1)
+			}
+			compiled := compileFixtureJSONSchema(t, "projected.json", schema)
+			request := scopedAttemptRequest("codex", "task")
+			request.Task.ResultContract = new(compiled.ref(status == "blocked"))
+			request.Task.InvariantVerification = InvariantVerificationReport
+			request.resultContractSchema = compiled
+			c := newTestCoordinator(t)
+			c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
+			item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
+				Agent: "worker", ResultContract: request.Task.ResultContract, InvariantVerification: InvariantVerificationReport,
+			}})[0]
+			ctx := occurrenceTestContext(c, item.ID, 1)
+			contract := localResultSubmissionContract(c, item.ID)
+			admission := &localResultAdmission{coordinator: c, todoID: item.ID}
+			for _, field := range []string{"", `,"findings":null`, `,"findings":[]`,
+				`,"findings":[{"summary":"unbound","severity":"error"}]`, `,"invariant_assessments":null`, `,"invariant_assessments":[]`} {
+				t.Run(field, func(t *testing.T) {
+					body := `{"status":"` + status + `","summary":"outcome"` + field + `}`
+					proposal, err := decodeWorkerResultProposal([]byte(body), status == "blocked")
+					if err != nil {
+						t.Fatal(err)
+					}
+					payload, err := canonicalExternalStructuredPayload(request, proposal, nil)
+					if field == "" {
+						if payload != nil || err != nil {
+							t.Fatalf("unadorned envelope was rejected: %v", err)
+						}
+					} else if payload != nil || localResultRejectionReason(err) != RepairFailureInvalidSchema {
+						t.Fatalf("projected outer field passed: payload=%+v err=%v", payload, err)
+					}
+					transports := map[string]func() (SubmitResultInput, error){
+						"local":     func() (SubmitResultInput, error) { return decodeSubmitResultInput([]byte(body), contract) },
+						"collector": func() (SubmitResultInput, error) { return c.decodeCollectionClaims(item.ID, []byte(body)) },
+					}
+					for transport, decode := range transports {
+						input, err := decode()
+						var result *TaskResult
+						if err == nil {
+							result, err = admission.validateClaims(ctx, input, contract, nil, false)
+						}
+						if field == "" && (err != nil || result == nil || result.StructuredPayload != nil || result.Status != status) ||
+							field != "" && (err == nil || result != nil) {
+							t.Fatalf("%s envelope %q: result=%+v err=%v", transport, field, result, err)
+						}
+					}
+				})
 			}
 		})
 	}

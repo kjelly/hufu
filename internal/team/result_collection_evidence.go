@@ -3,6 +3,7 @@ package team
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -24,16 +25,16 @@ func canonicalCollectionSources(sources []*TodoItem) []*TodoItem {
 	return result
 }
 
-func (c *Coordinator) resultCollectionEvidenceHash(item *TodoItem) (string, error) {
-	sources, err := c.resultCandidateEvidenceSources(item)
+func (c *Coordinator) resultCollectionEvidenceHash(ctx context.Context, item *TodoItem) (string, error) {
+	sources, err := c.resultCandidateEvidenceSources(ctx, item)
 	if err != nil {
 		return "", err
 	}
 	return collectionDigest(canonicalCollectionSources(sources))
 }
 
-func (c *Coordinator) validateCollectionEvidence(item *TodoItem, checkpoint *ResultCollectionCheckpoint) error {
-	sources, err := c.resultCandidateEvidenceSources(item)
+func (c *Coordinator) validateCollectionEvidence(ctx context.Context, item *TodoItem, checkpoint *ResultCollectionCheckpoint) error {
+	sources, err := c.resultCandidateEvidenceSources(ctx, item)
 	if err != nil {
 		return err
 	}

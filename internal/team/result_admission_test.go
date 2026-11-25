@@ -38,7 +38,7 @@ func TestLocalResultAdmissionPreservesToolBoundary(t *testing.T) {
 		{name: "honest_blocked", status: TaskResultStatusBlocked},
 		{name: "missing_summary", status: TaskResultStatusSuccess, missingSummary: true, wantReason: RepairFailureInvalidSchema},
 		{name: "invalid_status", status: "unknown", wantReason: RepairFailureInvalidSchema},
-		{name: "missing_artifact", status: TaskResultStatusSuccess, artifact: "missing.txt", wantReason: RepairFailureContract},
+		{name: "missing_artifact", status: TaskResultStatusSuccess, artifact: "missing.txt", wantReason: RepairFailureSource},
 		{name: "forged_receipt", status: TaskResultStatusSuccess, receipt: true, wantReason: RepairFailureSource},
 		{name: "stale_occurrence", status: TaskResultStatusSuccess, artifact: "report.txt", stale: true, wantReason: RepairFailureSource},
 		{name: "assertion_after_materialization", status: TaskResultStatusSuccess, artifact: "report.txt", assertion: true, wantReason: RepairFailureContract},

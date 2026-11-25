@@ -48,7 +48,7 @@ hufu run --profile coding -- "implement the feature"
 ### Model selection
 
 ```sh
-hufu run --team dev-team -m codex/gpt-6-luna --worker-model coder=codex/gpt-6-sol --worker-model reviewer=codex/gpt-6-sol -- "implement feature X"
+hufu run --team dev-team -m local/qwen3:8b --worker-model coder=ollama/qwen3.5:27b --worker-model reviewer=ollama/qwen3.5:27b -- "implement feature X"
 ```
 
 ```sh

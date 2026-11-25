@@ -14,8 +14,11 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kjelly/hufu/internal/golangruntime"
+	"github.com/kjelly/hufu/internal/runtimestore"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func persistedGoTestPaths(t *testing.T) map[string]string {
@@ -154,6 +157,105 @@ func TestSanitizedGoTestEnvironmentFailsClosedOnResolutionError(t *testing.T) {
 	if !errors.Is(err, context.Canceled) || env != nil {
 		t.Fatalf("canceled cache resolution = %v, %v; want no fallback environment", env, err)
 	}
+}
+
+func TestVerifyReviewTestsSealsCachePreflightEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name, gap, kind string
+		hasGo           bool
+	}{
+		{"empty_scope", "test_scope_empty", "none", false},
+		{"cache_probe_timeout", "test_timeout_gap", "preflight", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newFixtureRepo(t)
+			if tc.hasGo {
+				writeFile(t, filepath.Join(repo, "go.mod"), "module example.com/review\n\ngo 1.27\n")
+				writeFile(t, filepath.Join(repo, "code.go"), "package review\n")
+			} else {
+				writeFile(t, filepath.Join(repo, "README.md"), "Documentation change\n")
+			}
+			commit(t, repo, "Review source", "2025-01-02T00:00:00Z")
+			config := fixtureConfig(repo, "verification")
+			config.Scope, config.Since = resolverScope{Kind: "last_n", Count: 1, History: "first_parent", Head: "HEAD"}, ""
+			if !tc.hasGo {
+				config = verificationWithFrozenSnapshot(t, repo)
+			}
+			bin := t.TempDir()
+			marker := filepath.Join(bin, "probe-ran")
+			t.Setenv("CACHE_PROBE_TEST_MARKER", marker)
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\n: > \"$CACHE_PROBE_TEST_MARKER\"\n[ \"$1\" = env ] || exit 4\nexec sleep 30\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), defaultGoTestLimits().Reserve+2*time.Second)
+			defer cancel()
+			result, err := VerifyReviewTests(ctx, config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(marker); tc.hasGo && err != nil || !tc.hasGo && !os.IsNotExist(err) {
+				t.Fatalf("unexpected Go probe marker, Go files=%v: %v", tc.hasGo, err)
+			}
+			receipt := result.Outputs["targeted_go_tests"].(goTestReceipt)
+			if receipt.Passed || receipt.Completed || receipt.TimedOut != tc.hasGo || receipt.TimeoutKind != tc.kind ||
+				receipt.Gap != tc.gap || (len(receipt.Packages) > 0) != tc.hasGo ||
+				len(receipt.Commands) != 0 || result.Outputs["test_evidence_sealed"] != true ||
+				len(result.Artifacts) != 2 || receipt.ArtifactID != result.Artifacts[0].ID || receipt.OutputArtifactID != result.Artifacts[1].ID {
+				t.Fatalf("unexpected preflight receipt: %+v, artifacts %+v", receipt, result.Artifacts)
+			}
+		})
+	}
+}
+
+func verificationWithFrozenSnapshot(t *testing.T, repo string) Config {
+	t.Helper()
+	root := t.TempDir()
+	producer := fixtureConfig(repo, filepath.Join(root, "producer"))
+	producer.ArtifactRoot = root
+	producer.Scope, producer.Since = resolverScope{Kind: "repository_snapshot", Head: "HEAD", History: "first_parent"}, ""
+	prepared, err := Prepare(t.Context(), producer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := prepared.Outputs["scope"].(scopeAttestation)
+	inventory := scope.RepositorySnapshot.Inventory
+	frozen, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(inventory.Path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(runtimestore.ArtifactRoot(root), "data", inventory.ID), string(frozen))
+	var plain any
+	if err := json.Unmarshal(mustJSON(t, scope), &plain); err != nil {
+		t.Fatal(err)
+	}
+	outputs, digest, err := team.CanonicalizeRuntimeOutputs(map[string]any{"scope": plain})
+	if err != nil {
+		t.Fatal(err)
+	}
+	producerTask := map[string]any{
+		"ID": "1", "Status": "done", "contract_id": "produce-workset", "run_input_snapshot_id": "frozen-inputs",
+		"execution_receipt": map[string]any{"run_id": "verify-run", "task_id": "1", "attempt": 1, "action_invocation_id": "produce", "runtime_outputs_hash": digest},
+		"VerifyResult":      map[string]any{"exit_code": 0, "fingerprint": "verified"},
+		"typed_result":      map[string]any{"status": "success", "runtime_outputs": outputs, "runtime_outputs_hash": digest},
+	}
+	verifierTask := map[string]any{"ID": "2", "Status": "in_progress", "run_input_snapshot_id": "frozen-inputs"}
+	store, err := runtimestore.Open(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	checkpoint := mustJSON(t, map[string]any{"active_run_input_snapshot_id": "frozen-inputs", "tasks": []any{producerTask, verifierTask}})
+	if err := store.PutDocument(t.Context(), runtimestore.DocumentSession, checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HUFU_WORKSPACE", filepath.Join(root, "runtime", "runs", "verify-run", "actions", "verify"))
+	t.Setenv("HUFU_RUN_ID", "verify-run")
+	t.Setenv("HUFU_ACTION_INVOCATION_ID", "verify")
+	t.Setenv("HUFU_TASK_ID", "2")
+	t.Setenv("HUFU_RECOVERED_TASK_RUNS", "{}")
+	producer.OutputDir = filepath.Join(root, "verification")
+	return producer
 }
 
 func TestVerifyReviewTestsUsesPersistentlyConfiguredModuleCache(t *testing.T) {

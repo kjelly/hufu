@@ -35,7 +35,7 @@ func TestSnapshotGoTestExecutionCompletion(t *testing.T) {
 			if test.cancel {
 				cancel()
 			}
-			got, err := runSnapshotGoTests(ctx, &reviewSourceSnapshot{root: root}, []string{"./target"}, os.Environ(), filepath.Join(root, "output.log"), defaultGoTestLimits())
+			got, err := runSnapshotGoTests(ctx, &reviewSourceSnapshot{root: root}, snapshotGoTestTargets{packages: []string{"./target"}}, os.Environ(), filepath.Join(root, "output.log"), defaultGoTestLimits())
 			if err != nil {
 				t.Fatal(err)
 			}

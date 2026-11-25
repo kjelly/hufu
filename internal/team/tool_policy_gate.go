@@ -295,6 +295,7 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (respo
 	}
 	// Fold enum letter case before any policy, guard, or schema check sees the
 	// arguments, so every tool accepts "BLOCKED" for "blocked" alike.
+	originalInput := call.Input
 	call.Input = canonicalToolArgumentObjects(call.Input, t.Info())
 	call.Input, _ = tools.CanonicalToolArguments(call.Input, t.Info())
 	_, dynamicGateway := t.inner.(*dynamicToolGateway)
@@ -447,6 +448,7 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (respo
 			return fantasy.NewTextErrorResponse("template-owned input transform rejected this closed task slot: " + transformErr.Error()), nil
 		}
 		if changed {
+			canonicalized = true
 			t.coordinator.setToolPolicyVerdict(call.ID, "transformed")
 			if t.coordinator != nil {
 				todoID, _ := ctx.Value(todoIDKey{}).(string)
@@ -488,6 +490,9 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (respo
 	// Offload is bound only now, after every authorization, sequence,
 	// checkpoint, and commit-gate check has admitted this exact call.
 	ctx = contextArtifactServiceFromContext(ctx).withToolOffloader(ctx, t.Info().Name, call.ID)
+	if _, isResult := t.inner.(*submitResultTool); isResult && !canonicalized && originalInput != call.Input {
+		ctx = context.WithValue(ctx, originalSubmitResultInputKey{}, originalInput)
+	}
 	response, err := t.inner.Run(ctx, call)
 	var captureErr error
 	if err == nil && !response.IsError {

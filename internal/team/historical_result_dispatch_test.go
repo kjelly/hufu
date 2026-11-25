@@ -16,7 +16,7 @@ func TestHistoricalResultDispatchRequiresCanonicalCallEvidence(t *testing.T) {
 	if err := c.persistContextManifest(&manifest); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.validateHistoricalResultDelivery(item.ID, 1, manifest.RunID); err == nil {
+	if err := c.validateHistoricalResultDelivery(t.Context(), item.ID, 1, manifest.RunID); err == nil {
 		t.Fatal("prepared historical request was counted as delivery")
 	}
 	forged := *cloneContextInjectionManifest(&manifest)
@@ -25,13 +25,13 @@ func TestHistoricalResultDispatchRequiresCanonicalCallEvidence(t *testing.T) {
 	if err := c.taskTracker.TodoList().SetContextManifest(item.ID, &forged); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.validateHistoricalResultDelivery(item.ID, 1, manifest.RunID); err == nil {
+	if err := c.validateHistoricalResultDelivery(t.Context(), item.ID, 1, manifest.RunID); err == nil {
 		t.Fatal("checkpoint-only historical dispatch was accepted")
 	}
 	if _, err := markDependencyViewModelCall(c.bindDependencyViewCall(t.Context(), &manifest)); err != nil {
 		t.Fatal(err)
 	}
-	if !manifest.ModelCalled || c.validateHistoricalResultDelivery(item.ID, 1, manifest.RunID) != nil {
+	if !manifest.ModelCalled || c.validateHistoricalResultDelivery(t.Context(), item.ID, 1, manifest.RunID) != nil {
 		t.Fatal("actual runtime dispatch did not establish canonical delivery")
 	}
 	if err := c.validateSelectedRepairContext(t.Context(), c.todoItemByID(item.ID), &manifest); err != nil {

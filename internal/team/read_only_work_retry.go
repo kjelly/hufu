@@ -213,7 +213,7 @@ func workRetryMissingDecisions(events []RunEvent, branch string, item *TodoItem,
 					return nil, err
 				}
 				if payload == nil {
-					if started {
+					if started != nil {
 						return nil, fmt.Errorf("work retry refuses an interrupted decision; reconcile its original inference first")
 					}
 					missing = append(missing, expected)

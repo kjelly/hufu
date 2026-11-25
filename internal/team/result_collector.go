@@ -88,12 +88,15 @@ func (c *Coordinator) collectReturnedWork(ctx context.Context, def *agent.AgentD
 	ctx = context.WithValue(ctx, resultCollectionTimeoutKey{}, timeout)
 	checkpoint, err := c.beginResultCollection(ctx, receipt.TaskID, receipt, report)
 	if err != nil {
-		return &resultCollectionFailure{Reason: RepairFailureCommit, Cause: err}
+		return &resultCollectionFailure{Reason: localResultRejectionReason(rejectNormalizationRecoveryRead(err)), Checkpoint: checkpoint, Cause: err}
 	}
 	return c.collectWorkResult(ctx, def, checkpoint)
 }
 
 func (c *Coordinator) collectionFailure(ctx context.Context, checkpoint *ResultCollectionCheckpoint, reason RepairFailureReason, cause error) error {
+	if reason == RepairFailureCommit {
+		return &resultCollectionFailure{Reason: reason, Checkpoint: checkpoint, Cause: cause}
+	}
 	blocked, err := c.blockResultCollection(ctx, checkpoint, reason)
 	if err == nil {
 		checkpoint = blocked
@@ -119,7 +122,10 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 	var err error
 	ctx, err = c.restoreCollectionContext(ctx, checkpoint)
 	if err != nil {
-		return &resultCollectionFailure{Reason: RepairFailureSource, Checkpoint: checkpoint, Cause: err}
+		return &resultCollectionFailure{Reason: localResultRejectionReason(rejectNormalizationRecoveryRead(err)), Checkpoint: checkpoint, Cause: err}
+	}
+	if err := c.validateInitialCollectionReads(ctx, checkpoint); err != nil {
+		return err
 	}
 	// A local reference selection has no model fallback, including after restart.
 	if acceptedReferenceProjectionFor(c.todoItemByID(checkpoint.TaskID), checkpoint) != nil {
@@ -145,12 +151,9 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 				return c.collectionFailure(ctx, checkpoint, localResultRejectionReason(err), err)
 			}
 			diagnostic = err.Error()
-			checkpoint, err = c.recordCollectionFormatFailure(ctx, checkpoint, err)
+			checkpoint, err = c.saveCollectionFormatFailure(ctx, checkpoint, err)
 			if err != nil {
-				if errors.Is(err, errResultCollectionNoProgress) {
-					return c.collectionFailure(ctx, checkpoint, RepairFailureInvalidSchema, errors.Join(err, errors.New(diagnostic)))
-				}
-				return &resultCollectionFailure{Reason: RepairFailureCommit, Cause: err}
+				return err
 			}
 		case ResultCollectionReceived:
 			if sourceRecollection != nil {
@@ -168,16 +171,22 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 				return c.collectionFailure(ctx, checkpoint, localResultRejectionReason(err), err)
 			}
 			diagnostic = err.Error()
-			checkpoint, err = c.recordCollectionFormatFailure(ctx, checkpoint, err)
+			checkpoint, err = c.saveCollectionFormatFailure(ctx, checkpoint, err)
 			if err != nil {
-				if errors.Is(err, errResultCollectionNoProgress) {
-					return c.collectionFailure(ctx, checkpoint, RepairFailureInvalidSchema, errors.Join(err, errors.New(diagnostic)))
-				}
-				return &resultCollectionFailure{Reason: RepairFailureCommit, Cause: err}
+				return err
 			}
 		case ResultCollectionBlocked:
 			if !collectionGrantedForRun(collectionReceipt(c.todoItemByID(checkpoint.TaskID), checkpoint), c.executionRunID) {
 				return &resultCollectionFailure{Reason: checkpoint.FailureReason, Checkpoint: checkpoint, Cause: errResultCollectionBlocked}
+			}
+		case ResultCollectionInFlight:
+			received, err := c.restoreCollectionResponse(ctx, checkpoint)
+			if err != nil {
+				return c.collectionFailure(ctx, checkpoint, localResultRejectionReason(rejectNormalizationRecoveryRead(err)), err)
+			}
+			if received != nil {
+				checkpoint = received
+				continue
 			}
 		}
 		if checkpoint.TurnsUsed >= checkpoint.TurnLimit {
@@ -189,36 +198,33 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 		if acceptedRepairProof(checkpoint) != nil {
 			return c.collectionFailure(ctx, checkpoint, RepairFailureInvalidSchema, errors.New("accepted-result repair requires an explicit observed reference selection"))
 		}
+		if err := c.canonicalJournalOwner().providerBoundaryRequired(ctx); err != nil {
+			return c.collectionFailure(ctx, checkpoint, repairFailureCollectionUnavailable, err)
+		}
 		id := "result-collection-" + rand.Text()
 		invocation, request, err := c.prepareCollectionInvocation(ctx, def, checkpoint, id, diagnostic)
 		if err != nil {
+			if _, ok := errors.AsType[*localResultAdmissionError](err); ok {
+				return c.collectionFailure(ctx, checkpoint, localResultRejectionReason(err), err)
+			}
 			return c.collectionFailure(ctx, checkpoint, repairFailurePreparation, err)
 		}
-		checkpoint, err = c.reserveResultCollection(ctx, checkpoint, id, request)
+		checkpoint, err = c.executeFrozenCollectionTurn(ctx, invocation, def, checkpoint, id, request)
 		if err != nil {
-			return &resultCollectionFailure{Reason: RepairFailureCommit, Checkpoint: checkpoint, Cause: err}
-		}
-		response, usage, err := c.runCollectionInvocation(invocation, def, checkpoint)
-		var responseIssue *agent.StructuredResponseIssue
-		if errors.Is(err, errCollectionToolCall) {
-			// The data channel or callback rejected it before any handler could
-			// run. Preserve SDK arguments independently of the typed diagnostic;
-			// they are evidence, never an admitted claims response.
-			if failure, ok := errors.AsType[*agent.StructuredResponseError](err); ok {
-				response, responseIssue = failure.Arguments, new(failure.Issue)
-			} else {
-				response += "\ncollector_response_invalid: " + err.Error()
-			}
-			err = nil
-		}
-		if err != nil {
-			return c.collectionFailure(ctx, checkpoint, repairFailureCollectionUnavailable, err)
-		}
-		checkpoint, err = c.recordCollectionResponseUsage(ctx, checkpoint, []byte(response), usage, responseIssue)
-		if err != nil {
-			return &resultCollectionFailure{Reason: RepairFailureCommit, Checkpoint: checkpoint, Cause: err}
+			return err
 		}
 	}
+}
+
+func (c *Coordinator) saveCollectionFormatFailure(ctx context.Context, checkpoint *ResultCollectionCheckpoint, rejection error) (*ResultCollectionCheckpoint, error) {
+	next, err := c.recordCollectionFormatFailure(ctx, checkpoint, rejection)
+	if errors.Is(err, errResultCollectionNoProgress) {
+		return nil, c.collectionFailure(ctx, next, RepairFailureInvalidSchema, errors.Join(err, rejection))
+	}
+	if err != nil {
+		return nil, c.collectionFailure(ctx, checkpoint, localResultRejectionReason(rejectNormalizationRecoveryRead(err)), err)
+	}
+	return next, nil
 }
 
 func collectionRepairDiagnostic(receipt *ExecutionReceipt, runID string, sourceRecollection *ResultCollectionRecoveryAssessment) string {
@@ -274,13 +280,28 @@ func decodeFrozenCollectionRequest(data []byte, checkpoint *ResultCollectionChec
 	return request, nil
 }
 
+func (c *Coordinator) validateInitialCollectionReads(ctx context.Context, checkpoint *ResultCollectionCheckpoint) error {
+	if checkpoint.State != ResultCollectionPending || checkpoint.TurnsUsed != 0 || checkpoint.LegacySubmission != nil || checkpoint.ContractUpgrade != nil {
+		return nil
+	}
+	ctx = context.WithValue(ctx, resultCollectionAdmissionKey{}, checkpoint)
+	err := c.validateRequiredArtifactReadSubmission(ctx, checkpoint.TaskID)
+	if err == nil {
+		return nil
+	}
+	return c.collectionFailure(ctx, checkpoint, localResultRejectionReason(rejectNormalizationRecoveryRead(err)), err)
+}
+
 // A task-transition event can persist this native failure even when a prior
-// collection checkpoint append failed or the work context was cancelled. It
-// preserves the earlier CAS progress rather than forging a new model result.
+// collection checkpoint append failed or the work context was cancelled.
 func (c *Coordinator) recordCollectionStopReceipt(taskID string, cause error) {
 	item := c.todoItemByID(taskID)
+	if item == nil || item.ExecutionReceipt == nil {
+		return
+	}
 	checkpoint := currentResultCollection(item)
-	if checkpoint == nil {
+	failure, classified := errors.AsType[*resultCollectionFailure](cause)
+	if checkpoint == nil && !classified {
 		return
 	}
 	receipt := cloneExecutionReceipt(item.ExecutionReceipt)
@@ -292,10 +313,13 @@ func (c *Coordinator) recordCollectionStopReceipt(taskID string, cause error) {
 		return
 	}
 	reason := RepairFailureSource
-	if failure, ok := errors.AsType[*resultCollectionFailure](cause); ok {
+	if classified {
 		reason = failure.Reason
 	}
-	provenance.Attempted, provenance.RepairAttempts, provenance.FailureReason = true, checkpoint.TurnsUsed, reason
+	if checkpoint != nil {
+		provenance.Attempted, provenance.RepairAttempts = true, checkpoint.TurnsUsed
+	}
+	provenance.FailureReason = reason
 	if cause != nil {
 		provenance.Error = schemaRepairDiagnostic(cause.Error())
 	}

@@ -253,10 +253,13 @@ func DeleteSession(workspace string) error {
 }
 
 func NewSession() *SessionData {
-	now := time.Now().Format(time.RFC3339)
+	return newSessionAt(time.Now().Format(time.RFC3339))
+}
+
+func newSessionAt(timestamp string) *SessionData {
 	return &SessionData{
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		CreatedAt:       timestamp,
+		UpdatedAt:       timestamp,
 		Rounds:          0,
 		Entries:         []SessionEntry{},
 		DelegationPhase: DelegationPhaseInitialPending,

@@ -6,16 +6,16 @@ import (
 	"fmt"
 )
 
-func (c *Coordinator) recoveredTaskOutputOrigins(items []*TodoItem) (map[string]string, error) {
+func (c *Coordinator) recoveredTaskOutputOrigins(ctx context.Context, items []*TodoItem) (map[string]string, error) {
 	request := EvidenceBuildRequest{RunID: coordinatorRuntimeRunID(c), Workspace: c.artifactStoreRootPath(), Items: items}
-	if err := c.bindRecoveredEvidence(context.Background(), &request); err != nil {
+	if err := c.bindRecoveredEvidence(ctx, &request); err != nil {
 		return nil, err
 	}
 	return request.RecoveredTaskRuns, nil
 }
 
-func (c *Coordinator) runtimeActionRecoveryOrigins() (map[string]string, error) {
-	origins, err := c.recoveredTaskOutputOrigins(c.taskTracker.TodoList().Items())
+func (c *Coordinator) runtimeActionRecoveryOrigins(ctx context.Context) (map[string]string, error) {
+	origins, err := c.recoveredTaskOutputOrigins(ctx, c.taskTracker.TodoList().Items())
 	if err != nil {
 		return nil, err
 	}

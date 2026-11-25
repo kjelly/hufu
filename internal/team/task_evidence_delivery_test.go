@@ -97,7 +97,7 @@ func TestRequiredEvidenceDeliversDowngradedPayloadAndSealedHash(t *testing.T) {
 	if strings.Contains(compiled.Prompt, `"verdict":"supported"`) {
 		t.Fatal("handoff resurrected the pre-downgrade claim")
 	}
-	if err := c.validateRequiredEvidenceDelivery(audit.ID, 1, c.executionRunID); err != nil {
+	if err := c.validateRequiredEvidenceDelivery(t.Context(), audit.ID, 1, c.executionRunID); err != nil {
 		t.Fatal(err)
 	}
 	response, err := (&submitResultTool{coordinator: c, todoID: audit.ID}).Run(occurrenceTestContext(c, audit.ID, 1), fantasy.ToolCall{Input: `{"status":"success","summary":"audit complete"}`})
@@ -223,7 +223,7 @@ func TestRequiredEvidenceManifestIntegrityAndScope(t *testing.T) {
 			if name != "tampered" {
 				audit.ContextManifests[0].Fingerprint = contextManifestFingerprint(audit.ContextManifests[0])
 			}
-			err := c.validateRequiredEvidenceDelivery(audit.ID, 1, c.executionRunID)
+			err := c.validateRequiredEvidenceDelivery(t.Context(), audit.ID, 1, c.executionRunID)
 			if (err == nil) != (name == "fanout_valid" || name == "agent_case") {
 				t.Fatalf("delivery admission %s = %v", name, err)
 			}
@@ -247,7 +247,7 @@ func TestRequiredEvidenceDeliverySurvivesReplayAndBlocksLegacyFinish(t *testing.
 		t.Fatal(err)
 	}
 	c.taskTracker = &TaskTracker{todo: &TodoList{items: replayed}}
-	if err := c.validateRequiredEvidenceDelivery(audit.ID, 1); err != nil {
+	if err := c.validateRequiredEvidenceDelivery(t.Context(), audit.ID, 1); err != nil {
 		t.Fatalf("replay lost the proof of delivery: %v", err)
 	}
 	for _, item := range replayed {
@@ -276,7 +276,7 @@ func TestEvidenceDispatchRejectsCorruptOrMissingPayload(t *testing.T) {
 			case "schema":
 				source.ResultContract.SchemaSHA256 = "drifted"
 			}
-			if _, err := c.bindEvidenceSources([]TaskDef{taskDefFromTodoItem(audit)}); err == nil {
+			if _, err := c.bindEvidenceSources(t.Context(), []TaskDef{taskDefFromTodoItem(audit)}); err == nil {
 				t.Fatal("invalid dependency payload admitted")
 			}
 		})

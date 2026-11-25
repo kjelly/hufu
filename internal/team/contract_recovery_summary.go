@@ -111,7 +111,10 @@ func findRecoverySourceRef(source *SessionData, id string) *ResultContractRef {
 }
 
 func recoveryBindingRef(binding ExecutionResultContractPolicySnapshot) ResultContractRef {
-	return ResultContractRef{ID: binding.ID, SchemaSHA256: binding.SchemaSHA256, RequireStructured: binding.RequireStructured}
+	return ResultContractRef{
+		ID: binding.ID, SchemaSHA256: binding.SchemaSHA256, RequireStructured: binding.RequireStructured,
+		Normalizer: binding.Normalizer, NormalizerSHA256: binding.NormalizerSHA256,
+	}
 }
 
 func recoveryAcceptanceItems(spec AcceptanceSpec) []string {

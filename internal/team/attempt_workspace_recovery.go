@@ -63,6 +63,9 @@ func (c *Coordinator) reconcileAttemptWorlds(ctx context.Context) error {
 	visible := c.currentBranchEventIDs(events)
 	latestByTask := make(map[string]*attemptWorldRecord)
 	for _, record := range records {
+		if !visible[record.PreparedEventID] {
+			continue
+		}
 		if latest := latestByTask[record.TaskID]; latest == nil || record.order > latest.order {
 			latestByTask[record.TaskID] = record
 		}
@@ -89,62 +92,263 @@ func (c *Coordinator) reconcileAttemptWorlds(ctx context.Context) error {
 			c.warnForeignAttemptWorld(worldDir, owner, record)
 			continue
 		}
-		c.reconcileAttemptWorld(ctx, worldDir, owner, record, record != nil && latestByTask[record.TaskID] == record)
+		if err := c.reconcileAttemptWorld(ctx, worldDir, owner, record, latestByTask, visible); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func (c *Coordinator) reconcileAttemptWorld(ctx context.Context, worldDir string, owner attemptWorldOwner, record *attemptWorldRecord, latestOfTask bool) {
+func (c *Coordinator) reconcileAttemptWorld(ctx context.Context, worldDir string, owner attemptWorldOwner, record *attemptWorldRecord, latestByTask map[string]*attemptWorldRecord, visible map[string]bool) error {
 	if record == nil {
 		// No prepared event: the process stopped while copying, before a
 		// worker could run. A delta file means an apply may have begun, so
 		// that world is kept for inspection instead.
 		if _, err := os.Lstat(filepath.Join(worldDir, attemptWorldDeltaFile)); err == nil {
 			log.Printf("warning: attempt world %s has no recorded lifecycle but holds a delta; leaving it in place", worldDir)
-			return
+			return nil
 		}
 		c.removeOrphanAttemptWorld(ctx, worldDir, owner, attemptWorldLastStateUnrecorded)
-		return
+		return nil
 	}
 	item := c.todoItemByID(record.TaskID)
 	switch record.State {
-	case attemptWorldStateApplying:
-		c.recoverApplyingAttemptWorld(ctx, worldDir, owner, record, item)
-	case attemptWorldStateApplied:
-		if item != nil && item.Status == TaskDone {
+	case attemptWorldStateApplying, attemptWorldStateApplied:
+		if record.State == attemptWorldStateApplied && item != nil && item.Status == TaskDone {
 			c.removeOrphanAttemptWorld(ctx, worldDir, owner, record.State)
-			return
+			return nil
 		}
-		c.finishRecoveredAttempt(ctx, worldDir, owner, record, item)
+		startVisible := visible[record.ApplyStarted.ID]
+		if record.State == attemptWorldStateApplied {
+			startVisible = startVisible && visible[record.Applied.ID]
+		}
+		return c.reconcileCommittedAttemptWorld(ctx, worldDir, owner, record, item, startVisible)
 	case attemptWorldStatePrepared:
 		if item != nil && item.Status == TaskBlocked && item.ExecutionReceipt != nil && item.ExecutionReceipt.ExecutionWorldID == record.WorldID {
-			return
+			return nil
 		}
 		if checkpoint := currentResultCollection(item); checkpoint != nil && item.Status != TaskDone && checkpoint.Attempt == record.Attempt && checkpoint.SourceRunID == record.RunID {
-			return
+			if isCommittedNormalizedCollection(item) && CanTransition(item.Status, TaskDone) {
+				return c.reconcilePreparedCollectedApply(ctx, worldDir, owner, record, item, checkpoint)
+			}
+			return nil
 		}
-		if item != nil && item.Status == TaskProtocolIncomplete && latestOfTask && record.OccurrenceAttempt == item.Retries+1 {
-			return // its result-only repair applies it on resume
+		if item != nil && latestByTask[record.TaskID] == record && record.OccurrenceAttempt == item.Retries+1 {
+			if item.Status == TaskProtocolIncomplete || c.returnedCollectionNeedsPreparedWorld(ctx, item, record) || c.normalizationNeedsPreparedWorld(item, record) {
+				return nil // the result continuation can settle this world on resume
+			}
 		}
 		c.removeOrphanAttemptWorld(ctx, worldDir, owner, record.State)
 	default:
 		c.removeOrphanAttemptWorld(ctx, worldDir, owner, record.State)
 	}
+	return nil
+}
+
+func (c *Coordinator) normalizationNeedsPreparedWorld(item *TodoItem, record *attemptWorldRecord) bool {
+	if isNormalizedVerificationPending(item) || (item.Status == TaskInProgress && canResumeDirectNormalization(item)) {
+		receipt := item.ExecutionReceipt
+		return receipt == nil || (receipt.ExecutionWorldID == record.WorldID && receipt.RunID == record.RunID)
+	}
+	accepted, err := c.readAcceptedNormalizedSubmission(item)
+	if err != nil {
+		log.Printf("warning: cannot check task %s accepted submission (%v); keeping attempt world %s", item.ID, err, record.WorldID)
+		return true
+	}
+	if accepted != nil {
+		return accepted.ExecutionWorldID == record.WorldID && accepted.RunID == record.RunID
+	}
+	checkpoint, err := c.readDirectNormalizationCheckpoint(item)
+	if err != nil {
+		log.Printf("warning: cannot check task %s normalization checkpoint (%v); keeping attempt world %s", item.ID, err, record.WorldID)
+		return true
+	}
+	return checkpoint != nil && checkpoint.Receipt.ExecutionWorldID == record.WorldID && checkpoint.Receipt.RunID == record.RunID
+}
+
+func (c *Coordinator) reconcileCommittedAttemptWorld(ctx context.Context, worldDir string, owner attemptWorldOwner, record *attemptWorldRecord, item *TodoItem, visible bool) error {
+	if item == nil || !CanTransition(item.Status, TaskDone) {
+		log.Printf("warning: attempt world %s is %s but task %s cannot be completed from this session; leaving it in place", worldDir, record.State, record.TaskID)
+		return nil
+	}
+	normalized := item.ResultContract != nil && item.ResultContract.Normalizer != ""
+	var started attemptApplyStartedPayload
+	var delta *AttemptWorkspaceDelta
+	err := json.Unmarshal(record.ApplyStarted.Payload, &started)
+	if normalized {
+		if err == nil {
+			if collection := currentResultCollection(item); collection != nil {
+				delta, err = c.validateCollectedApplyReplay(ctx, worldDir, owner, record, item, collection, started, visible)
+			} else {
+				delta, err = c.validateNormalizedApplyReplay(ctx, worldDir, owner, record, item, started, visible)
+			}
+		}
+		if err != nil {
+			return c.settleNormalizedRecoveryRead(item, taskDefFromTodoItem(item), rejectNormalizationRecoveryRead(err))
+		}
+	} else if err != nil {
+		detail := c.FailureDetail(fmt.Errorf("%s: attempt world %s has no readable completion record: %w", workspaceApplyIncompleteCode, owner.WorldID, err), FailureSourceError)
+		c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Desc, item.ID, detail, NeedsHuman, FailureExecution, TaskBlocked, item.Output)
+		return nil
+	}
+	if record.State == attemptWorldStateApplying {
+		return c.recoverApplyingAttemptWorld(ctx, worldDir, owner, record, item, started, delta)
+	}
+	return c.finishRecoveredAttempt(ctx, worldDir, owner, item, started, normalized)
+}
+
+func (c *Coordinator) validateCollectedApplyReplay(ctx context.Context, worldDir string, owner attemptWorldOwner, record *attemptWorldRecord, item *TodoItem, cp *ResultCollectionCheckpoint, started attemptApplyStartedPayload, visible bool) (*AttemptWorkspaceDelta, error) {
+	if !visible || cp.SourceRunID != record.RunID || cp.TaskID != record.TaskID || cp.Attempt != record.Attempt || cp.BranchID != record.BranchID ||
+		owner.WorldID != record.WorldID || owner.RunID != record.RunID || owner.TaskID != item.ID || owner.Attempt != record.Attempt ||
+		owner.OccurrenceAttempt != record.OccurrenceAttempt || record.OccurrenceAttempt != item.Retries+1 ||
+		record.ApplyStarted.Actor != attemptWorldEventActor || record.ApplyStarted.TaskID != cp.TaskID || record.ApplyStarted.Attempt != cp.Attempt {
+		return nil, errors.New("isolated apply has no matching original collection work")
+	}
+	checkpoint, intent, err := c.readCollectedApply(cp, worldDir)
+	if err != nil {
+		return nil, err
+	}
+	if checkpoint == nil || !intent.published || !checkpoint.matches(started) {
+		return nil, errors.New("collection apply event differs from its sealed verification")
+	}
+	if err := c.validateCollectedApplySources(ctx, item, cp, record.WorldID, started); err != nil {
+		return nil, err
+	}
+	manifest, err := c.collectedVerifiedWorkspaceManifest(ctx, item, started, intent.published)
+	if err != nil {
+		return nil, err
+	}
+	if manifest != "" && manifest != checkpoint.ManifestSHA256 {
+		return nil, errors.New("collection apply event does not match the originally verified manifest")
+	}
+	if err := verifyAppliedWorldEvent(record, cp.TaskID, started.DeltaDigest); err != nil {
+		return nil, err
+	}
+	return checkpoint.readDelta(worldDir, record.WorldID, record.BaselineDigest)
+}
+
+func (c *Coordinator) validateCollectedApplySources(ctx context.Context, item *TodoItem, cp *ResultCollectionCheckpoint, worldID string, started attemptApplyStartedPayload) error {
+	receipt := started.ExecutionReceipt
+	if cp.State != ResultCollectionCommitted || receipt == nil ||
+		!sameCanonicalEvidence(cp, currentResultCollection(&TodoItem{ExecutionReceipt: receipt, Retries: item.Retries})) ||
+		started.WorldID != worldID || receipt.ExecutionWorldID != worldID || receipt.RunID != cp.SourceRunID ||
+		receipt.TaskID != cp.TaskID || receipt.ModelExecutionID != cp.ModelExecutionID || receipt.Attempt != cp.Attempt {
+		return errors.New("isolated apply does not belong to the sealed collection world")
+	}
+	work, err := c.loadCollectionWork(ctx, item, cp)
+	if err != nil {
+		return err
+	}
+	if work.Receipt.ExecutionWorldID != worldID {
+		return errors.New("isolated apply does not belong to the sealed collection world")
+	}
+	if err := c.validateCollectedApplyResult(ctx, item, cp, started); err != nil {
+		return err
+	}
+	return c.validateNormalizedCollectionResultSources(ctx, cp, started.TypedResult, receipt)
+}
+
+func (c *Coordinator) validateNormalizedCollectionResultSources(ctx context.Context, cp *ResultCollectionCheckpoint, result *TaskResult, receipt *ExecutionReceipt) error {
+	fanoutModelID := ""
+	if cp.FanoutLeaf {
+		fanoutModelID = cp.ModelExecutionID
+	}
+	projection, err := c.normalizedWorkMedia(ctx, collectionWorkIdentity(cp), fanoutModelID, result, receipt)
+	if err != nil {
+		return err
+	}
+	if !sameCanonicalEvidence(projection, result.RuntimeMedia) {
+		return errors.New("isolated apply lost media from the original collection work")
+	}
+	return c.validateRequiredEvidenceDeliveryForResult(ctx, cp.TaskID, cp.Attempt, result, cp.SourceRunID)
+}
+
+func (c *Coordinator) validateCollectedApplyResult(ctx context.Context, item *TodoItem, cp *ResultCollectionCheckpoint, started attemptApplyStartedPayload) error {
+	accepted, err := c.readAcceptedCollectionResult(ctx, item, cp)
+	if err != nil {
+		return err
+	}
+	if started.TypedResult == nil {
+		return errors.New("isolated apply lost its accepted collection result")
+	}
+	// The source check also authenticates this runtime-owned enrichment.
+	if projection := started.TypedResult.RuntimeMedia; projection != nil {
+		attachTaskRuntimeMedia(accepted, projection)
+	}
+	got, gotErr := marshalNormalizedCheckpoint(started.TypedResult)
+	want, wantErr := marshalNormalizedCheckpoint(accepted)
+	if gotErr != nil || wantErr != nil || string(got) != string(want) {
+		return errors.New("isolated apply result differs from the sealed collection result")
+	}
+	return nil
+}
+
+func (c *Coordinator) validateNormalizedApplyReplay(ctx context.Context, worldDir string, owner attemptWorldOwner, record *attemptWorldRecord, item *TodoItem, started attemptApplyStartedPayload, visible bool) (*AttemptWorkspaceDelta, error) {
+	event := record.ApplyStarted
+	receipt := item.ExecutionReceipt
+	if receipt == nil || !visible || event.Actor != attemptWorldEventActor || event.TaskID != item.ID ||
+		event.Attempt != record.Attempt || record.TaskID != item.ID || record.RunID != receipt.RunID ||
+		owner.WorldID != started.WorldID || owner.WorldID != receipt.ExecutionWorldID || owner.RunID != record.RunID ||
+		owner.TaskID != record.TaskID || owner.Attempt != record.Attempt || record.Attempt != receipt.Attempt ||
+		owner.OccurrenceAttempt != record.OccurrenceAttempt || record.OccurrenceAttempt != item.Retries+1 {
+		return nil, errors.New("normalized apply does not match its original attempt world")
+	}
+	result, err := c.normalizedVerificationResult(item)
+	if err != nil {
+		return nil, err
+	}
+	checkpoint, err := c.loadNormalizedCompletion(item.ID, result, "")
+	if err != nil {
+		return nil, err
+	}
+	if err := checkpoint.validateApplyEvidence(worldDir); err != nil {
+		return nil, err
+	}
+	if !checkpoint.matchesApply(started) || !checkpoint.verified(item, started.VerifyResult) ||
+		!sameCanonicalEvidence(receipt, started.ExecutionReceipt) || !sameCanonicalEvidence(result, started.TypedResult) {
+		return nil, errors.New("normalized apply event does not match the committed completion evidence")
+	}
+	manifest, err := checkpoint.verifiedWorkspaceManifest(item, true)
+	if err != nil {
+		return nil, err
+	}
+	if manifest != "" && manifest != checkpoint.DeltaManifestSHA256 {
+		return nil, errors.New("normalized apply event does not match the originally verified manifest")
+	}
+	if err := c.validateNormalizedCompletionSources(ctx, item); err != nil {
+		return nil, err
+	}
+	if err := verifyAppliedWorldEvent(record, item.ID, checkpoint.DeltaSHA256); err != nil {
+		return nil, err
+	}
+	return checkpoint.readDelta(worldDir, record.WorldID, record.BaselineDigest)
+}
+
+func verifyAppliedWorldEvent(record *attemptWorldRecord, taskID, digest string) error {
+	if record.State != attemptWorldStateApplied {
+		return nil
+	}
+	applied := record.Applied
+	var payload attemptWorldEventPayload
+	if applied.Actor != attemptWorldEventActor || applied.TaskID != taskID || applied.Attempt != record.Attempt ||
+		json.Unmarshal(applied.Payload, &payload) != nil || payload.WorldID != record.WorldID || payload.DeltaDigest != digest {
+		return errors.New("applied world event does not match the committed delta")
+	}
+	return nil
 }
 
 // recoverApplyingAttemptWorld re-runs an apply a crash interrupted. The apply
 // is re-entrant: paths already at their final state are skipped. Anything it
 // cannot prove blocks the task and keeps the world.
-func (c *Coordinator) recoverApplyingAttemptWorld(ctx context.Context, worldDir string, owner attemptWorldOwner, record *attemptWorldRecord, item *TodoItem) {
-	if item == nil || !CanTransition(item.Status, TaskDone) {
-		log.Printf("warning: attempt world %s was mid-apply for task %s, which this session cannot complete; leaving it in place", worldDir, record.TaskID)
-		return
-	}
+func (c *Coordinator) recoverApplyingAttemptWorld(ctx context.Context, worldDir string, owner attemptWorldOwner, record *attemptWorldRecord, item *TodoItem, started attemptApplyStartedPayload, delta *AttemptWorkspaceDelta) error {
+	normalized := delta != nil
 	world := NewIsolatedCopyExecutionWorld()
 	prepared, _, err := world.Load(worldDir, record.BaselineDigest)
-	var delta *AttemptWorkspaceDelta
-	if err == nil {
+	if err == nil && delta == nil {
 		delta, err = readAttemptWorldDelta(worldDir, record.DeltaDigest)
+	}
+	if err != nil && normalized {
+		return c.settleNormalizedRecoveryRead(item, taskDefFromTodoItem(item), rejectNormalizationRecoveryRead(err))
 	}
 	var result AttemptWorkspaceApplyResult
 	if err == nil {
@@ -156,37 +360,45 @@ func (c *Coordinator) recoverApplyingAttemptWorld(ctx context.Context, worldDir 
 			"world_id": owner.WorldID, "delta_digest": delta.Digest,
 			"files_written": result.FilesWritten, "files_deleted": result.FilesDeleted, "recovered": true,
 		})
+		if err != nil && normalized {
+			return rejectLocalResultPersistence(fmt.Errorf("record recovered apply of attempt world %s for task %s: %w", owner.WorldID, item.ID, err))
+		}
 	}
 	if err != nil {
 		detail := c.FailureDetail(fmt.Errorf("%s: the interrupted apply of attempt world %s could not be completed (world kept at %s): %w", workspaceApplyIncompleteCode, owner.WorldID, worldDir, err), FailureSourceError)
+		if normalized {
+			switch {
+			case errors.Is(err, errAttemptDeltaSourceChanged):
+				return c.settleNormalizedRecoveryRead(item, taskDefFromTodoItem(item), rejectLocalResult(RepairFailureSource, err))
+			default:
+				if _, conflict := errors.AsType[*AttemptWorkspaceConflictError](err); !conflict {
+					return rejectLocalResultPersistence(fmt.Errorf("resume verified workspace apply: %w", err))
+				}
+				blocked := TaskBlocked
+				return c.persistFailureWithOutput(item.Agent, item.Desc, item.ID, detail, NeedsHuman, FailureWorkspaceConflict, &blocked, item.Output)
+			}
+		}
 		c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Desc, item.ID, detail, NeedsHuman, FailureExecution, TaskBlocked, item.Output)
 		c.report(c.newEvent("needs_human").withMessage(detail).withTodoID(item.ID))
-		return
+		return nil
 	}
-	record.State = attemptWorldStateApplied
-	c.finishRecoveredAttempt(ctx, worldDir, owner, record, item)
+	return c.finishRecoveredAttempt(ctx, worldDir, owner, item, started, normalized)
 }
 
 // finishRecoveredAttempt completes the task of an applied world and then
 // deletes the world. The world stays when the task cannot complete.
-func (c *Coordinator) finishRecoveredAttempt(ctx context.Context, worldDir string, owner attemptWorldOwner, record *attemptWorldRecord, item *TodoItem) {
-	if item == nil || !CanTransition(item.Status, TaskDone) {
-		log.Printf("warning: attempt world %s was applied but task %s cannot be completed from this session; leaving it in place", worldDir, record.TaskID)
-		return
-	}
-	var started attemptApplyStartedPayload
-	if err := json.Unmarshal(record.ApplyStarted, &started); err != nil {
-		detail := c.FailureDetail(fmt.Errorf("%s: the applied attempt world %s has no readable completion record: %w", workspaceApplyIncompleteCode, owner.WorldID, err), FailureSourceError)
-		c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Desc, item.ID, detail, NeedsHuman, FailureExecution, TaskBlocked, item.Output)
-		return
-	}
+func (c *Coordinator) finishRecoveredAttempt(ctx context.Context, worldDir string, owner attemptWorldOwner, item *TodoItem, started attemptApplyStartedPayload, normalized bool) error {
 	if err := c.finalizeAppliedAttempt(ctx, item, started); err != nil {
+		if normalized {
+			return rejectLocalResultPersistence(fmt.Errorf("complete task %s from applied attempt world %s: %w", item.ID, owner.WorldID, err))
+		}
 		log.Printf("warning: complete task %s from applied attempt world %s: %v", item.ID, owner.WorldID, err)
-		return
+		return nil
 	}
 	if err := removeAttemptWorldDir(worldDir, owner.WorldID); err != nil {
 		log.Printf("warning: remove attempt world %s: %v", owner.WorldID, err)
 	}
+	return nil
 }
 
 // finalizeAppliedAttempt completes a task whose verified attempt was applied

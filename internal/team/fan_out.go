@@ -2,10 +2,12 @@ package team
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -18,13 +20,16 @@ var fanOutPlaceholderPattern = regexp.MustCompile(`\{([a-zA-Z0-9_]+)\}`)
 
 // expandFanOutTasks replaces every task with a non-nil FanOut with one task
 // per data row of its TSV source, substituting {column} placeholders in
-// GoalTemplate with that row's value; tasks without FanOut pass through
-// unchanged, in their original position. A malformed source, an
-// out-of-workspace source, or a template placeholder with no matching header
+// GoalTemplate with that row's value. Scheduling indices refer to the
+// original request, so dependents of a fan-out wait for all its children.
+// A malformed or out-of-workspace source, or a template placeholder with no matching header
 // column fails the whole dispatch (no partial expansion), so a coordinator's
 // mistake is caught immediately rather than producing some correct and some
 // silently wrong tasks.
-func (c *Coordinator) expandFanOutTasks(tasks []TaskDef) ([]TaskDef, error) {
+func (c *Coordinator) expandFanOutTasks(ctx context.Context, tasks []TaskDef) ([]TaskDef, error) {
+	if err := artifactReadContextError(ctx); err != nil {
+		return nil, err
+	}
 	hasFanOut := false
 	for _, t := range tasks {
 		if t.FanOut != nil || t.EvidenceInventory.isExpansion() {
@@ -40,24 +45,25 @@ func (c *Coordinator) expandFanOutTasks(tasks []TaskDef) ([]TaskDef, error) {
 		workspace = c.session.Workspace
 	}
 	expanded := make([]TaskDef, 0, len(tasks))
+	offsets := make([]int, len(tasks)+1)
 	for i, t := range tasks {
+		offsets[i] = len(expanded)
 		if t.EvidenceInventory.isExpansion() {
 			if len(tasks) != 1 || len(t.EvidenceFrom) != 0 || len(t.DependsOn) != 0 || t.Pipeline || t.OnFailure != nil {
 				return nil, fmt.Errorf("contract %q owns its fan-out and evidence_from; dispatch it alone without scheduling inputs", t.ContractID)
 			}
-			rows, err := c.expandEvidenceInventory(t)
+			rows, err := c.expandEvidenceInventory(ctx, t)
 			if err != nil {
 				return nil, fmt.Errorf("tasks[%d].evidence-inventory: %w", i, err)
 			}
-			expanded = append(expanded, rows...)
-			continue
+			return rows, nil
 		}
 		if t.FanOut == nil {
 			expanded = append(expanded, t)
 			continue
 		}
 		if usesStructuredWorkset(t) {
-			rows, err := c.expandStructuredFanOutTask(t)
+			rows, err := c.expandStructuredFanOutTask(ctx, t)
 			if err != nil {
 				return nil, fmt.Errorf("tasks[%d].fan_out: %w", i, err)
 			}
@@ -70,7 +76,46 @@ func (c *Coordinator) expandFanOutTasks(tasks []TaskDef) ([]TaskDef, error) {
 		}
 		expanded = append(expanded, rows...)
 	}
+	offsets[len(tasks)] = len(expanded)
+	for i, task := range expandPipelineDeps(tasks) {
+		start, end := offsets[i], offsets[i+1]
+		if start == end {
+			continue
+		}
+		deps := expandFanOutIndices(task.DependsOn, offsets, i)
+		order := expandFanOutIndices(task.OrderAfter, offsets, i)
+		var failureTarget *int
+		if task.OnFailure != nil && *task.OnFailure != i {
+			target := *task.OnFailure
+			if target < 0 || target >= len(tasks) || offsets[target+1]-offsets[target] != 1 {
+				return nil, fmt.Errorf("tasks[%d].on_failure: target %d must resolve to exactly one task", i, target)
+			}
+			failureTarget = new(offsets[target])
+		}
+		for j := start; j < end; j++ {
+			expanded[j].DependsOn = slices.Clone(deps)
+			expanded[j].OrderAfter = slices.Clone(order)
+			expanded[j].Pipeline = false
+			expanded[j].OnFailure = failureTarget
+			if task.OnFailure != nil && *task.OnFailure == i {
+				expanded[j].OnFailure = new(j)
+			}
+		}
+	}
 	return expanded, nil
+}
+
+func expandFanOutIndices(indices, offsets []int, original int) []int {
+	var expanded []int
+	for _, index := range indices {
+		if index == original || index < 0 || index >= len(offsets)-1 {
+			continue
+		}
+		for child := offsets[index]; child < offsets[index+1]; child++ {
+			expanded = append(expanded, child)
+		}
+	}
+	return expanded
 }
 
 func expandFanOutTask(workspace string, task TaskDef) ([]TaskDef, error) {

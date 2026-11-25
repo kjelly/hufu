@@ -13,7 +13,10 @@ func (c *Coordinator) expectedDependencyResultView(ctx context.Context, item *To
 	if err != nil || policy == nil {
 		return nil, err
 	}
-	results := c.dependencyResultsForTask(item.ID)
+	results := c.dependencyResultsForTaskWithContext(ctx, item.ID)
+	if err := artifactReadContextError(ctx); err != nil {
+		return nil, err
+	}
 	sources, err := c.dependencyViewSources(ctx, item, results)
 	if err != nil {
 		return nil, err
@@ -67,13 +70,13 @@ func (c *Coordinator) validateRecordedDependencyViewDispatch(ctx context.Context
 	return fmt.Errorf("selected dependency dispatch is absent from canonical event history")
 }
 
-func (c *Coordinator) validateSelectedDependencyDelivery(todoID string, attempt int, runIDs ...string) error {
+func (c *Coordinator) validateSelectedDependencyDelivery(ctx context.Context, todoID string, attempt int, runIDs ...string) error {
 	owner := c.dependencyViewOwner(todoID)
 	item := owner.todoItemByID(todoID)
 	if item == nil {
 		return nil
 	}
-	expected, err := owner.expectedDependencyResultView(context.Background(), item)
+	expected, err := owner.expectedDependencyResultView(ctx, item)
 	if err != nil || expected == nil {
 		return err
 	}
@@ -94,7 +97,7 @@ func (c *Coordinator) validateSelectedDependencyDelivery(todoID string, attempt 
 		if err := validateDependencyViewManifestAgainstSource(manifest, expected); err != nil {
 			return err
 		}
-		if err := owner.validateRecordedDependencyViewDispatch(context.Background(), manifest); err != nil {
+		if err := owner.validateRecordedDependencyViewDispatch(ctx, manifest); err != nil {
 			return err
 		}
 		matched = true

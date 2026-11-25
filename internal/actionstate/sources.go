@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 // sourceCheckpoint is runtime-owned storage data. Adapters consume the versioned
@@ -23,22 +25,32 @@ type sourceCheckpoint struct {
 }
 
 type checkpointSource struct {
-	ID           string         `json:"ID"`
-	Status       string         `json:"Status"`
-	ContractID   string         `json:"contract_id"`
-	InputID      string         `json:"run_input_snapshot_id"`
-	EvidenceFrom []string       `json:"evidence_from"`
-	Binding      jsontext.Value `json:"workset_binding"`
-	Result       jsontext.Value `json:"typed_result"`
-	Receipt      *struct {
-		RunID            string `json:"run_id"`
-		TaskID           string `json:"task_id"`
-		Attempt          int    `json:"attempt"`
-		ProducerID       string `json:"producer_id"`
-		ModelExecutionID string `json:"model_execution_id"`
-		TranscriptRef    string `json:"transcript_ref"`
-		ActionID         string `json:"action_invocation_id"`
-		OutputsHash      string `json:"runtime_outputs_hash"`
+	ID             string               `json:"ID"`
+	Status         string               `json:"Status"`
+	ContractID     string               `json:"contract_id"`
+	ResultContract sourceResultContract `json:"result_contract"`
+	InputID        string               `json:"run_input_snapshot_id"`
+	EvidenceFrom   []string             `json:"evidence_from"`
+	Binding        jsontext.Value       `json:"workset_binding"`
+	Result         jsontext.Value       `json:"typed_result"`
+	Receipt        *struct {
+		RunID                string `json:"run_id"`
+		TaskID               string `json:"task_id"`
+		Attempt              int    `json:"attempt"`
+		ProducerID           string `json:"producer_id"`
+		ModelExecutionID     string `json:"model_execution_id"`
+		TranscriptRef        string `json:"transcript_ref"`
+		ActionID             string `json:"action_invocation_id"`
+		OutputsHash          string `json:"runtime_outputs_hash"`
+		PayloadHash          string `json:"result_payload_sha256"`
+		RawPayloadHash       string `json:"result_raw_payload_sha256"`
+		NormalizedOutputHash string `json:"result_normalizer_output_sha256"`
+		NormalizationOrigin  string `json:"result_normalizer_occurrence_sha256"`
+		ResultContractID     string `json:"result_contract_id"`
+		ResultContractHash   string `json:"result_contract_sha256"`
+		ResultValidation     string `json:"result_validation"`
+		ResultWorkDispatch   string `json:"result_work_dispatch_id"`
+		ResultWorkRevision   int    `json:"result_work_occurrence_revision"`
 	} `json:"execution_receipt"`
 	Verification *struct {
 		ExitCode    *int   `json:"exit_code"`
@@ -66,9 +78,26 @@ type sourceResult struct {
 	Outputs     jsontext.Value `json:"runtime_outputs"`
 	OutputsHash string         `json:"runtime_outputs_hash"`
 	Payload     *struct {
-		Value jsontext.Value `json:"value"`
-		Hash  string         `json:"sha256"`
+		Value         jsontext.Value       `json:"value"`
+		Hash          string               `json:"sha256"`
+		RawHash       string               `json:"raw_sha256"`
+		Contract      sourceResultContract `json:"contract"`
+		Normalization *struct {
+			ProviderHash string `json:"provider_sha256"`
+			OutputHash   string `json:"output_sha256"`
+			OriginHash   string `json:"occurrence_sha256"`
+			Raw          []byte `json:"raw"`
+			Output       []byte `json:"output"`
+		} `json:"normalization"`
 	} `json:"structured_payload"`
+}
+
+type sourceResultContract struct {
+	ID           string `json:"id"`
+	SchemaHash   string `json:"schema_sha256"`
+	Required     bool   `json:"require_structured"`
+	Normalizer   string `json:"normalizer"`
+	ProviderHash string `json:"normalizer_sha256"`
 }
 
 // ProjectSources produces the v1 read-only source view from a checkpoint and
@@ -88,10 +117,14 @@ func projectSources(checkpoint []byte, runID string, origins map[string]string, 
 		return nil, errors.New("missing source run identity")
 	}
 	view := struct {
-		Version int                `json:"version"`
-		InputID string             `json:"input_id"`
-		Tasks   []sourceProjection `json:"tasks"`
+		Version               int                `json:"version"`
+		InputID               string             `json:"input_id"`
+		Tasks                 []sourceProjection `json:"tasks"`
+		ArtifactDataDirectory string             `json:"artifact_data_directory,omitempty"`
 	}{Version: 1, InputID: current.InputID, Tasks: []sourceProjection{}}
+	if root != "" {
+		view.ArtifactDataDirectory = filepath.Join(runtimestore.ArtifactRoot(root), "data")
+	}
 	seen := make(map[string]bool)
 	for _, item := range current.Tasks {
 		if item.ID == "" || seen[item.ID] {
@@ -156,10 +189,50 @@ func verifyModelSource(item checkpointSource, result sourceResult) error {
 		return err
 	}
 	sum := sha256.Sum256(canonical)
-	if hex.EncodeToString(sum[:]) != result.Payload.Hash {
+	if hex.EncodeToString(sum[:]) != result.Payload.Hash || (receipt.PayloadHash != "" && receipt.PayloadHash != result.Payload.Hash) {
 		return errors.New("source payload hash mismatch")
 	}
+	return verifyModelSourceNormalization(item, result)
+}
+
+func verifyModelSourceNormalization(item checkpointSource, result sourceResult) error {
+	receipt := item.Receipt
+	payload := result.Payload
+	stage := payload.Normalization
+	if payload.Contract.Normalizer == "" {
+		if stage != nil || payload.RawHash != "" || receipt.RawPayloadHash != "" || receipt.NormalizedOutputHash != "" || receipt.NormalizationOrigin != "" {
+			return errors.New("source has unexpected normalization evidence")
+		}
+	} else if payload.Contract.ProviderHash == "" {
+		if item.ResultContract != payload.Contract || stage != nil || !validSourceSHA256(payload.RawHash) ||
+			receipt.PayloadHash != payload.Hash || receipt.RawPayloadHash != payload.RawHash ||
+			receipt.ResultContractID == "" || receipt.ResultContractID != payload.Contract.ID ||
+			!validSourceSHA256(receipt.ResultContractHash) || receipt.ResultContractHash != payload.Contract.SchemaHash ||
+			receipt.ResultValidation != "valid" || receipt.ResultWorkDispatch != "" || receipt.ResultWorkRevision != 0 ||
+			receipt.NormalizedOutputHash != "" || receipt.NormalizationOrigin != "" {
+			return errors.New("source lacks its original normalized result receipt")
+		}
+	} else {
+		if stage == nil || stage.ProviderHash == "" || stage.ProviderHash != payload.Contract.ProviderHash ||
+			receipt.NormalizationOrigin != stage.OriginHash || !validSourceSHA256(stage.OriginHash) ||
+			receipt.PayloadHash != payload.Hash || receipt.RawPayloadHash != payload.RawHash || receipt.NormalizedOutputHash != stage.OutputHash {
+			return errors.New("source normalization differs from its receipt")
+		}
+		rawHash, outputHash := sha256.Sum256(stage.Raw), sha256.Sum256(stage.Output)
+		if len(stage.Raw) == 0 || len(stage.Output) == 0 || hex.EncodeToString(rawHash[:]) != payload.RawHash ||
+			hex.EncodeToString(outputHash[:]) != stage.OutputHash {
+			return errors.New("source normalization hash mismatch")
+		}
+	}
 	return nil
+}
+
+func validSourceSHA256(digest string) bool {
+	if len(digest) != sha256.Size*2 {
+		return false
+	}
+	decoded, err := hex.DecodeString(digest)
+	return err == nil && hex.EncodeToString(decoded) == digest
 }
 
 func verifyActionSource(item checkpointSource, result sourceResult, inputID string) error {

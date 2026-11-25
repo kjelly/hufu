@@ -9,9 +9,8 @@ import (
 	"fmt"
 )
 
-// Decode independently verifiable references even when an unrelated claim
-// (for example summary or status) has the wrong JSON type. Never let a full
-// struct decode failure hide a forged receipt or an invalid source binding.
+// Read usable claims for payload inspection and recovery policies. Source
+// authentication uses validateSubmissionSourceEnvelope on the original wire.
 func independentRecoveryClaims(raw string) (*SubmitResultInput, error) {
 	if !jsontext.Value(raw).IsValid() {
 		return nil, nil // No independently decodable fields; callers check sealed sources.
@@ -20,30 +19,18 @@ func independentRecoveryClaims(raw string) (*SubmitResultInput, error) {
 	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
 		return nil, fmt.Errorf("cannot independently inspect recovery claims: %w", err)
 	}
-	selected := make(map[string]jsontext.Value)
-	for _, name := range []string{"artifacts", "receipt_ids", "memory_uses", "assumption_checks", "structured_payload"} {
-		if value, ok := fields[name]; ok {
-			selected[name] = value
+	var sourceFields []submissionSourceField
+	for name, value := range fields {
+		sourceFields = append(sourceFields, submissionSourceField{name: name, raw: value})
+	}
+	input := SubmitResultInput{Status: receiptSourceStatus(sourceFields, false), StructuredPayload: fields["structured_payload"]}
+	if receipts, supplied := fields["receipt_ids"]; supplied {
+		if err := json.Unmarshal(receipts, &input.ReceiptIDs); err != nil {
+			return nil, fmt.Errorf("cannot authenticate recovery receipt_ids: %w", err)
 		}
 	}
-	body, err := json.Marshal(selected)
-	if err != nil {
-		return nil, err
-	}
-	var input SubmitResultInput
-	if err := json.Unmarshal(body, &input, json.RejectUnknownMembers(true), collectionDurationFormat); err != nil {
-		return nil, fmt.Errorf("invalid recovery reference claims: %w", err)
-	}
-	_, input.receiptIDsSupplied = fields["receipt_ids"]
-	_, input.memoryUsesSupplied = fields["memory_uses"]
-	// An invalid or absent status must not weaken successful-receipt checks.
-	input.Status = TaskResultStatusSuccess
-	if status, ok := fields["status"]; ok {
-		var claimed string
-		if json.Unmarshal(status, &claimed) == nil && claimed != "" {
-			input.Status = claimed
-		}
-	}
+	input.MemoryUses, _ = submittedSourceClaims[MemoryUseRef](sourceFields, "memory_uses", false)
+	input.AssumptionChecks, _ = submittedSourceClaims[AssumptionCheck](sourceFields, "assumption_checks", false)
 	return &input, nil
 }
 
@@ -75,21 +62,25 @@ func validateRecoveryTerminalContext(workspace string, cp *ResultCollectionCheck
 }
 
 func (c *Coordinator) validateRecoveryIndependentClaims(ctx context.Context, cp *ResultCollectionCheckpoint, work *resultCollectionWork, compiled *CompiledResultContract, resolved string, check func(string, error) bool) bool {
-	return c.validateIndependentResultClaims(ctx, cp.TaskID, cp.Attempt, work.Workspace, compiled, resolved, check)
-}
-
-func (c *Coordinator) validateIndependentResultClaims(ctx context.Context, taskID string, attempt int, workspace string, compiled *CompiledResultContract, resolved string, check func(string, error) bool) bool {
-	var err error
+	taskID := cp.TaskID
 	// Independently inspect source references and receipt claims before any
 	// schema-format rejection. Invalid outer JSON is repairable only after the
 	// sealed work, dependencies, and decisions above have been verified.
+	if err := c.validateSubmissionSourceEnvelope(ctx, taskID, work.Workspace, resolved, cp, compiled); localResultRejectionReason(err) != RepairFailureInvalidSchema {
+		if _, receiptFailure := errors.AsType[*resultReceiptSourceError](err); receiptFailure {
+			return check("receipt_claims", err)
+		}
+		if !check("independent_claims", err) {
+			return false
+		}
+	}
 	independent, independentErr := independentRecoveryClaims(resolved)
-	if !check("independent_claims", independentErr) {
+	if independentErr != nil && !check("independent_claims", independentErr) {
 		return false
 	}
 	// Runtime-owned sources can be verified independently of the presence or
 	// shape of model-authored payload claims.
-	_, err = c.resultRuntimeInputValues(compiled, taskID)
+	err := c.validateSubmissionRuntimeInputs(ctx, taskID, compiled, submissionSourceOmissions(compiled, resolved, false))
 	if !check("runtime_inputs", err) {
 		return false
 	}
@@ -99,81 +90,83 @@ func (c *Coordinator) validateIndependentResultClaims(ctx context.Context, taskI
 			return false
 		}
 	}
-	if independent == nil && len(bytes.TrimSpace([]byte(resolved))) != 0 && compiled != nil && (compiled.evidenceReferences != nil || compiled.evidenceInputs != nil || len(compiled.runtimeInputs) > 0 || len(compiled.fixedCollections) > 0) {
-		check("payload_sources", errors.New("malformed JSON prevents independent verification of source references"))
+	fields := readableSourceMembers(collectionSourceInspectionJSON(resolved))
+	var result TaskResult
+	if independent != nil {
+		result = independent.taskResult()
+	}
+	if !check("claims_context", c.validateRecoveryContextClaims(ctx, cp, &result, fields)) {
 		return false
 	}
-	if independent != nil {
-		input := *independent
-		cp := currentResultCollection(c.todoItemByID(taskID))
-		input.receiptIDsSupplied = len(input.ReceiptIDs) > 0
-		if cp != nil && !check("receipt_binding", c.bindCollectionReceiptFields(ctx, cp, &input)) {
-			return false
+	if independent == nil && len(bytes.TrimSpace([]byte(resolved))) != 0 && compiled != nil {
+		if len(fields) != 0 && !normalizationContract(c.todoItemByID(taskID)) {
+			err := c.validateReadablePayloadSources(ctx, taskID, compiled, resolved, false)
+			return localResultRejectionReason(err) == RepairFailureInvalidSchema || check("payload_sources", err)
 		}
-		res := input.taskResult()
-		res.Attempt = attempt
-		if !check("claims_context", c.validateRecoveryContextClaims(ctx, taskID, &res)) {
-			return false
-		}
-		if len(res.Artifacts) > 0 && !check("artifact_claims", validateSubmittedArtifactClaims(ctx, workspace, res.Artifacts)) {
-			return false
-		}
-
-		if !input.collectionSourcesBound && !check("receipt_claims", c.validateTaskResultReceiptClaims(taskID, &res)) {
-			return false
-		}
-		var records []taskTranscriptRecord
-		if compiled != nil && compiled.toolEvidence != nil {
-			records, err = submissionToolEvidence(ctx, c, taskID)
-		}
-		if !check("tool_evidence", err) {
-			return false
-		}
-		// Absence makes no payload source claim. After receipts and runtime
-		// sources pass, the ordinary decoder may classify it as format repair;
-		// the replacement still goes through full submission validation.
-		payload := bytes.TrimSpace(input.StructuredPayload)
-		if len(payload) == 0 || bytes.Equal(payload, []byte("null")) {
-			return true
-		}
-		// Verify projection provenance too: a citation typo must not conceal a
-		// foreign invariant or stale context. Pure representation failures still
-		// belong to the ordinary model-schema repair boundary below.
-		projected, projectionErr := c.projectResultClaimsWithRecovery(ctx, taskID, input, true)
-		if projectionErr == nil {
-			input = projected
-		} else if localResultRejectionReason(rejectProjectedClaims(projectionErr)) != RepairFailureInvalidSchema {
-			check("projection_sources", projectionErr)
-			return false
-		}
-		_, message, repairable := c.validateStructuredPayloadClaims(taskID, input.StructuredPayload, false, records)
-		if message != "" && !repairable {
-			// A model-facing schema shape failure can be repaired, but binding and
-			// provenance failures must remain blocked. The normal decoder owns shape.
-			issues, _, shapeErr := resultSubmissionIssues(resolved, localResultCandidateValidationInfo(c, taskID))
-			if shapeErr != nil || len(issues) == 0 {
-				check("payload_sources", errors.New(message))
-				return false
-			}
-			// A malformed claims shape cannot prove the validity of source-reference
-			// fields. Conservative refusal avoids hiding a second source failure.
-			if compiled != nil && (compiled.evidenceReferences != nil || compiled.evidenceInputs != nil || len(compiled.runtimeInputs) > 0 || len(compiled.fixedCollections) > 0) {
-				check("payload_sources", errors.New(message))
-				return false
-			}
+		if compiled.evidenceReferences != nil || compiled.evidenceInputs != nil || len(compiled.runtimeInputs) > 0 || len(compiled.fixedCollections) > 0 {
+			return check("payload_sources", errors.New("malformed JSON prevents independent verification of source references"))
 		}
 	}
+	return independent == nil || c.validateIndependentPayloadClaims(ctx, taskID, compiled, *independent, resolved, true, check)
+}
 
+// Inspect payload references independently of outer envelope validation.
+func (c *Coordinator) validateIndependentPayloadClaims(ctx context.Context, taskID string, compiled *CompiledResultContract, input SubmitResultInput, resolved string, recovery bool, check func(string, error) bool) bool {
+	var records []taskTranscriptRecord
+	var err error
+	if compiled != nil && compiled.toolEvidence != nil {
+		records, err = submissionToolEvidence(ctx, c, taskID)
+	}
+	if !check("tool_evidence", err) {
+		return false
+	}
+	// Absence makes no payload source claim. After receipts and runtime
+	// sources pass, the ordinary decoder may classify it as format repair;
+	// the replacement still goes through full submission validation.
+	payload := bytes.TrimSpace(input.StructuredPayload)
+	if len(payload) == 0 || bytes.Equal(payload, []byte("null")) {
+		return true
+	}
+	if compiled != nil && len(compiled.runtimeInputs) > 0 && jsontext.Value(payload).Kind() != '{' {
+		check("payload_sources", errors.New("structured payload must be an object to verify its runtime input bindings"))
+		return false
+	}
+	// Verify projection provenance too: a citation typo must not conceal a
+	// foreign invariant or stale context. Pure representation failures still
+	// belong to the ordinary model-schema repair boundary below.
+	projected, projectionErr := c.projectResultClaimsWithRecovery(ctx, taskID, input, recovery)
+	if projectionErr == nil {
+		input = projected
+	} else if localResultRejectionReason(rejectProjectedClaims(projectionErr)) != RepairFailureInvalidSchema {
+		check("projection_sources", projectionErr)
+		return false
+	}
+	_, payloadErr, repairable := c.validateStructuredPayloadClaims(ctx, taskID, input.StructuredPayload, false, records)
+	if payloadErr != nil && !repairable {
+		// A model-facing schema shape failure can be repaired, but binding and
+		// provenance failures must remain blocked. The normal decoder owns shape.
+		issues, _, shapeErr := resultSubmissionIssues(resolved, localResultCandidateValidationInfo(c, taskID))
+		if shapeErr != nil || len(issues) == 0 {
+			check("payload_sources", payloadErr)
+			return false
+		}
+		// A malformed claims shape cannot prove the validity of source-reference
+		// fields. Conservative refusal avoids hiding a second source failure.
+		if compiled != nil && (compiled.evidenceReferences != nil || compiled.evidenceInputs != nil || len(compiled.runtimeInputs) > 0 || len(compiled.fixedCollections) > 0) {
+			check("payload_sources", payloadErr)
+			return false
+		}
+	}
 	return true
 }
 
 // Collection repair may carry inert assumption reports only when the frozen
 // occurrence cannot apply them to a governing decision. Accepted reference
 // repair also preserves all of its original reports exactly.
-func (c *Coordinator) validateRecoveryContextClaims(ctx context.Context, taskID string, result *TaskResult) error {
-	cp := currentResultCollection(c.todoItemByID(taskID))
+func (c *Coordinator) validateRecoveryContextClaims(ctx context.Context, cp *ResultCollectionCheckpoint, result *TaskResult, fields []submissionSourceField) error {
 	p := acceptedRepairProof(cp)
-	if len(result.MemoryUses) > 0 {
+	retrievalIDs, itemIDs, _ := readableMemorySourceIDs(fields, false)
+	if len(result.MemoryUses) > 0 || len(retrievalIDs) > 0 || len(itemIDs) > 0 {
 		if cp == nil || p != nil {
 			return fmt.Errorf("result-only recovery requires memory attribution reconciliation")
 		}
@@ -184,12 +177,14 @@ func (c *Coordinator) validateRecoveryContextClaims(ctx context.Context, taskID 
 		if !bound {
 			return fmt.Errorf("result-only recovery requires memory attribution reconciliation")
 		}
-		if err := c.validateCollectedMemoryInput(ctx, cp, SubmitResultInput{memoryUsesSupplied: true}, result); err != nil {
-			return err
-		}
 	}
+	assumptionIDs, evidence := readableAssumptionSources(fields, false)
+	hasAssumptions := len(result.AssumptionChecks) > 0 || len(assumptionIDs) > 0 || len(evidence) > 0
 	if p == nil {
-		return c.validateInertCollectionAssumptions(ctx, cp, result.AssumptionChecks)
+		if !hasAssumptions {
+			return nil
+		}
+		return c.validateCollectionAssumptionsAreInert(ctx, cp)
 	}
 	original, err := c.readAcceptedRepairResult(ctx, cp.ContractUpgrade.Original, p.ResultSHA256)
 	if err != nil {
@@ -198,8 +193,8 @@ func (c *Coordinator) validateRecoveryContextClaims(ctx context.Context, taskID 
 	if (len(original.AssumptionChecks) > 0 || len(result.AssumptionChecks) > 0) && !sameCanonicalEvidence(original.AssumptionChecks, result.AssumptionChecks) {
 		return fmt.Errorf("accepted-result repair must preserve original assumption checks")
 	}
-	if len(result.AssumptionChecks) > 0 {
-		if discipline := c.disciplineFor(taskID); discipline != nil && discipline.decisionID != "" {
+	if hasAssumptions {
+		if discipline := c.disciplineFor(cp.TaskID); discipline != nil && discipline.decisionID != "" {
 			return fmt.Errorf("accepted-result repair cannot replay governing decision checks")
 		}
 	}
@@ -210,6 +205,10 @@ func (c *Coordinator) validateInertCollectionAssumptions(ctx context.Context, cp
 	if len(checks) == 0 {
 		return nil
 	}
+	return c.validateCollectionAssumptionsAreInert(ctx, cp)
+}
+
+func (c *Coordinator) validateCollectionAssumptionsAreInert(ctx context.Context, cp *ResultCollectionCheckpoint) error {
 	if cp == nil {
 		return fmt.Errorf("result-only recovery requires the frozen occurrence for assumption reports")
 	}
@@ -244,7 +243,7 @@ func (c *Coordinator) assessRecoveryAcceptedSources(ctx context.Context, snapsho
 		} else if snapshot != nil {
 			err = c.validateCompletedResumeEvidence(ctx, source, snapshot)
 		} else {
-			err = c.validateAcceptedDependencyPayload(source)
+			err = c.validateAcceptedDependencyPayloadWithContext(ctx, source)
 		}
 		if !check("accepted_source", err) {
 			return false

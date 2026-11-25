@@ -1,6 +1,7 @@
 package team
 
 import (
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"strings"
@@ -45,28 +46,53 @@ func validateResultWorksetInputs(value any, spec *resultWorksetInputsSpec, bindi
 	if spec == nil {
 		return nil
 	}
+	ids, err := resultWorksetInputIDs(spec, binding)
+	if err != nil {
+		return err
+	}
+	return matchResultWorksetInputs(value, spec, ids)
+}
+
+func (c *Coordinator) verifiedResultWorksetInputIDs(ctx context.Context, taskID string, spec *resultWorksetInputsSpec) ([]string, error) {
+	binding, err := c.verifiedResultWorksetBinding(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	return resultWorksetInputIDs(spec, binding)
+}
+
+func resultWorksetInputIDs(spec *resultWorksetInputsSpec, binding *WorksetBinding) ([]string, error) {
 	if binding == nil {
-		return fmt.Errorf("workset input validation requires a frozen workset binding")
+		return nil, fmt.Errorf("workset input validation requires a frozen workset binding")
 	}
 	raw, present := binding.Bindings[spec.Binding]
 	if !present || len(raw) > maxWorksetValueBytes {
-		return fmt.Errorf("workset input binding %q is missing or oversized", spec.Binding)
+		return nil, fmt.Errorf("workset input binding %q is missing or oversized", spec.Binding)
 	}
 	expected, err := decodeResultContractJSON([]byte(raw))
 	if err != nil {
-		return fmt.Errorf("workset input binding %q must be a JSON array of unique non-empty strings", spec.Binding)
+		return nil, fmt.Errorf("workset input binding %q must be a JSON array of unique non-empty strings", spec.Binding)
 	}
 	ids, ok := expected.([]any)
 	if !ok || len(ids) > maxTaskResultAssertionItems {
-		return fmt.Errorf("workset input binding %q must be a bounded JSON array", spec.Binding)
+		return nil, fmt.Errorf("workset input binding %q must be a bounded JSON array", spec.Binding)
 	}
 	seen := make(map[string]bool, len(ids))
+	names := make([]string, 0, len(ids))
 	for _, id := range ids {
 		text, ok := id.(string)
 		if !ok || strings.TrimSpace(text) == "" || seen[text] {
-			return fmt.Errorf("workset input binding %q must contain unique non-empty strings", spec.Binding)
+			return nil, fmt.Errorf("workset input binding %q must contain unique non-empty strings", spec.Binding)
 		}
 		seen[text] = true
+		names = append(names, text)
+	}
+	return names, nil
+}
+
+func matchResultWorksetInputs(value any, spec *resultWorksetInputsSpec, ids []string) error {
+	if spec == nil {
+		return nil
 	}
 	rawItems, err := resolveJSONPointer(value, spec.ItemsPointer)
 	items, ok := rawItems.([]any)

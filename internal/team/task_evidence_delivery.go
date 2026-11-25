@@ -11,13 +11,40 @@ import (
 // validateAcceptedDependencyPayload checks persisted identity without binding
 // tool evidence again: downstream workers must see the already downgraded value.
 func (c *Coordinator) validateAcceptedDependencyPayload(source *TodoItem) error {
-	return c.validateAcceptedDependencyPayloadGraph(source, make(map[string]bool), make(map[string]bool))
+	return c.validateAcceptedDependencyPayloadWithContext(context.Background(), source)
 }
 
-func (c *Coordinator) validateAcceptedDependencyPayloadGraph(source *TodoItem, visiting, validated map[string]bool) error {
+func (c *Coordinator) validateAcceptedDependencyPayloadWithContext(ctx context.Context, source *TodoItem) error {
+	ctx, graph := withDependencyPayloadValidation(c.withRecoveryEvidenceReplay(ctx))
+	return c.validateAcceptedDependencyPayloadGraph(ctx, source, graph)
+}
+
+type dependencyPayloadValidationKey struct{}
+
+type dependencyPayloadValidation struct {
+	visiting, validated map[string]bool
+}
+
+func withDependencyPayloadValidation(ctx context.Context) (context.Context, *dependencyPayloadValidation) {
+	if graph, ok := ctx.Value(dependencyPayloadValidationKey{}).(*dependencyPayloadValidation); ok {
+		return ctx, graph
+	}
+	graph := &dependencyPayloadValidation{visiting: make(map[string]bool), validated: make(map[string]bool)}
+	return context.WithValue(ctx, dependencyPayloadValidationKey{}, graph), graph
+}
+
+func (c *Coordinator) validateAcceptedDependencyPayloadGraph(ctx context.Context, source *TodoItem, graph *dependencyPayloadValidation) error {
+	if err := artifactReadContextError(ctx); err != nil {
+		return err
+	}
 	if source == nil || source.TypedResult == nil {
 		return fmt.Errorf("evidence source has no accepted result")
 	}
+	if graph.visiting[source.ID] {
+		return fmt.Errorf("result evidence contains a dependency cycle at %s", source.ID)
+	}
+	graph.visiting[source.ID] = true
+	defer delete(graph.visiting, source.ID)
 	payload := source.TypedResult.StructuredPayload
 	if payload == nil {
 		if source.ResultContract != nil && source.ResultContract.RequireStructured {
@@ -27,17 +54,16 @@ func (c *Coordinator) validateAcceptedDependencyPayloadGraph(source *TodoItem, v
 		if err != nil {
 			return err
 		}
+		omissions := resultSourceOmissions{runtimeCompletion: runtimeCompletionFailure(compiled, source.TypedResult.Status)}
+		if err := c.validateIndependentResultSources(ctx, source.ID, compiled, omissions); err != nil {
+			return fmt.Errorf("evidence source %s optional result sources: %w", source.ID, err)
+		}
 		return validateResultEnvelope(compiled, source.TypedResult)
 	}
-	if visiting[source.ID] {
-		return fmt.Errorf("fixed collection evidence contains a dependency cycle")
-	}
 	key := source.ID + ":" + payload.SHA256 + ":" + source.TypedResult.Status
-	if validated[key] {
+	if graph.validated[key] {
 		return nil
 	}
-	visiting[source.ID] = true
-	defer delete(visiting, source.ID)
 	if source.ResultContract == nil || payload.Contract != *source.ResultContract || len(payload.Value) > resultPayloadMaxBytes {
 		return fmt.Errorf("evidence source %s payload does not match its admitted contract", source.ID)
 	}
@@ -45,7 +71,7 @@ func (c *Coordinator) validateAcceptedDependencyPayloadGraph(source *TodoItem, v
 	if payload.SHA256 != hex.EncodeToString(sum[:]) {
 		return fmt.Errorf("evidence source %s payload hash mismatch", source.ID)
 	}
-	compiled, err := c.compiledResultContract(source.ResultContract)
+	compiled, err := c.acceptedDependencySchema(ctx, source, payload)
 	if err != nil {
 		return err
 	}
@@ -59,43 +85,87 @@ func (c *Coordinator) validateAcceptedDependencyPayloadGraph(source *TodoItem, v
 	if err := validateResultEnvelope(compiled, source.TypedResult); err != nil {
 		return err
 	}
-	if err := validateResultWorksetInputs(value, compiled.worksetInputs, source.WorksetBinding); err != nil {
+	if hasResultSourceBindings(compiled) {
+		if err := c.validateResultSourceBindings(ctx, source, compiled, payload, value, &source.TypedResult.FilesRead, true); err != nil {
+			return fmt.Errorf("evidence source %s stored result bindings: %w", source.ID, err)
+		}
+	} else if err := validateResultFixedCollections(value, payload.CollectionBindings, nil); err != nil {
 		return err
 	}
-	var results []TaskResult
-	if len(compiled.fixedCollections) > 0 {
-		results = c.dependencyResultsForBinding(source.ID)
+	graph.validated[key] = true
+	return nil
+}
+
+func (c *Coordinator) acceptedDependencySchema(ctx context.Context, source *TodoItem, payload *ResultPayload) (*CompiledResultContract, error) {
+	if legacyNormalizedContract(payload.Contract) {
+		if !matchesAcceptedNormalizedReceipt(source, source.ExecutionReceipt, payload) {
+			return nil, fmt.Errorf("evidence source %s lacks its original normalized result receipt", source.ID)
+		}
+		return c.matchingResultSchema(payload.Contract)
 	}
-	plans, err := buildResultFixedCollections(compiled.fixedCollections, source.EvidenceFrom, results)
-	if err != nil {
-		return err
+	if !validNormalizedResultPayload(payload) {
+		return nil, fmt.Errorf("evidence source %s payload hash mismatch", source.ID)
 	}
-	plans, err = c.resolveDecisionPlans(context.Background(), source.ID, plans, payload.CollectionBindings)
-	if err != nil {
-		return err
-	}
-	if err := validateResultFixedCollections(value, payload.CollectionBindings, plans); err != nil {
-		return err
-	}
-	for _, plan := range plans {
-		for _, binding := range plan.binding.Sources {
-			upstream := c.todoItemByID(binding.TaskID)
-			if upstream == nil {
-				return fmt.Errorf("fixed collection upstream source is unavailable")
-			}
-			for i := range results {
-				if results[i].TaskID == upstream.ID {
-					upstream.TypedResult = &results[i]
-					break
-				}
-			}
-			if err := c.validateAcceptedDependencyPayloadGraph(upstream, visiting, validated); err != nil {
-				return err
-			}
+	if payload.Normalization != nil {
+		if err := c.validateNormalizedDependencyReceipt(ctx, source, payload); err != nil {
+			return nil, err
 		}
 	}
-	validated[key] = true
+	return c.compiledResultContract(source.ResultContract)
+}
+
+func (c *Coordinator) validateNormalizedDependencyReceipt(ctx context.Context, source *TodoItem, payload *ResultPayload) error {
+	runID := coordinatorRuntimeRunID(c)
+	receipt := latestSuccessfulExecutionReceipt(source, runID)
+	if receipt == nil {
+		var err error
+		receipt, err = c.recoveredNormalizedDependencyReceipt(ctx, source, runID)
+		if err != nil {
+			return fmt.Errorf("evidence source %s normalized result receipt: %w", source.ID, err)
+		}
+	}
+	if !matchesAcceptedNormalizedReceipt(source, receipt, payload) ||
+		!validArtifactID(receipt.TranscriptRef) || !strings.EqualFold(receipt.ProducerID, source.Agent) ||
+		receipt.RunInputSnapshotID != source.RunInputSnapshotID || receipt.RunInputSnapshotHash != source.RunInputSnapshotHash {
+		return fmt.Errorf("evidence source %s lacks its original normalized result receipt", source.ID)
+	}
+	if receipt.RunID != runID {
+		if err := c.validateResumeTranscript(ctx, receipt); err != nil {
+			return fmt.Errorf("evidence source %s normalized result receipt transcript: %w", source.ID, err)
+		}
+	}
 	return nil
+}
+
+func (c *Coordinator) recoveredNormalizedDependencyReceipt(ctx context.Context, source *TodoItem, runID string) (*ExecutionReceipt, error) {
+	if _, selectedRun := c.terminalRunInputs(runID); selectedRun == "" {
+		return nil, nil
+	}
+	// Authenticate the original result. The dependency view can add or remove
+	// artifact references for the receiving worker.
+	canonical := c.todoItemByID(source.ID)
+	request := EvidenceBuildRequest{RunID: runID, Workspace: c.artifactStoreRootPath(), Items: []*TodoItem{canonical}}
+	if err := c.bindRecoveredEvidence(ctx, &request); err != nil {
+		return nil, err
+	}
+	originalRun := request.RecoveredTaskRuns[source.ID]
+	if originalRun == "" {
+		return nil, nil
+	}
+	receipt := latestSuccessfulExecutionReceipt(source, originalRun)
+	if !sameCanonicalEvidence(receipt, latestSuccessfulExecutionReceipt(canonical, originalRun)) {
+		return nil, fmt.Errorf("receipt differs from canonical recovered source")
+	}
+	return receipt, nil
+}
+
+func matchesAcceptedNormalizedReceipt(source *TodoItem, receipt *ExecutionReceipt, payload *ResultPayload) bool {
+	return source.Status == TaskDone && taskResultStatusIsSuccessful(source.TypedResult.Status) &&
+		receipt != nil && receipt.Succeeded() && receipt.RunID != "" && receipt.TaskID == source.ID &&
+		receipt.Attempt > 0 && receipt.Attempt == source.TypedResult.Attempt && source.TypedResult.TaskID == source.ID &&
+		receipt.ResultValidation == ResultValidationValid && receiptMatchesResultPayload(receipt, payload) &&
+		(receipt.ResultContractID == payload.Contract.ID && receipt.ResultContractSHA256 == payload.Contract.SchemaSHA256 ||
+			validContractRevalidation(source, receipt))
 }
 
 func validateRequiredEvidenceInputs(task TaskDef, results []TaskResult) error {
@@ -120,15 +190,19 @@ func validateRequiredEvidenceInputs(task TaskDef, results []TaskResult) error {
 	return nil
 }
 
-func (c *Coordinator) validateDependencyPayloads(results []TaskResult) error {
-	visiting, validated := make(map[string]bool), make(map[string]bool)
+func (c *Coordinator) validateDependencyPayloads(ctx context.Context, todoID string, results []TaskResult) error {
+	if err := artifactReadContextError(ctx); err != nil {
+		return err
+	}
+	owner := c.dependencyViewOwner(todoID)
+	ctx, graph := withDependencyPayloadValidation(owner.withRecoveryEvidenceReplay(ctx))
 	for _, result := range results {
-		source := c.todoItemByID(result.TaskID)
+		source := owner.todoItemByID(result.TaskID)
 		if source == nil {
 			return fmt.Errorf("dependency %s has no admitted task", result.TaskID)
 		}
 		source.TypedResult = &result
-		if err := c.validateAcceptedDependencyPayloadGraph(source, visiting, validated); err != nil {
+		if err := owner.validateAcceptedDependencyPayloadGraph(ctx, source, graph); err != nil {
 			return err
 		}
 	}
@@ -156,15 +230,22 @@ func validateRequiredEvidenceContext(input WorkerContextInput, compiled Compiled
 
 // The canonical manifest is the durable proof of delivery, also after replay.
 // Old manifests without a dependency hash cannot prove a complete audit.
-func (c *Coordinator) validateRequiredEvidenceDelivery(todoID string, attempt int, runIDs ...string) error {
-	return c.validateRequiredEvidenceDeliveryWithContext(context.Background(), todoID, attempt, runIDs...)
+func (c *Coordinator) validateRequiredEvidenceDelivery(ctx context.Context, todoID string, attempt int, runIDs ...string) error {
+	var result *TaskResult
+	if item := c.todoItemByID(todoID); item != nil {
+		result = item.TypedResult
+	}
+	return c.validateRequiredEvidenceDeliveryForResult(ctx, todoID, attempt, result, runIDs...)
 }
 
-func (c *Coordinator) validateRequiredEvidenceDeliveryWithContext(ctx context.Context, todoID string, attempt int, runIDs ...string) error {
-	if err := c.validateHistoricalResultDelivery(todoID, attempt, runIDs...); err != nil {
+func (c *Coordinator) validateRequiredEvidenceDeliveryForResult(ctx context.Context, todoID string, attempt int, result *TaskResult, runIDs ...string) error {
+	if err := artifactReadContextError(ctx); err != nil {
 		return err
 	}
-	if err := c.validateSelectedDependencyDelivery(todoID, attempt, runIDs...); err != nil {
+	if err := c.validateHistoricalResultDelivery(ctx, todoID, attempt, runIDs...); err != nil {
+		return err
+	}
+	if err := c.validateSelectedDependencyDelivery(ctx, todoID, attempt, runIDs...); err != nil {
 		return err
 	}
 	item := c.todoItemByID(todoID)
@@ -173,11 +254,11 @@ func (c *Coordinator) validateRequiredEvidenceDeliveryWithContext(ctx context.Co
 	}
 	// Schema-owned reference bindings apply independently of the opt-in
 	// context-delivery proof, including external results and replayed tasks.
-	if item.TypedResult != nil {
-		if err := c.validateResultReferenceReadsWithContext(ctx, todoID, item.TypedResult); err != nil {
+	if result != nil {
+		if err := c.validateResultReferenceReads(ctx, todoID, result); err != nil {
 			return err
 		}
-		if err := c.validateEvidenceInputBindings(ctx, todoID, item.TypedResult.StructuredPayload, item.Status == TaskDone); err != nil {
+		if err := c.validateEvidenceInputBindings(ctx, todoID, result.StructuredPayload, item.Status == TaskDone); err != nil {
 			return err
 		}
 	}
@@ -186,13 +267,13 @@ func (c *Coordinator) validateRequiredEvidenceDeliveryWithContext(ctx context.Co
 	}
 	task := taskDefFromTodoItem(item)
 	results := c.dependencyResultsForTaskWithContext(ctx, todoID)
-	if err := context.Cause(ctx); err != nil {
+	if err := artifactReadContextError(ctx); err != nil {
 		return err
 	}
 	if err := validateRequiredEvidenceInputs(task, results); err != nil {
 		return err
 	}
-	if err := c.validateDependencyPayloads(results); err != nil {
+	if err := c.validateDependencyPayloads(ctx, todoID, results); err != nil {
 		return err
 	}
 	runID := ""
@@ -236,21 +317,18 @@ func (c *Coordinator) validateRequiredEvidenceDeliveryWithContext(ctx context.Co
 func (c *Coordinator) validateCompletedEvidenceDeliveries(ctx context.Context) error {
 	ctx = c.withRecoveryEvidenceReplay(ctx)
 	for _, item := range c.taskTracker.TodoList().Items() {
-		if err := context.Cause(ctx); err != nil {
+		if err := artifactReadContextError(ctx); err != nil {
 			return err
 		}
 		if item.Status == TaskDone {
-			if err := c.validateResultReferenceReadsWithContext(ctx, item.ID, item.TypedResult); err != nil {
-				return err
-			}
 			attempt := c.taskAttempt(item.ID)
 			if item.TypedResult != nil && item.TypedResult.Attempt > 0 {
 				attempt = item.TypedResult.Attempt
 			}
-			if err := c.validateRequiredEvidenceDeliveryWithContext(ctx, item.ID, attempt); err != nil {
+			if err := c.validateRequiredEvidenceDelivery(ctx, item.ID, attempt); err != nil {
 				return err
 			}
 		}
 	}
-	return context.Cause(ctx)
+	return artifactReadContextError(ctx)
 }

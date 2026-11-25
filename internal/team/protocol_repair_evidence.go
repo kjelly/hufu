@@ -160,7 +160,7 @@ func lastRejectedSubmitResult(steps []fantasy.StepResult) (input, rejection stri
 				continue
 			}
 			submitted, tracked := inputs[result.ToolCallID]
-			if !tracked {
+			if !tracked || submissionFailureMetadata(result.ClientMetadata) == ignoredSiblingSubmission {
 				continue
 			}
 			text, isError := toolResultOutputText(result.Result)

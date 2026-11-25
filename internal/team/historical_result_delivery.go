@@ -45,13 +45,13 @@ func validateFrozenHistoricalResultContexts(item *TodoItem, expected *historical
 
 // Completion verifies only real model tasks. Native actions and declared tool
 // steps do not invent provider calls to satisfy an inherited-context grant.
-func (c *Coordinator) validateHistoricalResultDelivery(todoID string, attempt int, runIDs ...string) error {
+func (c *Coordinator) validateHistoricalResultDelivery(ctx context.Context, todoID string, attempt int, runIDs ...string) error {
 	owner := c.dependencyViewOwner(todoID)
 	item := owner.todoItemByID(todoID)
 	if item == nil || item.HistoricalResultBinding == nil || item.Action != nil || item.CatalogAction != nil || len(item.Execution.Steps) > 0 {
 		return nil
 	}
-	expected, err := owner.expectedHistoricalResultContext(context.Background(), item)
+	expected, err := owner.expectedHistoricalResultContext(ctx, item)
 	if err != nil {
 		return err
 	}
@@ -72,7 +72,7 @@ func (c *Coordinator) validateHistoricalResultDelivery(todoID string, attempt in
 		if err := validateHistoricalResultManifestAgainstSource(manifest, expected); err != nil {
 			return err
 		}
-		if err := owner.validateRecordedDependencyViewDispatch(context.Background(), manifest); err != nil {
+		if err := owner.validateRecordedDependencyViewDispatch(ctx, manifest); err != nil {
 			return err
 		}
 		matched = true

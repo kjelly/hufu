@@ -3,11 +3,75 @@ package team
 import (
 	"encoding/json/v2"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/runtimestore"
 )
+
+func TestResultCollectionRecoveryRejectsGoverningAssumptionsInsideResponseEnvelope(t *testing.T) {
+	const claims = `{"status":"success","summary":"complete work report","assumption_checks":[{"assumption_id":"A1","status":"unknown"}]}`
+	t.Run("rejected wrapper", func(t *testing.T) {
+		issue := &agent.StructuredResponseIssue{Code: "additional_property", Expected: "object", Actual: "object"}
+		assertRecoveryRejectsGoverningAssumptions(t, `{"result":`+claims+`,"extra":true}`, issue, "response_envelope_sources")
+	})
+	t.Run("invalid fenced claims", func(t *testing.T) {
+		invalid := strings.TrimSuffix(claims, "}") + `,"summary":false}`
+		assertRecoveryRejectsGoverningAssumptions(t, "```json\n"+invalid+"\n```", nil, "claims_context")
+	})
+}
+
+func assertRecoveryRejectsGoverningAssumptions(t *testing.T, response string, issue *agent.StructuredResponseIssue, checkCode string) {
+	t.Helper()
+	c, item, ctx, receipt := resultCollectionProviderFixture(t, "http://127.0.0.1:1/v1", true, func(c *Coordinator) {
+		c.session.Config.Decision = dispatchConfig()
+		c.session.Config.Decision.DefaultProfile = "standard"
+		c.session.Config.RequestContract = dispatchRequestContract()
+	})
+	admission, found, err := c.validateTaskOccurrenceAdmission(ctx, taskDefFromTodoItem(item), item.ID, receipt.Attempt)
+	if err != nil || !found || !admission.Enabled {
+		t.Fatalf("expected governing admission: %+v %v", admission, err)
+	}
+	journal, err := c.decisionJournalFor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := &DecisionRecord{
+		SchemaVersion: 1, ID: admission.DecisionID, RunID: receipt.RunID, TaskID: item.ID, Profile: admission.Profile,
+		Assumptions: []DecisionAssumption{{ID: "A1", Statement: "declared check"}},
+	}
+	if err := appendDecisionEvent(ctx, journal, agent.EventDecisionFinalized, decisionEvent{
+		DecisionID: record.ID, RunID: record.RunID, TaskID: item.ID, Attempt: receipt.Attempt, Profile: record.Profile, Record: record,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cp, err := c.beginResultCollection(ctx, item.ID, receipt, "complete work report")
+	if err == nil {
+		cp, err = c.reserveResultCollection(ctx, cp, "collector", []byte(`{"tools":[]}`))
+	}
+	if err == nil {
+		cp, err = c.recordCollectionResponseUsage(ctx, cp, []byte(response), ExecutionUsage{}, issue)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := c.collectionFailure(ctx, cp, RepairFailureInvalidSchema, fmt.Errorf("rejected response envelope"))
+	c.recordCollectionStopReceipt(item.ID, failure)
+	c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "collection blocked", NeedsHuman, FailureProtocol, TaskBlocked, "")
+	c = reopenRecoveryCoordinator(t, c)
+	a, err := c.AssessResultCollectionRecovery(t.Context(), item.ID)
+	if err != nil || a.Disposition != RecoveryBlocked || a.AdditionalTurns != 0 || !slices.ContainsFunc(a.Checks, func(check ResultCollectionRecoveryCheck) bool {
+		return check.Code == checkCode && !check.Passed && strings.Contains(check.Diagnostic, "cannot change a governing decision")
+	}) {
+		t.Fatalf("cold assessment missed the nested governing assumption: %+v %v", a, err)
+	}
+	if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), item.ID)); err == nil {
+		t.Fatal("cold operator authorization accepted a governing assumption report")
+	}
+}
 
 func TestResultCollectionRecoveryRejectsUnreconciledContext(t *testing.T) {
 	t.Parallel()

@@ -330,7 +330,7 @@ func (c *Coordinator) completedCollectionWorkflowProof(ctx context.Context) (*co
 			if !sameCanonicalEvidence(current.PhaseResults, source.PhaseResults) {
 				return nil, fmt.Errorf("workflow changed after the authorized collection repair: %w", errResultCollectionStale)
 			}
-			if err := c.validateAcceptedDependencyPayload(item); err != nil {
+			if err := c.validateAcceptedDependencyPayloadWithContext(ctx, item); err != nil {
 				return nil, err
 			}
 			for _, peer := range source.Tasks {

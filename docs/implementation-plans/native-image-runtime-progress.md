@@ -8,7 +8,9 @@
 
 依 [實作規格](native-image-runtime.md) 分階段交付，每階段驗證後獨立 commit。未通過驗收的階段不標示完成。
 
-> 目前 M0～M4 程式與離線驗證均已交付；projection 並行程式與離線驗證也已於 `70bf3d16` 交付，詳見末節。以下是按時間保留的階段歷程，早期「尚需 M2／M3／M4」不再是待辦。仍待完成的是 Codex 真實推論與其他服務的實機驗收；單次 Ollama smoke 不作為這些項目的完成證據。
+> M0～M4 程式與離線驗證均已交付，projection 並行實作及離線驗證的紀錄見末節。這些資料保留各階段當時的驗證範圍。
+>
+> Hufu 的 Codex App Server 整合暫不支援（Unsupported）。開發、支援和專屬離線測試均已暫停。真實推論與沙箱驗收延期，live smoke 測試也標記跳過。
 
 ## Baseline
 

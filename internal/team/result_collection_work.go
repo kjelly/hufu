@@ -18,13 +18,10 @@ import (
 // created here. The receipt and transcript are supplied by the runtime runner.
 func (c *Coordinator) beginResultCollection(ctx context.Context, taskID string, receipt ExecutionReceipt, report string) (*ResultCollectionCheckpoint, error) {
 	if c == nil || c.session == nil || c.session.Workspace == "" || !c.hasDurableEventJournal() {
-		return nil, fmt.Errorf("result collection requires durable workspace storage")
+		return nil, rejectLocalResultPersistence(errors.New("result collection requires durable workspace storage"))
 	}
 	identity, err := submitResultRuntimeIdentityFromContext(ctx, c, taskID)
 	if err != nil {
-		return nil, err
-	}
-	if err := c.validateRequiredArtifactReadSubmission(ctx, taskID); err != nil {
 		return nil, err
 	}
 	c.taskProjectionMu.Lock()
@@ -61,14 +58,11 @@ func (c *Coordinator) beginResultCollection(ctx context.Context, taskID string, 
 	} else if item.ExecutionTarget != receipt.ExecutionTarget && !c.routeCandidateAllowed(item.ExecutionRoute, receipt.ExecutionTarget, "") {
 		return nil, errResultCollectionStale
 	}
-	if err := c.validateResumeTranscript(ctx, &receipt); err != nil {
-		return nil, err
-	}
 	contractHash, err := decisionTaskInputDigest(item)
 	if err != nil {
 		return nil, err
 	}
-	evidenceHash, err := c.resultCollectionEvidenceHash(item)
+	evidenceHash, err := c.resultCollectionEvidenceHash(ctx, item)
 	if err != nil {
 		return nil, err
 	}
@@ -109,10 +103,13 @@ func (c *Coordinator) beginResultCollection(ctx context.Context, taskID string, 
 	}
 	checkpoint.Work, err = c.putCollectionBytes(ctx, checkpoint, "work", body, resultCollectionWorkMaxBytes)
 	if err != nil {
-		return nil, err
+		return nil, rejectLocalResultPersistence(err)
+	}
+	if err := c.sealReturnedCollection(ctx, item, checkpoint); err != nil {
+		return nil, rejectLocalResultPersistence(err)
 	}
 	if err := c.appendCollectionCheckpointLocked(ctx, item, &receipt, checkpoint, nil); err != nil {
-		return nil, err
+		return checkpoint, rejectLocalResultPersistence(err)
 	}
 	return cloneResultCollectionCheckpoint(checkpoint), nil
 }
@@ -182,14 +179,14 @@ func (c *Coordinator) loadCollectionWorkAgainstPolicy(ctx context.Context, item 
 	if err != nil || contractHash != checkpoint.TaskContractSHA256 {
 		return nil, fmt.Errorf("collection task contract changed: %w", errors.Join(err, errResultCollectionStale))
 	}
-	validateEvidence := c.validateCollectionEvidence
+	var evidenceErr error
 	if original != nil {
-		validateEvidence = func(item *TodoItem, cp *ResultCollectionCheckpoint) error {
-			return c.validateOriginalContractCollectionEvidence(ctx, original, item, cp)
-		}
+		evidenceErr = c.validateOriginalContractCollectionEvidence(ctx, original, item, checkpoint)
+	} else {
+		evidenceErr = c.validateCollectionEvidence(ctx, item, checkpoint)
 	}
-	if err := validateEvidence(item, checkpoint); err != nil {
-		return nil, fmt.Errorf("collection evidence sources changed: %w", errors.Join(err, errResultCollectionStale))
+	if evidenceErr != nil {
+		return nil, fmt.Errorf("collection evidence sources changed: %w", errors.Join(evidenceErr, errResultCollectionStale))
 	}
 	body, err := c.readCollectionBytes(ctx, checkpoint.Work, resultCollectionWorkMaxBytes)
 	if err != nil {

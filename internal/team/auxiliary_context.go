@@ -148,11 +148,11 @@ func (c *Coordinator) compileAuxiliaryPrompt(ctx context.Context, purpose, rawPr
 			if item.ResultCandidate == nil {
 				input.RuntimeContext += resultContractPromptSection(ref, compiledContract, false)
 			}
-			input.DependencyResults = c.dependencyResultsForTask(todoID)
+			input.DependencyResults = c.dependencyResultsForTaskWithContext(ctx, todoID)
 			if len(input.DependencyResults) != len(resultDependencyIDs(item)) {
 				return "", nil, fmt.Errorf("result repair for task %s lacks completed dependency results", todoID)
 			}
-			if err := c.validateDependencyPayloads(input.DependencyResults); err != nil {
+			if err := c.validateDependencyPayloads(ctx, todoID, input.DependencyResults); err != nil {
 				return "", nil, err
 			}
 			plans, err := c.fixedCollectionPlans(todoID)

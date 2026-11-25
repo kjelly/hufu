@@ -50,14 +50,14 @@ func TestRuntimeEvidenceBindingSubmissionAndReplay(t *testing.T) {
 			if err := json.Unmarshal(stored, &restored); err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Equal(payload.Value, restored.Value) || payload.SHA256 != restored.SHA256 || c.validateSubmittedEvidenceInputs(audit.ID, &restored) != nil {
+			if !bytes.Equal(payload.Value, restored.Value) || payload.SHA256 != restored.SHA256 || c.validateSubmittedEvidenceInputs(t.Context(), audit.ID, &restored) != nil {
 				t.Fatal("binding did not survive persistence")
 			}
 			source.TypedResult.StructuredPayload.Value = []byte(`{"category":"tampered"}`)
 			if _, rejection := submit(`{"done":true}`); rejection == "" {
 				t.Fatal("tampered source accepted")
 			}
-			if c.validateSubmittedEvidenceInputs(audit.ID, &restored) == nil {
+			if c.validateSubmittedEvidenceInputs(t.Context(), audit.ID, &restored) == nil {
 				t.Fatal("stored binding accepted a changed source")
 			}
 			audit.EvidenceFrom = nil
@@ -112,7 +112,7 @@ func TestRuntimeEvidenceBindingAggregateCapacity(t *testing.T) {
 				if result == nil || rejection != "" || len(result.Value) <= 256<<10 {
 					t.Fatalf("valid aggregate above the former limit was rejected: %s", rejection)
 				}
-				if err := c.validateSubmittedEvidenceInputs(audit.ID, result); err != nil {
+				if err := c.validateSubmittedEvidenceInputs(t.Context(), audit.ID, result); err != nil {
 					t.Fatalf("aggregate failed evidence replay: %v", err)
 				}
 				value, err := decodeResultContractJSON(result.Value)

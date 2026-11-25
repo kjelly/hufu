@@ -251,10 +251,21 @@
                   "info"
                 ]
               },
+              "source_excerpt": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024,
+                "description": "One original Go source line for matching approximate draft coordinates."
+              },
+              "source_side": {
+                "type": "string",
+                "enum": ["head", "old"]
+              },
+              "source_revision": { "type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$" },
               "location": {
                 "type": "string",
                 "maxLength": 8192,
-                "pattern": "^[^\\r\\n]+:[1-9][0-9]*$"
+                "pattern": "^[^\\r\\n]+:[ \t]*[1-9][0-9]*[ \t]*$"
               },
               "evidence": {
                 "type": "array",

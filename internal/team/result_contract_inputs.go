@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -147,18 +148,18 @@ func validateResultEvidenceInputs(value any, spec *resultEvidenceInputsSpec, ids
 	return nil
 }
 
-func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *ResultPayload) error {
-	return c.validateEvidenceInputBindings(context.Background(), todoID, payload, false)
+func (c *Coordinator) validateSubmittedEvidenceInputs(ctx context.Context, todoID string, payload *ResultPayload) error {
+	return c.validateEvidenceInputBindings(ctx, todoID, payload, false)
 }
 
 // Accepted results retain their recorded decision provenance across forks.
 // New submissions must still resolve decisions only in the current scope.
-func (c *Coordinator) validateAcceptedEvidenceInputs(todoID string, payload *ResultPayload) error {
-	return c.validateEvidenceInputBindings(context.Background(), todoID, payload, true)
+func (c *Coordinator) validateAcceptedEvidenceInputs(ctx context.Context, todoID string, payload *ResultPayload) error {
+	return c.validateEvidenceInputBindings(ctx, todoID, payload, true)
 }
 
 func (c *Coordinator) validateEvidenceInputBindings(ctx context.Context, todoID string, payload *ResultPayload, accepted bool) error {
-	if err := context.Cause(ctx); err != nil {
+	if err := artifactReadContextError(ctx); err != nil {
 		return err
 	}
 	item := c.todoItemByID(todoID)
@@ -169,18 +170,39 @@ func (c *Coordinator) validateEvidenceInputBindings(ctx context.Context, todoID 
 	if err != nil {
 		return err
 	}
-	if compiled.evidenceInputs == nil && compiled.evidenceReferences == nil && compiled.worksetInputs == nil && compiled.worksetPaths == nil && len(compiled.fixedCollections) == 0 && len(compiled.runtimeInputs) == 0 {
+	if !hasResultSourceBindings(compiled) {
 		return nil
 	}
 	if payload == nil {
-		return fmt.Errorf("input review requires a structured payload")
+		if item.ResultContract.RequireStructured {
+			return fmt.Errorf("input review requires a structured payload")
+		}
+		return c.validateIndependentResultSources(ctx, todoID, compiled, resultSourceOmissions{})
 	}
 	value, err := decodeResultContractJSON(payload.Value)
 	if err != nil {
 		return err
 	}
-	if err := validateResultWorksetInputs(value, compiled.worksetInputs, item.WorksetBinding); err != nil {
-		return err
+	return c.validateResultSourceBindings(ctx, item, compiled, payload, value, nil, accepted)
+}
+
+func hasResultSourceBindings(compiled *CompiledResultContract) bool {
+	return compiled.evidenceInputs != nil || compiled.evidenceReferences != nil || compiled.worksetInputs != nil || compiled.worksetPaths != nil ||
+		len(compiled.fixedCollections) != 0 || len(compiled.runtimeInputs) != 0
+}
+
+// Validate stored values against authoritative sources without assembling a new
+// payload. Accepted collections resolve their recorded decision events.
+func (c *Coordinator) validateResultSourceBindings(ctx context.Context, item *TodoItem, compiled *CompiledResultContract, payload *ResultPayload, value any, reads *[]FileRef, accepted bool) error {
+	todoID := item.ID
+	if compiled.worksetInputs != nil {
+		ids, err := c.verifiedResultWorksetInputIDs(ctx, todoID, compiled.worksetInputs)
+		if err != nil {
+			return err
+		}
+		if err := matchResultWorksetInputs(value, compiled.worksetInputs, ids); err != nil {
+			return err
+		}
 	}
 	runtimeInputs, err := c.resultRuntimeInputValuesWithContext(ctx, compiled, todoID)
 	if err != nil {
@@ -190,7 +212,7 @@ func (c *Coordinator) validateEvidenceInputBindings(ctx context.Context, todoID 
 		return err
 	}
 	results := c.dependencyResultsForBinding(todoID)
-	if err := c.validateDependencyPayloads(results); err != nil {
+	if err := c.validateDependencyPayloads(ctx, todoID, results); err != nil {
 		return err
 	}
 	plans, err := buildResultFixedCollections(compiled.fixedCollections, item.EvidenceFrom, results)
@@ -198,7 +220,7 @@ func (c *Coordinator) validateEvidenceInputBindings(ctx context.Context, todoID 
 		return err
 	}
 	if accepted {
-		plans, err = c.resolveDecisionPlans(ctx, todoID, plans, payload.CollectionBindings)
+		plans, err = c.resolveDecisionPlans(ctx, todoID, plans, payload.CollectionBindings, false)
 	} else {
 		plans, err = c.resolveDecisionCollectionPlans(ctx, todoID, plans)
 	}
@@ -211,14 +233,57 @@ func (c *Coordinator) validateEvidenceInputBindings(ctx context.Context, todoID 
 	if err := validateResultEvidenceInputs(value, compiled.evidenceInputs, item.EvidenceFrom, results); err != nil {
 		return err
 	}
-	if compiled.evidenceReferences != nil {
-		results = c.dependencyResultsForTaskWithContext(ctx, todoID)
-		if err := context.Cause(ctx); err != nil {
+	return c.validatePayloadReferenceSources(ctx, todoID, compiled, value, item.EvidenceFrom, results, reads)
+}
+
+// A rejected model representation can still carry independent source claims.
+// At this point the runtime has loaded the original values and fixed plans.
+func (c *Coordinator) validatePayloadSourcesAfterBindingShape(ctx context.Context, todoID string, compiled *CompiledResultContract, raw []byte, plans []resultFixedCollectionPlan) error {
+	item := c.todoItemByID(todoID)
+	value, err := decodeUniqueJSON(raw)
+	if err != nil {
+		return err
+	}
+	if err := projectFixedCollectionSourceRows(value, plans); err != nil {
+		return err
+	}
+	value = canonicalResultScalars(value, compiled.schema, 0)
+	results := c.dependencyResultsForBinding(todoID)
+	if err := c.validateDependencyPayloads(ctx, todoID, results); err != nil {
+		return err
+	}
+	if err := validateResultWorksetInputs(value, compiled.worksetInputs, item.WorksetBinding); err != nil {
+		return err
+	}
+	// Runtime-owned rows have already been authenticated from the dependency
+	// payloads. A rejected copy cannot take the place of that original source.
+	if !compiled.evidenceInputs.runtimeOwned() {
+		if err := validateResultEvidenceInputs(value, compiled.evidenceInputs, item.EvidenceFrom, results); err != nil {
 			return err
 		}
 	}
-	if err := validateResultEvidenceReferences(value, compiled.evidenceReferences, item.EvidenceFrom, results, nil); err != nil {
-		return err
+	err = c.validatePayloadReferenceSources(ctx, todoID, compiled, value, item.EvidenceFrom, results, nil)
+	if isResultEvidenceFormatError(err) {
+		return nil
+	}
+	if _, shape := errors.AsType[*resultEvidenceReferenceShapeError](err); shape {
+		return nil
+	}
+	return err
+}
+
+func (c *Coordinator) validatePayloadReferenceSources(ctx context.Context, todoID string, compiled *CompiledResultContract, value any, evidenceFrom []string, results []TaskResult, reads *[]FileRef) error {
+	if compiled.evidenceReferences != nil {
+		results = c.dependencyResultsForTaskWithContext(ctx, todoID)
+		if err := artifactReadContextError(ctx); err != nil {
+			return err
+		}
+	}
+	referenceErr := validateResultEvidenceReferences(value, compiled.evidenceReferences, evidenceFrom, results, reads)
+	if referenceErr != nil {
+		if _, shape := errors.AsType[*resultEvidenceReferenceShapeError](referenceErr); !shape {
+			return referenceErr
+		}
 	}
 	if compiled.worksetPaths != nil {
 		selection, err := c.verifiedWorksetPathSelection(ctx, todoID, compiled.worksetPaths)
@@ -229,5 +294,5 @@ func (c *Coordinator) validateEvidenceInputBindings(ctx context.Context, todoID 
 			return err
 		}
 	}
-	return nil
+	return referenceErr
 }

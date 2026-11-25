@@ -15,7 +15,6 @@ import (
 
 const maxSupplementItems = 8
 const maxSupplementBytes = 2 * 1024 * 1024
-const maxSupplementItemBytes = 393216
 const maxSupplementSourceReadBytes = 2 * 1024 * 1024
 
 type supplementEvidence struct {
@@ -343,8 +342,8 @@ func materializeSupplementBatch(sourceRoot, resolvedRoot string, frozen frozenSo
 			selectedBytes += int(span.End - span.Start)
 			end = span.End
 		}
-		if selectedBytes+16384 > maxSupplementItemBytes || selectedBytes+16384 > remaining {
-			return fail("budget_exhausted", "Requested evidence exceeds the single-round item or total byte limit")
+		if estimateReviewItemTokens(0, selectedBytes, 0) > defaultMaxReviewInputTokens || selectedBytes > remaining {
+			return fail("budget_exhausted", "Requested evidence exceeds the per-item input budget or remaining byte limit")
 		}
 		filePath := filepath.Join(sourceRoot, clean)
 		resolvedFile, err := filepath.EvalSymlinks(filePath)
@@ -379,8 +378,9 @@ func materializeSupplementBatch(sourceRoot, resolvedRoot string, frozen frozenSo
 			return fail("unavailable_path", "Requested frozen source cannot be returned as readable evidence: "+source.Path)
 		}
 	}
-	if len(bundle)+len(inventory)+current.diff.Len() > maxSupplementItemBytes || len(bundle)+len(inventory)+current.diff.Len() > remaining {
-		return fail("budget_exhausted", "Materialized evidence metadata and source exceed the bounded byte limit")
+	if estimateReviewItemTokens(current.diff.Len(), len(bundle), len(inventory)) > defaultMaxReviewInputTokens ||
+		len(bundle)+len(inventory)+current.diff.Len() > remaining {
+		return fail("budget_exhausted", "Materialized evidence exceeds the per-item input budget or remaining byte limit")
 	}
 	current.sourceBundle, current.evidenceInventory = bundle, inventory
 	return current, snapshot, nil

@@ -1,9 +1,11 @@
 package team
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -134,6 +136,7 @@ func readCodexTranscriptArtifact(t *testing.T, workspace, id string) (ArtifactRe
 }
 
 func TestCodexTranscriptPersistsRedactedScopedCASArtifact(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := t.TempDir()
 	const secret = "provider-activity-secret-123"
 	transcript := newCodexTranscript(512)
@@ -250,6 +253,7 @@ func rawCallMethods(t *testing.T, calls []map[string]json.RawMessage) []string {
 // actually becomes reachable through SubagentRegistry — the PR-11 wiring
 // gap that has no dedicated spec-named test.
 func TestCodexProviderRegisteredAndResolvable(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	c := &Coordinator{session: &TeamSession{Config: agent.TeamConfig{
 		Name: "codex-registration-test",
 		SubagentProviders: map[string]agent.SubagentProviderConfig{
@@ -273,6 +277,7 @@ func TestCodexProviderRegisteredAndResolvable(t *testing.T) {
 // CanonicalResult while correctly leaving TypedResult nil (§8.3), and that
 // the session binding is durably visible afterward.
 func TestCodexProviderResultBecomesCanonical(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	c, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{
 		codexInitializeStep(t),
@@ -299,6 +304,7 @@ func TestCodexProviderResultBecomesCanonical(t *testing.T) {
 }
 
 func TestCodexSuccessfulResultFailsClosedWhenTranscriptCASUnavailable(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	cases := []struct {
 		name  string
 		setup func(t *testing.T, workspace string) string
@@ -365,6 +371,7 @@ func TestCodexSuccessfulResultFailsClosedWhenTranscriptCASUnavailable(t *testing
 }
 
 func TestCodexNoNetPolicyUsesVerifiedCodexSandbox(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	cases := []struct {
 		name       string
 		teamNoNet  bool
@@ -420,6 +427,7 @@ func TestCodexNoNetPolicyUsesVerifiedCodexSandbox(t *testing.T) {
 }
 
 func TestCodexNoNetRejectsUnverifiedEffectiveSandboxBeforeTurn(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	cases := []struct {
 		name       string
 		sandbox    json.RawMessage
@@ -443,7 +451,7 @@ func TestCodexNoNetRejectsUnverifiedEffectiveSandboxBeforeTurn(t *testing.T) {
 			workspace := newCodexWorkspace(t)
 			c, provider, item, rawLogPath := newCodexHarness(t, workspace, []fakeCodexStep{
 				codexInitializeStep(t),
-				{Result: rawJSON(t, map[string]any{
+				{ThreadCWD: workspace, Result: rawJSON(t, map[string]any{
 					"thread":  map[string]any{"id": "thread-1"},
 					"cwd":     workspace,
 					"model":   "gpt-5.6-luna",
@@ -473,6 +481,7 @@ func TestCodexNoNetRejectsUnverifiedEffectiveSandboxBeforeTurn(t *testing.T) {
 }
 
 func TestCodexSharedStateLockSerializesSeparateCoordinators(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	config := agent.SubagentProviderConfig{InheritEnv: []string{"CODEX_HOME"}}
@@ -518,6 +527,7 @@ func TestCodexSharedStateLockSerializesSeparateCoordinators(t *testing.T) {
 }
 
 func TestCodexSharedStateLockUsesPlatformHomeFallback(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	parentHome := t.TempDir()
 	accountHome := t.TempDir()
 	stateHome := filepath.Join(accountHome, ".codex")
@@ -587,6 +597,7 @@ func TestCodexSharedStateLockUsesPlatformHomeFallback(t *testing.T) {
 }
 
 func TestCodexHomePathPreservesChildEnvironmentCase(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	accountHome := t.TempDir()
 	wrongLowercaseHome := t.TempDir()
 	exactHome := t.TempDir()
@@ -616,6 +627,7 @@ func TestCodexHomePathPreservesChildEnvironmentCase(t *testing.T) {
 }
 
 func TestCodexSharedStateLockUsesOneChildEnvironmentSnapshot(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	firstHome := t.TempDir()
 	secondHome := t.TempDir()
 	firstState := filepath.Join(firstHome, ".codex")
@@ -688,6 +700,7 @@ func TestCodexSharedStateLockUsesOneChildEnvironmentSnapshot(t *testing.T) {
 // provider-owned transcript reference needed by the coordinator's failure
 // and retry paths.
 func TestCodexCanonicalizationFailurePreservesUntrustedEvidence(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	secret := "super-secret-value-123456"
 	details := "api_token=" + secret + " " + strings.Repeat("oversized-diagnostic ", codexFailureEvidenceMaxRunes)
@@ -735,6 +748,7 @@ func TestCodexCanonicalizationFailurePreservesUntrustedEvidence(t *testing.T) {
 }
 
 func TestCodexProviderForwardsReasoningEffortToTurnStart(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	_, provider, item, rawLogPath := newCodexHarness(t, workspace, []fakeCodexStep{
 		codexInitializeStep(t),
@@ -765,6 +779,7 @@ func TestCodexProviderForwardsReasoningEffortToTurnStart(t *testing.T) {
 // with a classified error, but the already-persisted durable session
 // binding is not erased and a non-empty transcript is preserved.
 func TestCodexCancellationPreservesBindingAndTranscript(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	c, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{
 		codexInitializeStep(t),
@@ -792,8 +807,8 @@ func TestCodexCancellationPreservesBindingAndTranscript(t *testing.T) {
 		t.Fatal("expected RunAttempt to fail once the context was cancelled")
 	}
 	var provErr *CodexProviderError
-	if errors.As(err, &provErr) && provErr.Class != CodexFailureCancelled {
-		t.Fatalf("failure class = %q, want %q", provErr.Class, CodexFailureCancelled)
+	if !errors.As(err, &provErr) || provErr.Class != CodexFailureCancelled || result.ProviderTurnID != "turn-cancel" {
+		t.Fatalf("canceled turn lost its class or accepted ID %q: %v", result.ProviderTurnID, err)
 	}
 	if result.TranscriptRef == "" {
 		t.Fatal("TranscriptRef is empty, want a preserved transcript reference")
@@ -813,6 +828,7 @@ func TestCodexCancellationPreservesBindingAndTranscript(t *testing.T) {
 // process changed on disk before it died, rather than discarding evidence
 // along with the failed attempt.
 func TestCodexCrashPreservesWorkspaceDelta(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	_, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{
 		codexInitializeStep(t),
@@ -838,6 +854,7 @@ func TestCodexCrashPreservesWorkspaceDelta(t *testing.T) {
 // TestCodexTimeoutDoesNotReportSuccess covers a stalled thread request and a
 // turn that never completes. Both must return before the caller's deadline.
 func TestCodexTimeoutDoesNotReportSuccess(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	for _, tc := range []struct {
 		name string
 		want CodexProviderFailureClass
@@ -863,6 +880,9 @@ func TestCodexTimeoutDoesNotReportSuccess(t *testing.T) {
 			}
 			if provErr, ok := errors.AsType[*CodexProviderError](err); !ok || provErr.Class != tc.want {
 				t.Fatalf("err = %v, want a classified %q failure", err, tc.want)
+			}
+			if tc.name == "turn" && result.ProviderTurnID != "turn-timeout" {
+				t.Fatalf("timeout lost the acknowledged turn ID: %q", result.ProviderTurnID)
 			}
 			if result.CanonicalResult != nil || result.ResultProposal != nil {
 				t.Fatalf("result = %#v, want no proposal/canonical result reported on timeout", result)
@@ -901,6 +921,7 @@ func codexRepairScript(t *testing.T, workspace, threadID, originalFinalOutput, r
 // read-only sandbox, never the original task's (here, workspace-write)
 // sandbox.
 func TestCodexResultRepairIsReadOnly(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	_, provider, item, rawLogPath := newCodexHarness(t, workspace, codexRepairScript(t, workspace, "thread-repair-ro",
 		"", validProposalJSON(""), fakeCodexStep{}, fakeCodexStep{}))
@@ -925,32 +946,57 @@ func TestCodexResultRepairIsReadOnly(t *testing.T) {
 	}
 }
 
-// TestCodexResultRepairDoesNotReplayWorkspaceWrite proves §23: a repair
-// proposal cannot retroactively change observed workspace history. Even if
-// the repair turn writes a file (an app-server disobeying the read-only
-// instruction, worst case), Hufu's canonical WorkspaceDelta reflects only
-// what was already frozen before the repair began.
-func TestCodexResultRepairDoesNotReplayWorkspaceWrite(t *testing.T) {
-	workspace := newCodexWorkspace(t)
-	_, provider, item, _ := newCodexHarness(t, workspace, codexRepairScript(t, workspace, "thread-repair-freeze",
-		"", validProposalJSON(""),
-		fakeCodexStep{WriteFile: "before-repair.txt", WriteFileContent: "written by the original turn"},
-		fakeCodexStep{WriteFile: "during-repair.txt", WriteFileContent: "written despite the read-only instruction"},
-	))
+func TestCodexResultRepairRetainsOriginalWorkspaceDelta(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
+	for _, name := range []string{"honors readonly", "unauthorized mutation"} {
+		t.Run(name, func(t *testing.T) {
+			testCodexResultRepairWorkspaceDelta(t, name == "unauthorized mutation")
+		})
+	}
+}
 
-	result, err := provider.RunAttempt(context.Background(), codexAttemptRequest(item, "do the work"))
+func testCodexResultRepairWorkspaceDelta(t *testing.T, mutates bool) {
+	t.Helper()
+	f := newVersionFixture(t)
+	workspace := f.subject
+	var repair fakeCodexStep
+	if mutates {
+		repair.WriteFile, repair.WriteFileContent = "during-repair.txt", "unauthorized change"
+	}
+	c, provider, item, calls := newCodexHarness(t, workspace, codexRepairScript(t, workspace, "thread-repair-freeze",
+		"", validProposalJSON(`"files_read":["before-repair.txt","during-repair.txt"],"proposed_files":[{"path":"during-repair.txt"}]`),
+		fakeCodexStep{WriteFile: "before-repair.txt", WriteFileContent: "written by the original turn"},
+		repair,
+	))
+	c.session.WorkspaceVersion = f.version
+
+	result, err := provider.RunAttempt(t.Context(), codexAttemptRequest(item, "do the work"))
+	if len(result.WorkspaceDelta.Added) != 1 || result.WorkspaceDelta.Added[0].Path != "before-repair.txt" {
+		t.Fatal("result did not preserve the original attributable workspace delta")
+	}
+	if len(readRawCalls(t, calls)) != 6 {
+		t.Fatal("workspace settlement did not spend exactly one correction turn")
+	}
+	if mutates {
+		failure, ok := errors.AsType[*CodexProviderError](err)
+		proof := result.repairProvenance
+		if !ok || failure.Class != CodexFailureWorkspaceViolation || result.CanonicalResult != nil ||
+			proof == nil || proof.Success || proof.ProviderCorrectionTurnID == "" || proof.PreparedCandidateSHA256 != "" {
+			t.Fatalf("mutating correction was not rejected before response preparation: %v", err)
+		}
+		f.reopen()
+		state := subjectState(t, f)
+		if !state.RecoveryRequired || state.RecoveryCode != "unauthorized_mutation" || !strings.Contains(state.RecoveryDetail, "during-repair.txt") {
+			t.Fatal("reopened store lost the correction's recovery marker")
+		}
+		return
+	}
 	if err != nil {
-		t.Fatalf("RunAttempt: %v", err)
+		t.Fatalf("read-only correction failed: %v", err)
 	}
-	added := make(map[string]bool, len(result.WorkspaceDelta.Added))
-	for _, f := range result.WorkspaceDelta.Added {
-		added[f.Path] = true
-	}
-	if !added["before-repair.txt"] {
-		t.Fatalf("WorkspaceDelta.Added = %v, want the original turn's file frozen as evidence", result.WorkspaceDelta.Added)
-	}
-	if added["during-repair.txt"] {
-		t.Fatalf("WorkspaceDelta.Added = %v, want the repair turn's file excluded (frozen history)", result.WorkspaceDelta.Added)
+	canonical := result.CanonicalResult
+	if canonical == nil || len(canonical.Artifacts) != 0 || len(canonical.FilesRead) != 1 || canonical.FilesRead[0].Path != "before-repair.txt" {
+		t.Fatalf("correction credited an unobserved file: %+v", canonical)
 	}
 }
 
@@ -959,6 +1005,7 @@ func TestCodexResultRepairDoesNotReplayWorkspaceWrite(t *testing.T) {
 // a further repair — it classifies the attempt as protocol-incomplete and
 // reports no fabricated success.
 func TestCodexSecondInvalidResultBecomesProtocolIncomplete(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	_, provider, item, _ := newCodexHarness(t, workspace, codexRepairScript(t, workspace, "thread-repair-fail",
 		"", "", fakeCodexStep{}, fakeCodexStep{}))
@@ -977,11 +1024,32 @@ func TestCodexSecondInvalidResultBecomesProtocolIncomplete(t *testing.T) {
 }
 
 func TestCodexRepairFailureRetainsOriginalAndRepairEvidence(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
-	original := `{"status":"success","summary":"original","api_token":"original-secret","unknown":"` + strings.Repeat("original-evidence ", codexFailureEvidenceMaxRunes) + `"}`
-	repair := `{"status":"success","summary":"repair","api_token":"repair-secret","unknown":"` + strings.Repeat("repair-evidence ", codexFailureEvidenceMaxRunes) + `"}`
-	_, provider, item, _ := newCodexHarness(t, workspace, codexRepairScript(t, workspace, "thread-repair-evidence",
-		original, repair, fakeCodexStep{}, fakeCodexStep{}))
+	const fragmentCredential = "raw-delta-only-fixture-849163"
+	invalidReply := func(label string) string {
+		inner := fmt.Sprintf(`{"api_\u0074oken":%q,"unreadable":`, label+"-inner-secret")
+		return fmt.Sprintf(`{"status":"success","summary":%q,"api_\u0074oken":%q,"structured_payload_json":%q,"details":%q,`,
+			label+"-evidence", label+"-outer-secret", inner, strings.Repeat("details ", codexFailureEvidenceMaxRunes))
+	}
+	original, repair := "Original draft: "+invalidReply("original"), "Correction draft: "+invalidReply("repair")
+	steps := codexRepairScript(t, workspace, "thread-repair-evidence", original, repair, fakeCodexStep{}, fakeCodexStep{})
+	for index, reply := range map[int]string{2: original, 5: repair} {
+		steps[index].Notifications = append([]fakeCodexNotification{
+			{Method: "item/agentMessage/delta", Params: rawJSON(t, map[string]any{"delta": fragmentCredential})},
+			{Method: "item/completed", Params: rawJSON(t, map[string]any{"item": map[string]any{
+				"type": "agentMessage", "phase": "final_answer", "text": reply,
+			}})},
+		}, steps[index].Notifications...)
+	}
+	c, provider, item, _ := newCodexHarness(t, workspace, steps)
+	c.verbose = true
+	var activity []string
+	c.reportStatus = func(event StatusEvent) {
+		if event.Type == "codex_activity" {
+			activity = append(activity, event.Message)
+		}
+	}
 
 	result, err := provider.RunAttempt(context.Background(), codexAttemptRequest(item, "do the work"))
 	if err == nil {
@@ -993,11 +1061,6 @@ func TestCodexRepairFailureRetainsOriginalAndRepairEvidence(t *testing.T) {
 	for _, marker := range []string{"original provider turn output", "repair provider turn output", "original-evidence", "repair-evidence"} {
 		if !strings.Contains(result.Output, marker) {
 			t.Fatalf("Output = %q, want marker %q from both bounded repair evidences", result.Output, marker)
-		}
-	}
-	for _, secret := range []string{"original-secret", "repair-secret"} {
-		if strings.Contains(result.Output, secret) {
-			t.Fatalf("Output contains rejected proposal secret %q", secret)
 		}
 	}
 	if len([]rune(result.Output)) > codexFailureEvidenceMaxRunes+3 {
@@ -1012,6 +1075,32 @@ func TestCodexRepairFailureRetainsOriginalAndRepairEvidence(t *testing.T) {
 			t.Fatalf("provider transcript = %q, want marker %q", transcript, marker)
 		}
 	}
+	status := strings.Join(activity, "\n")
+	for _, marker := range []string{"original-evidence", "repair-evidence", "Codex final response", "Codex item completed (agentMessage)"} {
+		if !strings.Contains(status, marker) {
+			t.Fatalf("detailed status missing %q", marker)
+		}
+	}
+	for _, secret := range []string{"original-inner-secret", "original-outer-secret", "repair-inner-secret", "repair-outer-secret", fragmentCredential} {
+		if strings.Contains(result.Output, secret) || bytes.Contains(transcript, []byte(secret)) || strings.Contains(status, secret) {
+			t.Fatalf("output, transcript or verbose status exposed credential %q", secret)
+		}
+	}
+}
+
+func TestCodexProviderActivityMasksArrayWrappedDraft(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
+	t.Parallel()
+	const credential = "malformed-array-wire-fixture-319276"
+	inner := fmt.Sprintf(`{"api\u005ftoken":%q,"unreadable":`, credential)
+	raw := fmt.Sprintf(`[{"status":"success","structured_payload_json":%q}]`, inner)
+	var final string
+	reportCodexFinalResponse(func(activity codexTurnActivity) { final = activity.Message }, redactCodexProviderText(raw, nil), "invalid")
+	for _, text := range []string{boundedCodexFailureEvidence(raw), final} {
+		if !strings.Contains(text, "[invalid provider JSON]") || strings.Contains(text, credential) {
+			t.Fatal("unsupported result wrapper exposed the embedded credential")
+		}
+	}
 }
 
 // TestResumeDoesNotReplayUnsafeSideEffect proves §22.4/§33: an existing
@@ -1019,6 +1108,7 @@ func TestCodexRepairFailureRetainsOriginalAndRepairEvidence(t *testing.T) {
 // a credential-mutation task is rejected before any process or RPC activity,
 // resume or not.
 func TestResumeDoesNotReplayUnsafeSideEffect(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	_, provider, item, rawLogPath := newCodexHarness(t, workspace, nil)
 
@@ -1048,6 +1138,7 @@ func TestResumeDoesNotReplayUnsafeSideEffect(t *testing.T) {
 // credited as new evidence from the resumed turn — only what the resumed
 // turn itself changes is new.
 func TestCrashAfterProviderSessionBeforeTurnTerminal(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	if err := os.WriteFile(filepath.Join(workspace, "pre-crash-change.txt"), []byte("already there before the crash"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1086,6 +1177,7 @@ func TestCrashAfterProviderSessionBeforeTurnTerminal(t *testing.T) {
 // failed after the first attempt) reconciles entirely fresh from what it
 // itself observes.
 func TestCrashAfterWorkspaceMutationBeforeVerification(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 
 	firstStep := fakeCodexTurnCompletedStep(t, "turn-1", `{"status":"success","summary":"first pass done"}`)
@@ -1140,6 +1232,7 @@ func TestCrashAfterWorkspaceMutationBeforeVerification(t *testing.T) {
 // a further attempt from that replayed binding alone resumes the existing
 // thread rather than starting a new one.
 func TestCodexResumeAfterHufuRestart(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 
 	c1, provider1, item1, _ := newCodexHarness(t, workspace, []fakeCodexStep{
@@ -1227,6 +1320,7 @@ func TestCodexResumeAfterHufuRestart(t *testing.T) {
 // occurrence as if it had covered every leaf — v1 has no implementation
 // routing Hufu's local fanout concept into Codex's own internal behavior.
 func TestCodexRejectsExtraModelFanout(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	_, provider, item, rawLogPath := newCodexHarness(t, workspace, nil)
 
@@ -1254,6 +1348,7 @@ func TestCodexRejectsExtraModelFanout(t *testing.T) {
 // canonicalization requires. Invalid capabilities must not reach preflight,
 // execution-world preparation, shared-state locking, or the app-server.
 func TestCodexRejectsInvalidArtifactScopeBeforeLaunch(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	cases := []struct {
 		name   string
 		mutate func(*AttemptRequest)
@@ -1302,6 +1397,7 @@ func TestCodexRejectsInvalidArtifactScopeBeforeLaunch(t *testing.T) {
 // happens to carry a length-1 ModelTopology (the common case set by
 // initialTaskModelTopology), must still run normally.
 func TestCodexAllowsSingleLeafModelTopology(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	_, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{
 		codexInitializeStep(t),
@@ -1326,6 +1422,7 @@ func TestCodexAllowsSingleLeafModelTopology(t *testing.T) {
 // nonexistent executable must fail RunAttempt without any process/RPC
 // activity, via the plain LookPath check in codexRunCheapPreflightChecks.
 func TestCodexPreflightRejectsMissingExecutable(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	c := &Coordinator{
 		session:      &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "preflight-test"}},
@@ -1356,6 +1453,7 @@ func TestCodexPreflightRejectsMissingExecutable(t *testing.T) {
 // the configured Command here (os.Args[0]) is never actually invoked, since
 // there is no fake-server script wired up.
 func TestCodexPreflightRejectsMissingCodexHomeAuth(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	t.Setenv("CODEX_HOME", t.TempDir())
 
@@ -1390,6 +1488,7 @@ func TestCodexPreflightRejectsMissingCodexHomeAuth(t *testing.T) {
 // by deleting auth.json between two attempts and observing the second one
 // still succeeds.
 func TestCodexPreflightCachesAcrossAttempts(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	codexHome := t.TempDir()
 	authPath := filepath.Join(codexHome, "auth.json")
@@ -1470,6 +1569,7 @@ func TestCodexPreflightCachesAcrossAttempts(t *testing.T) {
 // environment snapshot, including an explicitly inherited HOME, rather than
 // reading the mutable parent environment a second time.
 func TestCodexHomeLooksAuthenticatedFallsBackToDefaultWhenUnset(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	fakeHome := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(fakeHome, ".codex"), 0o755); err != nil {
 		t.Fatal(err)
@@ -1488,6 +1588,7 @@ func TestCodexHomeLooksAuthenticatedFallsBackToDefaultWhenUnset(t *testing.T) {
 // TestCodexHomeLooksAuthenticatedFallbackFailsWithoutAuthFile proves the
 // exact child HOME path still fails closed when it has no auth.json.
 func TestCodexHomeLooksAuthenticatedFallbackFailsWithoutAuthFile(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	fakeHome := t.TempDir()
 
 	if err := codexHomeLooksAuthenticated([]string{"HOME=" + fakeHome}); err == nil {

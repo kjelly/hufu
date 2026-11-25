@@ -150,6 +150,49 @@ func TestArtifactEvidenceKeysCanonicalSubmission(t *testing.T) {
 	}
 }
 
+func TestArtifactEvidenceKeysResolveDirectWireAliasesBeforeNormalization(t *testing.T) {
+	for _, forged := range []bool{false, true} {
+		t.Run(fmt.Sprint(forged), func(t *testing.T) {
+			f := newArtifactKeysFixture(t)
+			f.readSource(t)
+			calls := 0
+			ref := f.item.ResultContract
+			ref.Normalizer, ref.NormalizerSHA256 = registerTestNormalizer(t, f.c, &mockNormalizerProvider{fn: func(_ context.Context, draft []byte) ([]byte, error) {
+				calls++
+				return draft, nil
+			}})
+			key := f.key
+			if forged {
+				key = "ev_000000000000"
+			}
+			escaped := strings.Replace(key, "ev_", `ev\u005f`, 1)
+			input := fmt.Sprintf(`{"status":"success","summary":"reviewed","files_read":[{"Path":"%s"}],"structured_payload":{"claims":[]}}`, escaped)
+			tool := &submitResultTool{coordinator: f.c, todoID: f.item.ID}
+			if forged {
+				duplicate := fmt.Sprintf(`{"status":"success","summary":"reviewed","files_read":[{"path":"%s","path":%q}],"structured_payload":{"claims":[]}}`, escaped, f.key)
+				response, err := tool.Run(f.ctx, fantasy.ToolCall{Name: submitResultToolName, Input: duplicate})
+				if err != nil || submissionFailureMetadata(response.Metadata) != RepairFailureSource || calls != 0 {
+					t.Fatalf("forged key was hidden by another path member: calls=%d, response=%+v, err=%v", calls, response, err)
+				}
+			}
+			response, err := tool.Run(f.ctx, fantasy.ToolCall{Name: submitResultToolName, Input: input})
+			if forged {
+				if err != nil || !response.IsError || !strings.Contains(response.Content, "evidence_key_unknown_or_out_of_scope") || calls != 0 {
+					t.Fatalf("forged wire alias reached normalization: calls=%d response=%+v err=%v", calls, response, err)
+				}
+				return
+			}
+			if err != nil || response.IsError || calls != 1 {
+				t.Fatalf("authorized wire alias was rejected: calls=%d response=%+v err=%v", calls, response, err)
+			}
+			result := f.c.GetTaskResult(f.item.ID)
+			if result == nil || len(result.FilesRead) != 1 || result.FilesRead[0].Path != f.ref.ID {
+				t.Fatalf("authorized wire alias did not settle as an artifact ID: %+v", result)
+			}
+		})
+	}
+}
+
 func TestArtifactEvidenceKeysRejectUnknownUnreadAndChangedSources(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"unknown", "unread", "revoked", "corrupt", "observation", "attempt", "task", "actor", "model", "branch", "run", "schema", "duplicate"} {

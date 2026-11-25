@@ -1,13 +1,14 @@
 package team
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -119,7 +120,7 @@ func TestResultCollectionRepairsConditionalInvariantAndEnvelopeTogether(t *testi
 	t.Fatal("replay lost the task")
 }
 
-func TestResultCollectionRecoveryRepairsProjectedInvariantBounds(t *testing.T) {
+func TestResultCollectionRecoveryBlocksExhaustedInvariantCorrection(t *testing.T) {
 	var document map[string]any
 	if err := json.Unmarshal([]byte(projectionTestSchema), &document); err != nil {
 		t.Fatal(err)
@@ -152,7 +153,7 @@ func TestResultCollectionRecoveryRepairsProjectedInvariantBounds(t *testing.T) {
 		}
 		assertCollectorResponseChannel(t, request)
 		n := calls.Add(1)
-		if n > 3 {
+		if n > 2 {
 			t.Error("repair exceeded its bounded model budget")
 			http.Error(w, "extra turn", http.StatusBadRequest)
 			return
@@ -167,9 +168,6 @@ func TestResultCollectionRecoveryRepairsProjectedInvariantBounds(t *testing.T) {
 		first, second := collectionInvariantSummary(288), collectionInvariantSummary(262)
 		if n == 2 {
 			first = "focused boundary test unavailable"
-		}
-		if n == 3 {
-			first, second = "focused boundary test unavailable", "consumer definition outside assigned snapshot"
 		}
 		body := fmt.Sprintf(`{"status":"completed_with_gaps","summary":"bounded review completed","structured_payload":{"findings":[{"summary":"retained observation","severity":"info"}],"assessments":[{"invariant_id":"safe","status":"unknown","summary":"Boundary evidence is incomplete","missing_evidence":[%q,%q]}]}}`, first, second)
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -211,49 +209,25 @@ func TestResultCollectionRecoveryRepairsProjectedInvariantBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := c.AssessResultCollectionRecovery(t.Context(), item.ID)
-	if err != nil || a.Disposition != RecoveryRepairClaims || a.AdditionalTurns != 2 || validateRecoveryAssessment(a) != nil {
-		t.Fatalf("projected format rejection was not repairable: %+v error=%v", a, err)
+	for _, runID := range []string{"first-repair-request", "second-repair-request"} {
+		c.executionRunID = runID
+		ctx := WithResultOnlyRepair(t.Context(), item.ID)
+		a, err := c.AssessResultCollectionRecovery(ctx, item.ID)
+		if err != nil || a.Disposition != RecoveryBlocked || a.AdditionalTurns != 0 || a.RemainingTurns != 0 ||
+			!errors.Is(validateRecoveryAssessment(a), errResultCollectionBlocked) {
+			t.Fatalf("exhausted correction earned additional turns: %+v error=%v", a, err)
+		}
+		if err := c.authorizeOperatorResultRepair(ctx); err == nil {
+			t.Fatal("a new invocation reissued the schema budget")
+		}
+	}
+	current := c.todoItemByID(item.ID)
+	work, err := c.loadCollectionWork(t.Context(), current, currentResultCollection(current))
+	if err != nil || !reflect.DeepEqual(work.Receipt, originalWork.Receipt) || !bytes.Equal(work.Report, originalWork.Report) {
+		t.Fatalf("blocked recovery changed the original receipt or report: %v", err)
 	}
 	after, err := c.EventJournal().ReadEvents(t.Context())
-	if err != nil || !reflect.DeepEqual(before, after) || calls.Load() != 2 {
-		t.Fatal("read-only assessment mutated evidence or called a provider")
-	}
-	c.executionRunID = "result-recovery"
-	if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), item.ID)); err != nil {
-		t.Fatal(err)
-	}
-	c = reopenRecoveryCoordinator(t, c)
-	c.applyLiveTaskProjection(c.taskTracker.TodoList().Items())
-	c.executionRunID = "result-recovery"
-	if c.todoItemByID(item.ID).InvariantVerification != InvariantVerificationReport {
-		t.Fatal("repair grant lost the original invariant contract")
-	}
-	unusedWorker := scriptWorker(textTurn("must never replay work"))
-	c.workerAgentOverride = unusedWorker
-	if _, err := c.executeTask(WithSessionResume(t.Context()), taskDefFromTodoItem(c.todoItemByID(item.ID)), item.ID); err != nil {
-		t.Fatal(err)
-	}
-	done := c.todoItemByID(item.ID)
-	committed := currentResultCollection(done)
-	if done.Status != TaskDone || unusedWorker.Calls() != 0 || calls.Load() != 3 || committed.Work != cp.Work {
-		t.Fatal("repair repeated original work or changed its immutable evidence")
-	}
-	work, err := c.loadCollectionWork(t.Context(), done, committed)
-	if err != nil || !reflect.DeepEqual(work.Receipt, originalWork.Receipt) || string(work.Report) != string(originalWork.Report) {
-		t.Fatal("repair changed the original receipt or report")
-	}
-	result := done.TypedResult
-	if result == nil || result.Status != TaskResultStatusCompletedWithGaps || len(result.Findings) != 1 || result.Findings[0].Summary != "retained observation" || result.InvariantVerification.Assessments[0].Status != InvariantUnknown || len(result.InvariantVerification.Assessments[0].MissingEvidence) != 2 {
-		t.Fatal("format repair changed a finding, invariant judgment, or gap membership")
-	}
-	events, err := c.EventJournal().ReadEvents(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	replayed := ReduceToTodoList(events)
-	index := slices.IndexFunc(replayed, func(task *TodoItem) bool { return task.ID == item.ID })
-	if index < 0 || replayed[index].Status != TaskDone || !reflect.DeepEqual(replayed[index].TypedResult, result) {
-		t.Fatal("replay changed the accepted result")
+	if err != nil || !reflect.DeepEqual(before, after) || calls.Load() != 2 || current.Status != TaskBlocked {
+		t.Fatal("blocked recovery mutated the journal or called a provider")
 	}
 }

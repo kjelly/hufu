@@ -45,8 +45,12 @@ func (c *Coordinator) validateCollectionOutputIncrease(item *TodoItem, work *res
 func (c *Coordinator) applyCollectionRecoveryOutputLimit(generation *agent.GenerationParams, checkpoint *ResultCollectionCheckpoint) {
 	grants := collectionRepairGrants(collectionReceipt(c.todoItemByID(checkpoint.TaskID), checkpoint))
 	for _, grant := range slices.Backward(grants) {
+		turns := grant.AdditionalAttempts
+		if grant.Recovery != nil && grant.Recovery.MaxOutputTokens > 0 && turns == 0 && recoveryCanUseCollectorTurn(grant.Recovery) {
+			turns = 1
+		}
 		if grant.BranchID == checkpoint.BranchID && grant.Recovery != nil &&
-			checkpoint.TurnsUsed >= grant.AfterAttempts && checkpoint.TurnsUsed-grant.AfterAttempts < grant.AdditionalAttempts {
+			checkpoint.TurnsUsed >= grant.AfterAttempts && checkpoint.TurnsUsed-grant.AfterAttempts < turns {
 			if grant.Recovery.MaxOutputTokens > 0 {
 				generation.MaxTokens = strconv.Itoa(grant.Recovery.MaxOutputTokens)
 			}

@@ -32,7 +32,7 @@ func fakeCodexThreadStartStep(threadID, cwd, model, sandbox string, t *testing.T
 }
 
 func fakeCodexThreadStartStepWithNetwork(threadID, cwd, model, sandbox string, networkAccess bool, t *testing.T) fakeCodexStep {
-	return fakeCodexStep{Result: rawJSON(t, map[string]any{
+	return fakeCodexStep{ThreadCWD: cwd, Result: rawJSON(t, map[string]any{
 		"thread":  map[string]any{"id": threadID},
 		"cwd":     cwd,
 		"model":   model,
@@ -53,7 +53,7 @@ func fakeCodexTurnCompletedStep(t *testing.T, turnID, finalOutput string) fakeCo
 	}
 	return fakeCodexStep{
 		Result:        rawJSON(t, map[string]any{"turn": map[string]any{"id": turnID}}),
-		Notifications: []fakeCodexNotification{{Method: "turn/completed", Params: rawJSON(t, map[string]any{"threadId": "thread-1", "turn": turn})}},
+		Notifications: []fakeCodexNotification{{Method: "turn/completed", Params: rawJSON(t, map[string]any{"turn": turn})}},
 	}
 }
 
@@ -64,6 +64,7 @@ func fakeCodexTurnCompletedStep(t *testing.T, turnID, finalOutput string) fakeCo
 // operationally — a persist failure blocks turn/start from ever being sent,
 // rather than merely being logged after the fact.
 func TestCodexNewThreadPersistsBindingBeforeTurn(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	t.Parallel()
 	const cwd = "/workspace/task-1"
 	cfg := CodexThreadConfig{CWD: cwd, Model: "gpt-5-codex", Sandbox: "workspace-write"}
@@ -122,6 +123,7 @@ func TestCodexNewThreadPersistsBindingBeforeTurn(t *testing.T) {
 // ProviderBinding.SessionID drives thread/resume(threadId), never
 // thread/start, and the durable ID is what gets used, not anything invented.
 func TestCodexResumeUsesDurableThreadID(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	t.Parallel()
 	const cwd = "/workspace/task-1"
 	server := startFakeCodexServer(t, []fakeCodexStep{
@@ -146,6 +148,7 @@ func TestCodexResumeUsesDurableThreadID(t *testing.T) {
 // different effective model than the bound one fails closed — v1 has no
 // provider model fallback.
 func TestCodexEffectiveModelMismatchFails(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	t.Parallel()
 	server := startFakeCodexServer(t, []fakeCodexStep{
 		fakeCodexThreadStartStep("thread-1", "/workspace", "gpt-4-different", "workspace-write", t),
@@ -162,6 +165,7 @@ func TestCodexEffectiveModelMismatchFails(t *testing.T) {
 // TestCodexSandboxMismatchFails proves §14.1: an effective sandbox wider
 // than requested fails before any coding turn.
 func TestCodexSandboxMismatchFails(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	t.Parallel()
 	server := startFakeCodexServer(t, []fakeCodexStep{
 		fakeCodexThreadStartStep("thread-1", "/workspace", "gpt-5-codex", "danger-full-access", t),
@@ -176,6 +180,7 @@ func TestCodexSandboxMismatchFails(t *testing.T) {
 }
 
 func TestCodexNoNetRejectsEffectiveNetworkAccess(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	t.Parallel()
 	server := startFakeCodexServer(t, []fakeCodexStep{
 		fakeCodexThreadStartStepWithNetwork("thread-1", "/workspace", "gpt-5-codex", "workspace-write", true, t),
@@ -193,6 +198,7 @@ func TestCodexNoNetRejectsEffectiveNetworkAccess(t *testing.T) {
 }
 
 func TestCodexNoNetRejectsMissingEffectiveNetworkAccess(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	t.Parallel()
 	server := startFakeCodexServer(t, []fakeCodexStep{
 		{Result: rawJSON(t, map[string]any{
@@ -216,6 +222,7 @@ func TestCodexNoNetRejectsMissingEffectiveNetworkAccess(t *testing.T) {
 // expose different files, so it is treated as a widening regardless of
 // direction.
 func TestCodexCWDWideningFails(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	t.Parallel()
 	server := startFakeCodexServer(t, []fakeCodexStep{
 		fakeCodexThreadStartStep("thread-1", "/", "gpt-5-codex", "workspace-write", t),

@@ -256,9 +256,7 @@ func CheckWeakVerifierWarning(stdout, stderr string) (bool, string) {
 
 // EvaluateJSONAssertion checks a JSON path against expected value.
 func EvaluateJSONAssertion(jsonData any, assertion JSONAssertion) error {
-	path := strings.TrimSpace(assertion.Path)
-	path = strings.TrimPrefix(path, ".")
-	val, err := resolveJSONPath(jsonData, path)
+	val, err := resolveJSONAssertionValue(jsonData, assertion.Path)
 	if err != nil {
 		return err
 	}
@@ -266,6 +264,10 @@ func EvaluateJSONAssertion(jsonData any, assertion JSONAssertion) error {
 		return fmt.Errorf("JSON assertion failed at %q: expected %v (%T), got %v (%T)", assertion.Path, assertion.Equals, assertion.Equals, val, val)
 	}
 	return nil
+}
+
+func resolveJSONAssertionValue(jsonData any, path string) (any, error) {
+	return resolveJSONPath(jsonData, strings.TrimPrefix(strings.TrimSpace(path), "."))
 }
 
 func resolveJSONPath(data any, path string) (any, error) {
@@ -745,21 +747,24 @@ func validateJSONPointer(pointer string) error {
 }
 
 func isExpectedVerificationExit(err error, result *VerificationResult) bool {
-	if result == nil || result.TimedOut || result.ExitCode == 0 || result.ExitCode == -1 {
+	if result == nil || result.TimedOut || result.ExitCode <= 0 ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	// An unresolved verifier is an environment/configuration failure, not an
 	// expected assertion failure. This must remain false even for
 	// expected_failure and observation modes; otherwise a missing executable
 	// can satisfy an acceptance gate merely by returning exit 127.
-	if errors.Is(err, errUnresolvedExecutable) ||
-		hasEnvironmentFailureSignal(result.Stdout) || hasEnvironmentFailureSignal(result.Stderr) {
+	if errors.Is(err, errUnresolvedExecutable) || verificationReportsEnvironmentFailure(result) {
 		return false
 	}
 	return true
 }
 
 func applyVerificationMode(res *VerificationResult, err error, mode string) (*VerificationResult, error) {
+	if res != nil && res.EnvironmentFailure == nil {
+		res.EnvironmentFailure = new(false)
+	}
 	switch mode {
 	case "", "success":
 		return res, err
@@ -819,11 +824,12 @@ func executeCommandVerificationWithRawOutput(parentCtx context.Context, shell, w
 	if findings := ResolveCommandExecutables(command, workDir); len(findings) > 0 {
 		message := formatUnresolvedExecutableFindings(findings)
 		res := &VerificationResult{
-			Command:  command,
-			WorkDir:  workDir,
-			ExitCode: 127,
-			Stderr:   utils.TruncateString(message, 2000),
-			Spec:     &spec,
+			Command:            command,
+			WorkDir:            workDir,
+			ExitCode:           127,
+			Stderr:             utils.TruncateString(message, 2000),
+			EnvironmentFailure: new(true),
+			Spec:               &spec,
 		}
 		return applyVerificationMode(res, fmt.Errorf("%w: %s", errUnresolvedExecutable, message), spec.Mode)
 	}
@@ -834,24 +840,34 @@ func executeCommandVerificationWithRawOutput(parentCtx context.Context, shell, w
 		cmd.Dir = workDir
 	}
 
-	var stdout, stderr bytes.Buffer
+	outputLimit := utils.SubprocessOutputRedactionWindow(verificationRedactionPrefix, cmd.Env)
+	stdout, stderr := verificationOutput{limit: outputLimit}, verificationOutput{limit: outputLimit}
+	if strings.Contains(command, "grep -c") || strings.Contains(command, "grep-c") {
+		stdout.grepCount = new(verificationZeroOutput)
+	}
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	var privateStdout strings.Builder
+	if retainRawOutput {
+		cmd.Stdout = io.MultiWriter(&stdout, &privateStdout)
+	}
 	started := time.Now()
 	err := cmd.Run()
+	environmentFailure := cmd.ProcessState == nil || stdout.environmentFailure || stderr.environmentFailure
 
 	res := &VerificationResult{
-		Command:  command,
-		WorkDir:  workDir,
-		ExitCode: 0,
-		Stdout:   utils.TruncateString(strings.TrimSpace(stdout.String()), 2000),
-		Stderr:   utils.TruncateString(strings.TrimSpace(stderr.String()), 2000),
-		Duration: time.Since(started),
-		TimedOut: errors.Is(ctx.Err(), context.DeadlineExceeded),
-		Spec:     &spec,
+		Command:            command,
+		WorkDir:            workDir,
+		ExitCode:           0,
+		Stdout:             stdout.evidence(cmd.Env),
+		Stderr:             stderr.evidence(cmd.Env),
+		Duration:           time.Since(started),
+		TimedOut:           errors.Is(ctx.Err(), context.DeadlineExceeded),
+		EnvironmentFailure: new(environmentFailure),
+		Spec:               &spec,
 	}
-	if retainRawOutput {
-		res.rawStdout = stdout.String()
+	if retainRawOutput && err == nil {
+		res.rawStdout = privateStdout.String()
 	}
 
 	if err != nil {
@@ -877,16 +893,16 @@ func executeCommandVerificationWithRawOutput(parentCtx context.Context, shell, w
 			err = fmt.Errorf("%v%s — exit 127 means the command was not found: the verify field must be a runnable shell command (e.g. 'test -f report.md'), not a natural-language description of the expected outcome", err, detail)
 		} else if containsNonASCII(command) {
 			err = fmt.Errorf("%w%s — the verify field appears to contain non-ASCII text (possibly natural language). The verify field must be a runnable shell command, e.g. 'test -f report.md' or 'virsh list --all | grep -c running', not a description of the expected outcome", err, detail)
-		} else if res.ExitCode == 1 && strings.TrimSpace(res.Stdout) == "0" &&
-			(strings.Contains(command, "grep -c") || strings.Contains(command, "grep-c")) {
+		} else if res.ExitCode == 1 && stdout.grepCount.onlyZero() {
 			err = fmt.Errorf("%w: %v%s — wrong polarity: the verify command checked that a resource EXISTS (grep-c returned 0 = not found), but this looks like a cleanup task where success means the resource is GONE. Use '!' negation for delete/cleanup verify, e.g. '! ovs-vsctl show 2>&1 | grep -q br-verify'", errWrongVerificationPolarity, err, detail)
 		} else {
 			err = fmt.Errorf("%w%s", err, detail)
 		}
-	} else {
-		if isWeak, reason := CheckWeakVerifierWarning(res.Stdout, res.Stderr); isWeak {
-			res.WeakWarning = true
-			res.WeakReason = reason
+	} else if stdout.weakWarning || stderr.weakWarning {
+		res.WeakWarning = true
+		_, res.WeakReason = CheckWeakVerifierWarning(res.Stdout, res.Stderr)
+		if res.WeakReason == "" {
+			res.WeakReason = "command exited 0 but output contains failure indicators"
 		}
 	}
 
@@ -971,11 +987,16 @@ func executeJSONAssertVerification(parentCtx context.Context, shell, workDir str
 			Mode:    "success",
 			Command: spec.Command,
 		}, true)
-		if cmdErr != nil || (cmdRes != nil && cmdRes.ExitCode != 0) {
-			res.ExitCode = 1
+		if cmdErr != nil {
+			res.ExitCode = -1
+			res.TimedOut = errors.Is(cmdErr, context.DeadlineExceeded)
 			if cmdRes != nil {
+				res.ExitCode = cmdRes.ExitCode
+				res.TimedOut = cmdRes.TimedOut
+				res.Duration = cmdRes.Duration
 				res.Stdout = cmdRes.Stdout
 				res.Stderr = cmdRes.Stderr
+				res.EnvironmentFailure = cmdRes.EnvironmentFailure
 			}
 			return applyVerificationMode(res, fmt.Errorf("json_assert command failed: %w", cmdErr), spec.Mode)
 		}
@@ -990,22 +1011,26 @@ func executeJSONAssertVerification(parentCtx context.Context, shell, workDir str
 	decoder := json.NewDecoder(bytes.NewReader(jsonBytes))
 	decoder.UseNumber()
 	if err := decoder.Decode(&parsedData); err != nil {
-		res.ExitCode = 1
-		res.Stderr = fmt.Sprintf("json_assert invalid JSON output: %v", err)
-		return applyVerificationMode(res, fmt.Errorf("json_assert output is not valid JSON: %w", err), spec.Mode)
+		res.ExitCode = -1
+		res.Stderr = "json_assert invalid or incomplete JSON output"
+		// SyntaxError includes literal bytes from the private verifier input.
+		if syntaxErr, ok := errors.AsType[*json.SyntaxError](err); ok {
+			res.Stderr = fmt.Sprintf("json_assert invalid JSON output at byte %d", syntaxErr.Offset)
+		}
+		return applyVerificationMode(res, errors.New(res.Stderr), spec.Mode)
 	}
 	// A verifier is expected to produce exactly one JSON document. Reject
 	// trailing non-whitespace data rather than accepting an ambiguous prefix.
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		res.ExitCode = 1
+		res.ExitCode = -1
 		res.Stderr = "json_assert invalid JSON output: expected exactly one JSON document"
 		return applyVerificationMode(res, errors.New("json_assert output must contain exactly one JSON document"), spec.Mode)
 	}
 
-	for _, assertion := range spec.Assertions {
-		if err := EvaluateJSONAssertion(parsedData, assertion); err != nil {
+	for i, assertion := range spec.Assertions {
+		if err := checkPrivateJSONAssertion(parsedData, assertion, i); err != nil {
 			res.ExitCode = 1
-			res.Stderr = fmt.Sprintf("json_assert assertion failed: %v", err)
+			res.Stderr = "json_assert assertion failed: " + err.Error()
 			return applyVerificationMode(res, err, spec.Mode)
 		}
 	}

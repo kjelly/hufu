@@ -7,13 +7,13 @@ import (
 
 // resolveRuntimeMediaValue returns canonical native evidence without modifying
 // Outputs. A schema-selected metadata value grants no provider byte access.
-func (c *Coordinator) resolveRuntimeMediaValue(taskID string) (any, error) {
+func (c *Coordinator) resolveRuntimeMediaValue(ctx context.Context, taskID string) (any, error) {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil || c.session == nil {
 		return nil, fmt.Errorf("runtime media source occurrences are unavailable")
 	}
 	items := c.taskTracker.TodoList().Items()
 	runID := coordinatorRuntimeRunID(c)
-	origins, err := c.recoveredTaskOutputOrigins(items)
+	origins, err := c.recoveredTaskOutputOrigins(ctx, items)
 	if err != nil {
 		return nil, err
 	}
@@ -51,11 +51,11 @@ func (c *Coordinator) resolveRuntimeMediaValue(taskID string) (any, error) {
 	// This mirrors the existing synchronous runtime-input lookup API. Reading
 	// the validated durable journal also works after the live store has closed;
 	// historical bindings never rebuild themselves from a newer source result.
-	events, err := readValidatedEventJournal(context.Background(), c.session.Workspace)
+	events, err := readValidatedEventJournal(ctx, c.session.Workspace)
 	if err != nil {
 		return nil, err
 	}
-	tree, err := LoadSessionTreeContext(context.Background(), c.session.Workspace)
+	tree, err := LoadSessionTreeContext(ctx, c.session.Workspace)
 	if err != nil {
 		return nil, err
 	}

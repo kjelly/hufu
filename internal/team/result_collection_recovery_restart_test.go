@@ -15,9 +15,27 @@ func reopenRecoveryCoordinator(t *testing.T, previous *Coordinator) *Coordinator
 	if err := previous.Close(); err != nil {
 		t.Fatal(err)
 	}
+	c := newRecoveryCoordinator(t, previous)
+	c.initEventStore()
+	events, err := c.EventJournal().ReadEvents(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := ReplayTodoList(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.taskTracker = NewTaskTracker()
+	c.taskTracker.TodoList().AddReserved(tasks)
+	return c
+}
+
+func newRecoveryCoordinator(t *testing.T, previous *Coordinator) *Coordinator {
+	t.Helper()
 	c := newTestCoordinator(t)
 	c.session = cloneSession(previous.session, previous.session.Workspace)
 	c.projectDir = previous.projectDir
+	c.noNet = previous.noNet
 	c.sidecarModel = previous.sidecarModel
 	c.maxConcurrent = previous.maxConcurrent
 	c.providerManager = previous.providerManager
@@ -34,17 +52,6 @@ func reopenRecoveryCoordinator(t *testing.T, previous *Coordinator) *Coordinator
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.initEventStore()
-	events, err := c.EventJournal().ReadEvents(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	tasks, err := ReplayTodoList(events)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.taskTracker = NewTaskTracker()
-	c.taskTracker.TodoList().AddReserved(tasks)
 	return c
 }
 

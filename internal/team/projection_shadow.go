@@ -217,6 +217,7 @@ type canonicalVerifyResult struct {
 	Stdout               string                      `json:"stdout,omitempty"`
 	Stderr               string                      `json:"stderr,omitempty"`
 	TimedOut             bool                        `json:"timed_out,omitempty"`
+	EnvironmentFailure   *bool                       `json:"environment_failure,omitempty"`
 	WeakWarning          bool                        `json:"weak_warning,omitempty"`
 	WeakReason           string                      `json:"weak_reason,omitempty"`
 	Overturned           bool                        `json:"overturned,omitempty"`
@@ -237,6 +238,7 @@ func toCanonicalVerifyResult(vr *VerificationResult) *canonicalVerifyResult {
 		Stdout:               vr.Stdout,
 		Stderr:               vr.Stderr,
 		TimedOut:             vr.TimedOut,
+		EnvironmentFailure:   vr.EnvironmentFailure,
 		WeakWarning:          vr.WeakWarning,
 		WeakReason:           vr.WeakReason,
 		Overturned:           vr.Overturned,

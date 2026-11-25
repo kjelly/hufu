@@ -76,16 +76,16 @@ func TestContractRecoveryRepairsKeyedClaimsWithinOriginalWork(t *testing.T) {
 				}
 				assertCollectorResponseChannel(t, request)
 				turn := calls.Add(1)
-				if turn > 2 {
+				if turn > 1 {
 					t.Error("collector exceeded its bounded grant")
 					http.Error(w, "extra request", 400)
 					return
 				}
 				claims := accepted.Load().(string)
-				if turn == 1 || !succeeds {
+				if !succeeds {
 					claims = strings.Replace(claims, `"status":"success"`, `"status":42`, 1)
 				}
-				if turn == 2 && !strings.Contains(fmt.Sprint(request["messages"]), "format_feedback") {
+				if !strings.Contains(fmt.Sprint(request["messages"]), "format_feedback") {
 					t.Error("repair lost the rejected response feedback")
 				}
 				envelope := fmt.Sprintf(`{"result":%s}`, claims)
@@ -135,11 +135,11 @@ func TestContractRecoveryRepairsKeyedClaimsWithinOriginalWork(t *testing.T) {
 			}
 			_, err = c.executeTask(WithSessionResume(t.Context()), taskDefFromTodoItem(c.todoItemByID(id)), id)
 			item := c.todoItemByID(id)
-			if (err == nil) != succeeds || calls.Load() != 2 || worker.Calls() != 0 || succeeds && item.Status != TaskDone || !succeeds && item.Status != TaskBlocked {
+			if (err == nil) != succeeds || calls.Load() != 1 || worker.Calls() != 0 || succeeds && item.Status != TaskDone || !succeeds && item.Status != TaskBlocked {
 				t.Fatalf("succeeds=%t calls=%d work=%d status=%s err=%v", succeeds, calls.Load(), worker.Calls(), item.Status, err)
 			}
 			cp := currentResultCollection(item)
-			if cp.Work != original.Work || cp.TurnsUsed != original.TurnsUsed+2 {
+			if cp.Work != original.Work || cp.TurnsUsed != original.TurnsUsed+1 {
 				t.Fatal("work or consumed budget changed")
 			}
 			if _, err := ReadResumeSource(c.session.Workspace, branch, ""); err != nil {

@@ -98,26 +98,15 @@ func advertiseResultWorksetPaths(schema map[string]any, spec *resultWorksetPaths
 	}
 }
 
-func canonicalExternalWorksetPaths(request AttemptRequest, raw string) (string, worksetPathSelection, error) {
-	if request.resultContractSchema.worksetPaths == nil {
-		return raw, worksetPathSelection{}, nil
+func canonicalExternalWorksetPaths(spec *resultWorksetPathsSpec, selection worksetPathSelection, value any, raw string) (string, error) {
+	if spec == nil {
+		return raw, nil
 	}
-	if request.resultWorksetPaths == nil {
-		return "", worksetPathSelection{}, fmt.Errorf("workset path lookup is unavailable")
-	}
-	selection, err := request.resultWorksetPaths()
-	if err != nil {
-		return "", worksetPathSelection{}, err
-	}
-	value, err := decodeUniqueJSON([]byte(raw))
-	if err != nil {
-		return "", worksetPathSelection{}, err
-	}
-	if err := applyResultWorksetPaths(value, request.resultContractSchema.worksetPaths, selection); err != nil {
-		return "", worksetPathSelection{}, err
+	if err := applyResultWorksetPaths(value, spec, selection); err != nil {
+		return "", err
 	}
 	resolved, err := json.Marshal(value, json.Deterministic(true))
-	return string(resolved), selection, err
+	return string(resolved), err
 }
 
 func splitWorksetPathLine(value string) (string, string, error) {
@@ -215,14 +204,19 @@ func (s worksetPathSelection) resolve(value string) (string, error) {
 }
 
 // This traversal is structural, never a search/replace of prose or other fields.
+type resultWorksetPathShapeError struct{ error }
+
+func (e *resultWorksetPathShapeError) Unwrap() error { return e.error }
+
 func transformWorksetPathLeaves(value any, tokens []string, pointer string, transform func(string, string) (string, error)) (any, error) {
 	if len(tokens) == 0 {
 		text, ok := value.(string)
 		if !ok {
-			return nil, fmt.Errorf("workset path selector requires a string")
+			return value, &resultWorksetPathShapeError{fmt.Errorf("%s: workset path selector requires a string", pointer)}
 		}
 		return transform(text, pointer)
 	}
+	var failures []error
 	switch node := value.(type) {
 	case map[string]any:
 		for _, key := range slices.Sorted(maps.Keys(node)) {
@@ -231,25 +225,27 @@ func transformWorksetPathLeaves(value any, tokens []string, pointer string, tran
 			}
 			next, err := transformWorksetPathLeaves(node[key], tokens[1:], pointer+"/"+escapeJSONPointerToken(key), transform)
 			if err != nil {
-				return nil, err
+				failures = append(failures, err)
+				continue
 			}
 			node[key] = next
 		}
 	case []any:
 		if tokens[0] != "*" {
-			return nil, fmt.Errorf("workset path selector requires an array wildcard")
+			return value, &resultWorksetPathShapeError{fmt.Errorf("%s: workset path selector requires an array wildcard", pointer)}
 		}
 		for index, child := range node {
 			next, err := transformWorksetPathLeaves(child, tokens[1:], pointer+"/"+strconv.Itoa(index), transform)
 			if err != nil {
-				return nil, err
+				failures = append(failures, err)
+				continue
 			}
 			node[index] = next
 		}
 	default:
-		return nil, fmt.Errorf("workset path selector has an invalid shape")
+		return value, &resultWorksetPathShapeError{fmt.Errorf("%s: workset path selector has an invalid shape", pointer)}
 	}
-	return value, nil
+	return value, errors.Join(failures...)
 }
 
 func applyResultWorksetPaths(value any, spec *resultWorksetPathsSpec, selection worksetPathSelection) error {
@@ -266,7 +262,7 @@ func applyResultWorksetPaths(value any, spec *resultWorksetPathsSpec, selection 
 			}
 			return resolved, nil
 		}); err != nil {
-			return fmt.Errorf("%s: %w", selector, err)
+			failures = append(failures, err)
 		}
 	}
 	return errors.Join(failures...)
@@ -278,11 +274,11 @@ func (c *Coordinator) resolveResultWorksetPaths(ctx context.Context, taskID, inp
 		return input, err
 	}
 	if _, err := decodeUniqueJSON([]byte(input)); err != nil {
-		return "", err
+		return "", rejectLocalResult(RepairFailureInvalidSchema, err)
 	}
 	raw, err := normalizeSubmitResultInput([]byte(input))
 	if err != nil {
-		return "", err
+		return "", rejectLocalResult(RepairFailureInvalidSchema, err)
 	}
 	value, err := decodeUniqueJSON(raw)
 	if err != nil {
@@ -290,20 +286,21 @@ func (c *Coordinator) resolveResultWorksetPaths(ctx context.Context, taskID, inp
 	}
 	claims, ok := value.(map[string]any)
 	if !ok {
-		return "", fmt.Errorf("workset path submission requires an object")
+		return "", rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("workset path submission requires an object"))
 	}
 	if claims["structured_payload"] == nil {
 		return input, nil
 	}
 	selection, err := c.verifiedWorksetPathSelection(ctx, taskID, compiled.worksetPaths)
 	if err != nil {
-		return "", rejectLocalResult(RepairFailureSource, err)
-	}
-	if err := applyResultWorksetPaths(claims["structured_payload"], compiled.worksetPaths, selection); err != nil {
 		return "", err
 	}
+	pathErr := applyResultWorksetPaths(claims["structured_payload"], compiled.worksetPaths, selection)
 	raw, err = json.Marshal(claims, json.Deterministic(true))
-	return string(raw), err
+	if err != nil {
+		return "", err
+	}
+	return string(raw), pathErr
 }
 
 func validateResultWorksetPaths(value any, spec *resultWorksetPathsSpec, selection worksetPathSelection) error {
@@ -311,6 +308,7 @@ func validateResultWorksetPaths(value any, spec *resultWorksetPathsSpec, selecti
 		return nil
 	}
 	// Canonical stored values must be full paths, never unexpanded keys.
+	var failures []error
 	for _, pointer := range spec.Pointers {
 		if _, err := transformWorksetPathLeaves(value, fixedCollectionPointerTokens(pointer), "", func(text, pointer string) (string, error) {
 			resolved, err := selection.resolve(text)
@@ -322,10 +320,10 @@ func validateResultWorksetPaths(value any, spec *resultWorksetPathsSpec, selecti
 			}
 			return text, nil
 		}); err != nil {
-			return err
+			failures = append(failures, err)
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func (c *Coordinator) resultWorksetPathContext(ctx context.Context, taskID string, compiled *CompiledResultContract) (string, error) {

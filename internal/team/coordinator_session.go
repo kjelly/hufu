@@ -4,6 +4,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -1144,10 +1145,47 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			count++
 			return nil, false
 		}
-		if currentResultCollection(it) != nil {
-			if _, err := c.resumeCollectedTask(ctx, task, it); err != nil && firstErr == nil {
+		if _, handled, err := c.resumeReturnedCollectionTask(ctx, task, it); handled {
+			if err != nil {
+				if localResultRejectionReason(err) == RepairFailureCommit {
+					return count + 1, err
+				}
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+			count++
+			continue
+		}
+		if held, err := c.stopInterruptedExternalCorrection(ctx, it); held {
+			if firstErr == nil {
 				firstErr = err
 			}
+			count++
+			continue
+		}
+		var normalizationErr error
+		it, normalizationErr = c.restoreAcceptedNormalizedSubmission(ctx, it)
+		if normalizationErr == nil {
+			it, normalizationErr = c.restoreInterruptedDirectNormalization(ctx, it)
+		}
+		if normalizationErr != nil {
+			reason := localResultRejectionReason(normalizationErr)
+			if reason == RepairFailureAction || reason == RepairFailureSource {
+				detail := fmt.Sprintf("%s: %s", reason, c.FailureDetail(normalizationErr, FailureSourceError))
+				blocked := TaskBlocked
+				if err := c.persistFailureWithOutput(it.Agent, task.Goal, it.ID, detail, NeedsHuman, FailureProtocol, &blocked, it.Output); err != nil {
+					normalizationErr = errors.Join(normalizationErr, err)
+				} else {
+					count++
+				}
+			}
+			if firstErr == nil {
+				firstErr = fmt.Errorf("task %s interrupted normalization: %w", it.ID, normalizationErr)
+			}
+			continue
+		}
+		if it.Status == TaskBlocked || it.Status == TaskError {
 			count++
 			continue
 		}
@@ -1159,7 +1197,7 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			}
 			it = c.todoItemByID(it.ID)
 		}
-		if it.Status == TaskProtocolIncomplete {
+		if it.Status == TaskProtocolIncomplete || isNormalizedVerificationPending(it) {
 			if err := c.ensureExecutionPolicySnapshot(); err != nil {
 				detail := fmt.Sprintf("task recovery blocked by execution policy admission: %v", err)
 				c.PersistFailureWithClassAndStatusAndOutput(it.Agent, it.Desc, it.ID, detail, NeedsHuman, FailurePolicy, TaskBlocked, it.Output)

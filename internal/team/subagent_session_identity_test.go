@@ -172,6 +172,7 @@ func TestSessionIdentityRule(t *testing.T) {
 }
 
 func TestSessionIdentityConflictBlocksLaunchButStillReplays(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	c, provider, item, rawLogPath := newCodexHarness(t, workspace, []fakeCodexStep{codexInitializeStep(t)})
 	if err := c.persistProviderSessionBinding(t.Context(), item.ID, 1, codexSessionBinding("thread-anchor", "world-a")); err != nil {
@@ -241,6 +242,7 @@ func TestSessionIdentityFailureClassification(t *testing.T) {
 		{
 			name: "resume answered with another thread",
 			run: func(t *testing.T) error {
+				skipUnsupportedCodexIntegration(t)
 				workspace := newCodexWorkspace(t)
 				_, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{
 					codexInitializeStep(t),
@@ -256,6 +258,7 @@ func TestSessionIdentityFailureClassification(t *testing.T) {
 		{
 			name: "result repair resumed another thread",
 			run: func(t *testing.T) error {
+				skipUnsupportedCodexIntegration(t)
 				workspace := newCodexWorkspace(t)
 				steps := codexRepairScript(t, workspace, "thread-repair", "", validProposalJSON(""), fakeCodexStep{}, fakeCodexStep{})
 				steps[4] = codexThreadResumeStep(t, "thread-other", workspace, codexSandboxReadOnly)
@@ -268,6 +271,7 @@ func TestSessionIdentityFailureClassification(t *testing.T) {
 		{
 			name: "a writer the lineage read missed bound another session",
 			run: func(t *testing.T) error {
+				skipUnsupportedCodexIntegration(t)
 				workspace := newCodexWorkspace(t)
 				c, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{
 					codexInitializeStep(t),
@@ -287,6 +291,7 @@ func TestSessionIdentityFailureClassification(t *testing.T) {
 		{
 			name: "the durable session belongs to another backend",
 			run: func(t *testing.T) error {
+				skipUnsupportedCodexIntegration(t)
 				workspace := newCodexWorkspace(t)
 				c, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{codexInitializeStep(t)})
 				payload := mustJSON(t, BackendSessionBoundPayload{TaskID: item.ID, Attempt: 1, Backend: "other-agent", SessionID: "thread-1"})
@@ -301,6 +306,7 @@ func TestSessionIdentityFailureClassification(t *testing.T) {
 		{
 			name: "the event log no longer verifies",
 			run: func(t *testing.T) error {
+				skipUnsupportedCodexIntegration(t)
 				workspace := newCodexWorkspace(t)
 				c, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{codexInitializeStep(t)})
 				if err := c.persistProviderSessionBinding(t.Context(), item.ID, 1, codexSessionBinding("thread-1", "world-a")); err != nil {
@@ -318,6 +324,7 @@ func TestSessionIdentityFailureClassification(t *testing.T) {
 		{
 			name: "the event log cannot be opened",
 			run: func(t *testing.T) error {
+				skipUnsupportedCodexIntegration(t)
 				workspace := newCodexWorkspace(t)
 				c, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{codexInitializeStep(t)})
 				invalidateEventStoreState(t, c)
@@ -337,6 +344,7 @@ func TestSessionIdentityFailureClassification(t *testing.T) {
 		{
 			name: "the binding append failed",
 			run: func(t *testing.T) error {
+				skipUnsupportedCodexIntegration(t)
 				workspace := newCodexWorkspace(t)
 				c, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{
 					codexInitializeStep(t),
@@ -403,6 +411,7 @@ func codexCallCount(t *testing.T, rawLogPath, method string) int {
 }
 
 func TestCodexResumeMismatchAfterSideEffectBlocksTask(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	worker := &agent.AgentDef{
 		Name: "worker", Role: "worker", SubagentProvider: "codex", MaxRetries: 2,
@@ -442,6 +451,7 @@ func TestCodexResumeMismatchAfterSideEffectBlocksTask(t *testing.T) {
 }
 
 func TestCodexIdentityConflictBlocksTaskWithoutLaunching(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	worker := &agent.AgentDef{
 		Name: "worker", Role: "worker", SubagentProvider: "codex", MaxRetries: 2,

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -143,9 +144,13 @@ func decisionRecoveryFixtureAtEndpoint(t *testing.T, endpoint string, mutations 
 	if err != nil {
 		t.Fatal(err)
 	}
-	cp, err = c.prepareCollectionClaims(ctx, cp)
-	if err != nil {
-		t.Fatal(err)
+	if len(mutations) == 0 {
+		cp, err = c.prepareCollectionClaims(ctx, cp)
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if _, err := c.prepareCollectionClaims(ctx, cp); localResultRejectionReason(err) != RepairFailureSource {
+		t.Fatalf("live preparation accepted invalid receipt claims: %v", err)
 	}
 	// Save the historical misclassification, without invoking today's admission.
 	cp, err = c.blockResultCollection(ctx, cp, RepairFailureSource)
@@ -186,7 +191,7 @@ func TestResultCollectionDecisionRecoveryRetainsSourcesAndVerdict(t *testing.T) 
 				}
 				return
 			}
-			if a.Disposition != RecoveryRepairClaims || a.AdditionalTurns != 2 {
+			if a.Disposition != RecoveryRepairClaims || a.AdditionalTurns != 0 || a.RemainingTurns != 1 {
 				t.Fatalf("assessment=%+v", a)
 			}
 			c.executionRunID = "repair-conditional-claims"
@@ -201,7 +206,7 @@ func TestResultCollectionDecisionRecoveryRetainsSourcesAndVerdict(t *testing.T) 
 				t.Fatal(err)
 			}
 			granted := c.todoItemByID(id).ExecutionReceipt.ResultCollection
-			if granted.State != ResultCollectionReceived || granted.Prepared != nil || granted.TurnLimit != cp.TurnsUsed+2 {
+			if granted.State != ResultCollectionReceived || granted.Prepared != nil || granted.TurnLimit != cp.TurnLimit {
 				t.Fatalf("illegal prepared recovery: %+v", granted)
 			}
 			grant := c.todoItemByID(id).ExecutionReceipt.RepairProvenance.OperatorGrants[0]
@@ -328,4 +333,152 @@ func TestResultCollectionRecoveryRunsOnlyCollector(t *testing.T) {
 	if current.Status != TaskDone || current.ExecutionReceipt.ResultCollection.TurnsUsed != cp.TurnsUsed+1 || calls.Load() != 1 || decisions.Load() != 1 || worker.Calls() != 0 {
 		t.Fatalf("status=%s collector=%d decisions=%d worker=%d", current.Status, calls.Load(), decisions.Load(), worker.Calls())
 	}
+}
+
+func TestResultCollectionAuthenticatesDecisionEvidenceBeforeCollector(t *testing.T) {
+	var collectorCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" {
+			collectorCalls.Add(1)
+		}
+		http.Error(w, "decision evidence must fail before collector", http.StatusBadRequest)
+	}))
+	t.Cleanup(server.Close)
+	c, item, ctx, receipt, decisionCalls := decisionCollectionFixture(t, server.URL+"/v1", 2, 1)
+	cp, err := c.beginResultCollection(ctx, item.ID, receipt, "one settled verdict and one unfinished verdict")
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := c.EventJournal().ReadEvents(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settled decisionPrimitivePayload
+	for _, event := range events {
+		if event.Type == string(EventDecisionPrimitiveSettled) {
+			if err := json.Unmarshal(event.Payload, &settled); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	if settled.Binding == nil {
+		t.Fatal("fixture did not persist a settled decision")
+	}
+	if err := os.WriteFile(normalizedArtifactData(c, settled.Binding.Context.ID), []byte("corrupted original decision"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c = reopenRecoveryCoordinator(t, c)
+	c.executionRunID = "cold-with-corrupt-decision-context"
+	forbidden := scriptWorker(failTurn(errors.New("decision recovery repeated original work")))
+	c.workerAgentOverride, c.repairAgentOverride = forbidden, forbidden
+	count, err := c.ResumeInterruptedTasks(WithSessionResume(t.Context()))
+	after := todoByID(t, c, item.ID)
+	pinned := currentResultCollection(after)
+	if count != 1 || localResultRejectionReason(err) != RepairFailureSource || after.Status != TaskBlocked ||
+		pinned == nil || pinned.Work != cp.Work || pinned.TurnsUsed != 0 || collectorCalls.Load() != 0 || decisionCalls.Load() != 1 || forbidden.Calls() != 0 {
+		t.Fatalf("count=%d status=%s checkpoint=%+v collector=%d decision=%d work=%d err=%v", count, after.Status, pinned, collectorCalls.Load(), decisionCalls.Load(), forbidden.Calls(), err)
+	}
+}
+
+func TestResultCollectionAuthenticatesInterruptedDecisionRequestBeforeCollector(t *testing.T) {
+	for _, scenario := range []string{"intact", "corrupt", "temporary_io"} {
+		t.Run(scenario, func(t *testing.T) {
+			var collectorCalls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/chat/completions" {
+					_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 131072","model_info":{"general.architecture":"qwen2","qwen2.context_length":131072},"capabilities":["completion","tools"]}`)
+					return
+				}
+				collectorCalls.Add(1)
+				writeNativeRepairStream(t, w, map[string]any{"content": `{"status":"blocked","summary":"decision interrupted"}`}, "stop", "test")
+			}))
+			t.Cleanup(server.Close)
+			c, item, ctx, receipt, decisionCalls := decisionCollectionFixture(t, server.URL+"/v1", 1, 0)
+			cp, err := c.beginResultCollection(ctx, item.ID, receipt, "original work with an interrupted decision")
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, evidence := interruptCollectionDecision(t, c, ctx, item.ID)
+			path := normalizedArtifactData(c, evidence.ID)
+			var restore func()
+			switch scenario {
+			case "corrupt":
+				if err := os.WriteFile(path, []byte("replaced original decision request"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "temporary_io":
+				restore = faultNormalizedEvidencePath(t, path, true)
+			}
+			forbidden := scriptWorker(failTurn(errors.New("decision recovery repeated original work")))
+			resume := func() (*TodoItem, error) {
+				c.workerAgentOverride, c.repairAgentOverride = forbidden, forbidden
+				c.executionRunID = "cold-interrupted-decision"
+				count, err := c.ResumeInterruptedTasks(WithSessionResume(t.Context()))
+				if count != 1 {
+					t.Fatalf("resumed %d tasks: %v", count, err)
+				}
+				return todoByID(t, c, item.ID), err
+			}
+			after, err := resume()
+			if scenario != "intact" {
+				wantReason, wantStatus := RepairFailureSource, TaskBlocked
+				if restore != nil {
+					wantReason, wantStatus = RepairFailureCommit, TaskInProgress
+				}
+				pinned := currentResultCollection(after)
+				if localResultRejectionReason(err) != wantReason || after.Status != wantStatus || pinned == nil ||
+					pinned.Work != cp.Work || pinned.TurnsUsed != 0 || collectorCalls.Load() != 0 || decisionCalls.Load() != 1 || forbidden.Calls() != 0 {
+					t.Fatalf("checkpoint=%+v status=%s collector=%d decisions=%d work=%d err=%v", pinned, after.Status, collectorCalls.Load(), decisionCalls.Load(), forbidden.Calls(), err)
+				}
+				if restore == nil {
+					return
+				}
+				restore()
+				c = reopenRecoveryCoordinator(t, c)
+				after, err = resume()
+			}
+			pinned := currentResultCollection(after)
+			if after.Status != TaskBlocked || after.TypedResult == nil || after.TypedResult.Status != TaskResultStatusBlocked ||
+				pinned == nil || pinned.Work != cp.Work || pinned.TurnsUsed != 1 || collectorCalls.Load() != 1 || decisionCalls.Load() != 1 || forbidden.Calls() != 0 {
+				t.Fatalf("checkpoint=%+v result=%+v status=%s collector=%d decisions=%d work=%d err=%v",
+					pinned, after.TypedResult, after.Status, collectorCalls.Load(), decisionCalls.Load(), forbidden.Calls(), err)
+			}
+		})
+	}
+}
+
+func interruptCollectionDecision(t *testing.T, c *Coordinator, ctx context.Context, taskID string) (*Coordinator, ArtifactRef) {
+	t.Helper()
+	plans, err := c.fixedCollectionPlans(taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(map[string]any{"collection": "/decisions", "row_key": plans[0].rows[0].Key, "group": "assessment"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	execJournal(t, c.session.Workspace, `CREATE TRIGGER refuse_decision_settlement BEFORE INSERT ON events WHEN NEW.type='decision_primitive_settled' BEGIN SELECT RAISE(ABORT, 'fixture interrupted decision'); END`)
+	_, err = (&decisionPrimitiveTool{coordinator: c}).Run(ctx, fantasy.ToolCall{ID: "interrupted-decision", Name: decisionPrimitiveToolName, Input: string(raw)})
+	if err == nil || !strings.Contains(err.Error(), "fixture interrupted decision") {
+		t.Fatalf("did not interrupt decision settlement: %v", err)
+	}
+	execJournal(t, c.session.Workspace, "DROP TRIGGER refuse_decision_settlement")
+	c = reopenRecoveryCoordinator(t, c)
+	events, err := c.EventJournal().ReadEvents(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type != string(EventDecisionPrimitiveStarted) || event.TaskID != taskID {
+			continue
+		}
+		var started decisionPrimitivePayload
+		if err := json.Unmarshal(event.Payload, &started); err != nil || started.Binding == nil {
+			t.Fatalf("invalid persisted start: %+v, %v", started, err)
+		}
+		return c, started.Binding.Context
+	}
+	t.Fatal("no persisted decision start")
+	return nil, ArtifactRef{}
 }

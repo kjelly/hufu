@@ -18,7 +18,6 @@ func TestResultCollectionPreservesWorkAfterToolLoop(t *testing.T) {
 	for _, scenario := range []string{"collected", "successful_loop", "repair", "invalid", "cancelled"} {
 		t.Run(scenario, func(t *testing.T) {
 			var collections atomic.Int32
-			var recovering atomic.Bool
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/v1/chat/completions" {
 					_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 131072","model_info":{"general.architecture":"qwen2","qwen2.context_length":131072},"capabilities":["completion","tools"]}`)
@@ -35,7 +34,7 @@ func TestResultCollectionPreservesWorkAfterToolLoop(t *testing.T) {
 				}
 				n := collections.Add(1)
 				body := `{"status":"completed_with_gaps","summary":"retained observation; repeated source access stopped"}`
-				if scenario == "invalid" && !recovering.Load() {
+				if scenario == "invalid" {
 					body = `{"status":`
 				} else if scenario == "repair" && n == 1 {
 					body = `{"status":"success","summary":"must reject unqualified success"}`
@@ -100,22 +99,17 @@ func TestResultCollectionPreservesWorkAfterToolLoop(t *testing.T) {
 				}
 				c = reopenRecoveryCoordinator(t, c)
 				a, err := c.AssessResultCollectionRecovery(t.Context(), item.ID)
-				if err != nil || a.Disposition == RecoveryBlocked || c.todoItemByID(item.ID).ExecutionReceipt.TranscriptRef != work.Receipt.TranscriptRef {
-					t.Fatalf("restart lost result-only recovery: %+v err=%v", a, err)
+				if err != nil || a.Disposition != RecoveryBlocked {
+					t.Fatalf("restart failed to preserve the exhausted schema budget: %+v err=%v", a, err)
 				}
-				recovering.Store(true)
 				c.executionRunID = "result-only-recovery"
-				if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), item.ID)); err != nil {
-					t.Fatal(err)
+				if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), item.ID)); err == nil {
+					t.Fatal("exhausted format correction granted after restart")
 				}
-				forbidden := scriptWorker(failTurn(errors.New("worker must not run during result repair")))
-				c.workerAgentOverride = forbidden
-				if _, err := c.executeTask(WithSessionResume(t.Context()), taskDefFromTodoItem(c.todoItemByID(item.ID)), item.ID); err != nil {
-					t.Fatal(err)
-				}
-				repaired := c.todoItemByID(item.ID)
-				if forbidden.Calls() != 0 || repaired.Status != TaskDone || !repaired.ExecutionReceipt.Succeeded() || currentResultCollection(repaired).Work != cp.Work {
-					t.Fatal("result-only repair replayed work or replaced its sealed evidence")
+				restarted := c.todoItemByID(item.ID)
+				if worker.Calls() != 1 || collections.Load() != int32(resultCollectionDefaultTurns) || restarted.Status != TaskBlocked ||
+					currentResultCollection(restarted).Work != cp.Work || restarted.ExecutionReceipt.TranscriptRef != work.Receipt.TranscriptRef {
+					t.Fatal("exhausted repair changed the sealed work or used another turn")
 				}
 				return
 			}

@@ -19,6 +19,7 @@ import (
 // canonical image bytes. Both must read while neither consumer has drained.
 // Full provider admission/retry/resume remains covered by codex_images_test.
 func TestCodexImageProjectionsReachIndependentAppServersConcurrently(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	for _, same := range []bool{true, false} {
 		t.Run(fmt.Sprintf("same_binding=%t", same), func(t *testing.T) {
 			c, ctx, request, hash := codexImageProjectionFixture(t)

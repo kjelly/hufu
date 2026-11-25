@@ -58,9 +58,14 @@ func (c *Coordinator) runTargetedRecovery(ctx context.Context, taskID string, ac
 		ctx = context.Background()
 	}
 
-	invocationCtx, end, err := c.beginPublicInvocationExecutionRun(ctx)
+	invocationCtx, end, err := c.beginAdmittedPublicInvocation(ctx, func() error {
+		if item := c.todoItemByID(taskID); item != nil {
+			return c.requireLegacyRecoveryOwnership(ctx, item)
+		}
+		return nil
+	})
 	if err != nil {
-		return TargetedRecoveryReport{Action: action, TaskID: taskID}, err
+		return c.targetedRecoveryReport(action, taskID, nil), err
 	}
 	defer end()
 
@@ -100,6 +105,9 @@ func (c *Coordinator) runTargetedRecovery(ctx context.Context, taskID string, ac
 	item := c.todoItemByID(taskID)
 	if item == nil {
 		return c.finishTargetedRecovery(invocationCtx, action, taskID, fmt.Errorf("task %s not found", taskID))
+	}
+	if err := c.requireLegacyRecoveryOwnership(invocationCtx, item); err != nil {
+		return c.finishTargetedRecovery(invocationCtx, action, taskID, err)
 	}
 	// Decide replay eligibility before opening a provider execution boundary.
 	// A persisted replan/reconcile/human disposition is a deterministic
@@ -172,6 +180,12 @@ func (c *Coordinator) resolveRecoveryRunInputs(ctx context.Context, taskID strin
 func (c *Coordinator) reconcileTaskForOperator(ctx context.Context, item *TodoItem) error {
 	if item == nil {
 		return fmt.Errorf("task is nil")
+	}
+	if err := c.requireLegacyRecoveryOwnership(ctx, item); err != nil {
+		return err
+	}
+	if item.Status == TaskDone && item.ResultContract != nil && item.ResultContract.Normalizer != "" {
+		return nil
 	}
 	if item.ReconcileTool == "" && item.Verify == "" && item.VerifySpec == nil {
 		return fmt.Errorf("task %s has no declared reconcile_tool, verify, or verify_spec", item.ID)
@@ -265,6 +279,12 @@ func validateTargetedRetry(item *TodoItem, controller *RepairController) error {
 	if item == nil {
 		return fmt.Errorf("task is nil")
 	}
+	if normalizedRecoveryOwns(item) {
+		return normalizedTargetedRecoveryError(item)
+	}
+	if externalCorrectionReceiptOwns(item) {
+		return externalCorrectionTargetedRecoveryError(item)
+	}
 	canRetryNotStarted := item.Status == TaskInProgress && item.RecoveryState == RecoveryStateNotStarted
 	if item.Status != TaskError && item.Status != TaskBlocked && !canRetryNotStarted {
 		return fmt.Errorf("task %s has status %s; targeted retry accepts error/blocked tasks or a not_started reconciliation", item.ID, item.Status)
@@ -275,6 +295,77 @@ func validateTargetedRetry(item *TodoItem, controller *RepairController) error {
 	decision := controller.Decide(targetedRetryRequest(item))
 	if decision.Action != RepairRetry {
 		return fmt.Errorf("task %s cannot be retried: %s", item.ID, decision.Reason)
+	}
+	return nil
+}
+
+func normalizedRecoveryOwns(item *TodoItem) bool {
+	if item.ResultContract == nil || item.ResultContract.Normalizer == "" || item.Status == TaskDone {
+		return false
+	}
+	if isNormalizedVerificationPending(item) || normalizedDirectContinuationReceipt(item) {
+		return true
+	}
+	receipt := item.ExecutionReceipt
+	if receipt == nil || receipt.ResultCollection != nil {
+		return false
+	}
+	switch receipt.WorkSubmissionFailure {
+	case RepairFailureInvalidSchema, RepairFailureCommit, RepairFailureSource, RepairFailureAction:
+		return true
+	}
+	return receipt.ResultWorkDispatchID != "" &&
+		(receipt.ResultPayloadSHA256 != "" || isCompletedLocalResult(receipt.SubmittedResult) ||
+			receipt.RepairProvenance != nil && (receipt.RepairProvenance.Success || receipt.RepairProvenance.FailureReason == RepairFailureSource))
+}
+
+func normalizedTargetedRecoveryError(item *TodoItem) error {
+	return fmt.Errorf("task %s is owned by normalized result settlement; use ordinary resume to continue an unfinished settlement", item.ID)
+}
+
+func externalCorrectionReceiptOwns(item *TodoItem) bool {
+	receipt := item.ExecutionReceipt
+	if item.Status == TaskDone || receipt == nil || receipt.WorkSubmissionFailure != RepairFailureInvalidSchema {
+		return false
+	}
+	proof := receipt.RepairProvenance
+	return proof != nil && proof.Attempted && proof.RepairAttempts == 1 &&
+		proof.ProviderWorkTurnID != "" && proof.ProviderWorkTranscriptRef != ""
+}
+
+func externalCorrectionTargetedRecoveryError(item *TodoItem) error {
+	return fmt.Errorf("task %s is owned by external result settlement; use ordinary resume and inspect the retained correction evidence", item.ID)
+}
+
+func (c *Coordinator) requireLegacyRecoveryOwnership(ctx context.Context, item *TodoItem) error {
+	if externalCorrectionReceiptOwns(item) {
+		return externalCorrectionTargetedRecoveryError(item)
+	}
+	if item.Status != TaskDone {
+		reservation, err := c.pendingExternalCorrection(ctx, item)
+		if err != nil {
+			return err
+		}
+		if reservation != nil {
+			return externalCorrectionTargetedRecoveryError(item)
+		}
+	}
+	if normalizedRecoveryOwns(item) {
+		return normalizedTargetedRecoveryError(item)
+	}
+	accepted, err := c.readAcceptedNormalizedSubmission(item)
+	if err != nil {
+		return fmt.Errorf("check optional normalized submission for task %s: %w", item.ID, err)
+	}
+	if accepted != nil {
+		return normalizedTargetedRecoveryError(item)
+	}
+	checkpoint, err := c.readDirectNormalizationCheckpoint(item)
+	if err != nil {
+		return fmt.Errorf("check normalized result settlement for task %s: %w", item.ID, err)
+	}
+	if checkpoint != nil {
+		return normalizedTargetedRecoveryError(item)
 	}
 	return nil
 }

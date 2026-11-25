@@ -248,12 +248,12 @@ spec:
       source: ./reviewprep
       mode: trusted-static
       timeout: 300
-    # reviewprep: 40m/package, 50m command; 5m for snapshot setup and sealing.
+    # reviewprep: 15m/package, 20m command; 5m for snapshot setup and sealing.
     verify-review-tests:
       runtime: golang
       source: ./reviewprep
       mode: trusted-static
-      timeout: 3300
+      timeout: 1500
     prepare-review-supplement:
       runtime: golang
       source: ./reviewprep
@@ -315,8 +315,6 @@ spec:
         source-task: verify-targeted-go-tests
         output: targeted_go_tests
         assertions:
-          - { pointer: /exit_code, op: minimum, value: 0 }
-          - { pointer: /timed_out, op: equals, value: false }
           - { pointer: /output_truncated, op: equals, value: false }
           - { pointer: /artifact_id, op: non_empty }
           - { pointer: /output_artifact_id, op: non_empty }
@@ -406,7 +404,7 @@ spec:
         capability: produce-workset
         type: prepare_review_workset
         payload: >-
-          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"},"routing":"documentation","max_total_diff_bytes":2097152,"max_total_diff_lines":30000,"max_changed_paths":256,"max_workset_items":32,"max_diff_bytes":96000,"max_diff_lines":2000,"max_paths":32,"max_source_snapshot_bytes":393216,"max_review_input_tokens":200000}
+          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"},"routing":"documentation","max_total_diff_bytes":2097152,"max_total_diff_lines":30000,"max_changed_paths":256,"max_workset_items":32,"max_diff_bytes":96000,"max_diff_lines":2000,"max_paths":32,"max_source_snapshot_bytes":393216,"max_review_input_tokens":16000}
         input-bindings:
           - input: review.scope
             target: /scope
@@ -436,8 +434,7 @@ spec:
         type: task_result_assert
         task-result-assertions:
           - { pointer: /runtime_outputs/scope/satisfied, op: equals, value: true }
-          - { pointer: /runtime_outputs/test_execution_completed, op: equals, value: true }
-          - { pointer: /runtime_outputs/targeted_go_tests/timed_out, op: equals, value: false }
+          - { pointer: /runtime_outputs/test_evidence_sealed, op: equals, value: true }
           - { pointer: /runtime_outputs/targeted_go_tests/output_truncated, op: equals, value: false }
           - { pointer: /runtime_outputs/targeted_go_tests/artifact_id, op: non_empty }
           - { pointer: /runtime_outputs/targeted_go_tests/output_artifact_id, op: non_empty }
@@ -712,7 +709,7 @@ spec:
         max-sources: 32
         from-fan-out: critic-review
       constraints: |-
-        Omit audit_complete, coverage, completion, scope, snapshot_coverage and test_verification. The runtime binds the complete receipt-verified values, including the full diagnostic. Omit status and summary for completed work.
+        Omit audit_complete, coverage, completion, scope, snapshot_coverage, test_verification and canonical_findings. The runtime binds the complete receipt-verified values, including the full diagnostic. Omit status and summary for completed work.
         supplement_outcomes is runtime-owned; omit it. Preserve all typed source kinds and limitations. The inventory includes accepted supplemental reviews as full review sources, with the same critic coverage rules.
         Supplemental evidence outcomes (for analysis only): {supplement_outcomes}
         Scope context (for analysis only): {scope_attestation}

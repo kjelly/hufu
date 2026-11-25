@@ -278,7 +278,7 @@ func (c *Coordinator) assessAcceptedReferenceSelection(ctx context.Context, a *R
 	if !c.validateRecoveryIndependentClaims(ctx, a.Checkpoint, work, compiled, string(raw), check) {
 		return
 	}
-	if !check("canonical_claims", c.validateRecoveryCanonicalClaims(ctx, a.Checkpoint, raw, nil)) {
+	if !check("canonical_claims", c.validateRecoveryCanonicalClaims(ctx, a.Checkpoint, raw, nil, nil, nil)) {
 		return
 	}
 	a.ReferenceClaimsSHA256 = acceptedReferenceClaimsHash(raw)

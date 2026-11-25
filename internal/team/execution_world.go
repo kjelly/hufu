@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -45,6 +46,8 @@ type ExecutionWorldSpec struct {
 
 	Root string
 	CWD  string
+	// RootIdentity is the physical directory previously admitted by the caller.
+	RootIdentity os.FileInfo
 
 	// ControlWorkspace identifies Hufu's own durable control workspace. When
 	// it is inside Root, only its known session checkpoint is excluded from
@@ -89,6 +92,8 @@ type PreparedExecutionWorld struct {
 	// from ExecutionWorldSpec.ControlWorkspace. It is process-local admission
 	// metadata and is deliberately not persisted as provider evidence.
 	snapshotIgnoredPaths []string
+	localRoot            *os.File
+	localCWD             *os.File
 
 	// releaseLease is process-local coordination state. It is deliberately not
 	// exported or serialized: the lease only protects the live shared working
@@ -97,6 +102,29 @@ type PreparedExecutionWorld struct {
 
 	// isolated is the process-local state of an isolated-copy world.
 	isolated *isolatedWorldState
+}
+
+func (w *PreparedExecutionWorld) processDir() string {
+	return pinnedDirectoryPath(w.localCWD, w.CWD)
+}
+
+// providerDir is reached after exec, so its descriptor must be addressed in
+// the Hufu process that owns it. The world retains the directory until the
+// provider and its descendants have stopped.
+func (w *PreparedExecutionWorld) providerDir() (string, error) {
+	if runtime.GOOS != "linux" || w.localCWD == nil {
+		return "", fmt.Errorf("execution world: provider requires a pinned working directory")
+	}
+	path := fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), w.localCWD.Fd())
+	opened, err := w.localCWD.Stat()
+	if err != nil {
+		return "", fmt.Errorf("execution world: inspect pinned working directory: %w", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || !os.SameFile(opened, info) {
+		return "", fmt.Errorf("execution world: pinned working directory is unavailable")
+	}
+	return path, nil
 }
 
 // sideEffectExecutionRoots implements the side-effect → world-projection

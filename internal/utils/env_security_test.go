@@ -73,3 +73,67 @@ func TestRedactSubprocessOutputRedactsDSNURICredentials(t *testing.T) {
 		t.Fatalf("DSN-embedded password leaked: %q", got)
 	}
 }
+func TestRedactSubprocessOutputMatchesDecodedJSONStrings(t *testing.T) {
+	env := []string{"FIXTURE_API_TOKEN=value\nline"}
+	input := `message {"other":"unrelated\u0020escape","value":"value\u000aline"}`
+	want := `message {"other":"unrelated\u0020escape","value":"[REDACTED]"}`
+	if got := RedactSubprocessOutput(input, env); got != want {
+		t.Fatalf("unexpected diagnostic: %s", got)
+	}
+}
+
+func TestRedactSubprocessOutputMasksOverlappingEnvironmentValues(t *testing.T) {
+	const prefix = "fixture value\n"
+	const longer = prefix + "joined overlap"
+	const crossing = "overlap ends here"
+	for _, env := range [][]string{
+		{"PREFIX_API_TOKEN=" + prefix, "LONG_API_TOKEN=" + longer, "CROSSING_API_TOKEN=" + crossing},
+		{"CROSSING_API_TOKEN=" + crossing, "LONG_API_TOKEN=" + longer, "PREFIX_API_TOKEN=" + prefix},
+	} {
+		for _, tc := range []struct{ input, want string }{
+			{longer + " ends here", "[REDACTED]"},
+			{`{"value":"fixture value\njoined overlap ends here"}`, `{"value":"[REDACTED]"}`},
+			{`API_TOKEN="fixture value\njoined overlap ends here"`, `API_TOKEN=[REDACTED]`},
+		} {
+			if got := RedactSubprocessOutput(tc.input, env); got != tc.want {
+				t.Fatalf("overlapping values were not completely masked: %q", got)
+			}
+		}
+	}
+}
+
+func TestRedactSubprocessOutputMergesRawAndDecodedMatches(t *testing.T) {
+	for _, env := range [][]string{
+		{`DECODED_API_TOKEN=abcdefghij`, `RAW_API_TOKEN=abcdefgh\u0069jUNIQUE_SUFFIX`},
+		{`RAW_API_TOKEN=abcdefgh\u0069jUNIQUE_SUFFIX`, `DECODED_API_TOKEN=abcdefghij`},
+	} {
+		const input = `{"value":"abcdefgh\u0069jUNIQUE_SUFFIX","context":"before abcdefgh\u0069j after"}`
+		const want = `{"value":"[REDACTED]","context":"before [REDACTED] after"}`
+		if got := RedactSubprocessOutput(input, env); got != want {
+			t.Fatalf("redaction missed overlapping representations or altered unrelated evidence: %q", got)
+		}
+	}
+}
+
+func TestRedactSubprocessOutputDecodesEscapesAfterUnrelatedQuote(t *testing.T) {
+	env := []string{"FIXTURE_API_TOKEN=prefix&unique-suffix", "UNICODE_API_TOKEN=fixture-😀-end"}
+	const input = `prefix " {"diagnostic":"prefix\u0026unique-suffix","unicode":"fixture-\uD83D\uDE00-end","other":"preserve\u0020this"}`
+	const want = `prefix " {"diagnostic":"[REDACTED]","unicode":"[REDACTED]","other":"preserve\u0020this"}`
+	if got := RedactSubprocessOutput(input, env); got != want {
+		t.Fatalf("redacted diagnostic = %q, want %q", got, want)
+	}
+}
+
+func TestRedactSubprocessOutputPrefixMasksAcrossCut(t *testing.T) {
+	const visible = "kept context "
+	env := []string{"FIXTURE_API_TOKEN=fixture&unique"}
+	for _, credential := range []string{"fixture&unique", `fixture\u0026unique`} {
+		input := visible + credential + " unrelated tail"
+		for cut := len(visible) + 1; cut < len(visible)+len(credential); cut++ {
+			capture := input[:min(len(input), SubprocessOutputRedactionWindow(cut, env))]
+			if got := RedactSubprocessOutputPrefix(capture, env, cut); got != visible+"[REDACTED]" {
+				t.Fatalf("redaction at raw offset %d = %q", cut, got)
+			}
+		}
+	}
+}

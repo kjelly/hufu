@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"charm.land/fantasy"
@@ -295,8 +296,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			return "", c.blockMediaTaskExecution(todoID, err)
 		}
 	}
-	if item := c.todoItemByID(todoID); currentResultCollection(item) != nil {
-		return c.resumeCollectedTask(parentCtx, task, item)
+	if output, handled, err := c.resumeReturnedCollectionTask(parentCtx, task, c.todoItemByID(todoID)); handled {
+		return output, err
 	}
 	// The scheduler may hand us its mutable in-memory TaskDef (including a DAG
 	// escalation attempt), but the occurrence was re-resolved above.
@@ -581,7 +582,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	}
 
 	depResults := c.dependencyResultsForTaskWithContext(parentCtx, todoID)
-	if err := c.validateDependencyPayloads(depResults); err != nil {
+	if err := c.validateDependencyPayloads(parentCtx, todoID, depResults); err != nil {
 		return "", fmt.Errorf("worker dependency preflight failed: %w", err)
 	}
 	collectionPlans, err := c.fixedCollectionPlans(todoID)
@@ -701,7 +702,7 @@ retryLoop:
 		if transportErr != nil {
 			return "", transportErr
 		}
-		runtimeCollection := transport == agent.ResultTransportRuntime && task.Execution.RequiresResult && (!task.PlanFirst || task.PlanID != "")
+		runtimeCollection := taskUsesResultCollection(task, transport)
 		if attempt == 1 {
 			// The initial start transition was committed before this loop.
 			// Retries open their lease only after their own transition below.
@@ -731,7 +732,8 @@ retryLoop:
 				transcript = nil
 			}
 		}
-		if taskUsesVerbatimTranscript(task) || task.Execution.RequiresResult || c.allowsFreeTextWorkerResult(task) {
+		if taskUsesVerbatimTranscript(task) || task.Execution.RequiresResult || c.allowsFreeTextWorkerResult(task) ||
+			(task.ResultContract != nil && task.ResultContract.Normalizer != "") {
 			// Each attempt gets its own immutable transcript. The repair agent
 			// is intentionally given no recorder, so it cannot alter this
 			// execution evidence. Explicitly opted-in read-only free-text workers
@@ -1058,6 +1060,7 @@ retryLoop:
 		// carries a stale prior turn id.
 		var attemptProviderTurnID string
 		var attemptProviderTranscriptRef string
+		var externalCorrection *RepairProvenance
 		checkpointStopped := false
 		// attemptTokens is assigned inside the closure below and read after it
 		// returns, so its growth-based snapshot (see attempt_budget.go) can
@@ -1097,6 +1100,7 @@ retryLoop:
 			defer c.unregisterTerminalRound(todoID)
 			taskCtx = context.WithValue(taskCtx, todoIDKey{}, todoID)
 			taskCtx = context.WithValue(taskCtx, executionAttemptKey{}, attempt)
+			taskCtx = context.WithValue(taskCtx, workerAttemptStartedAtKey{}, attemptStarted)
 			taskCtx = context.WithValue(taskCtx, modelKey{}, resolvedModel)
 			taskCtx = context.WithValue(taskCtx, taskRequiresResultKey{}, task.Execution.RequiresResult)
 			taskCtx = context.WithValue(taskCtx, workerRuntimeResultKey{}, runtimeCollection)
@@ -1220,7 +1224,17 @@ retryLoop:
 			}))
 
 			compiledResult := c.attemptResultContractSchema(task)
-			_, inputErr := c.resultRuntimeInputValues(compiledResult, todoID)
+			var worksetInputLookup func() ([]string, error)
+			if compiledResult != nil && compiledResult.worksetInputs != nil {
+				worksetInputLookup = func() ([]string, error) {
+					return c.verifiedResultWorksetInputIDs(taskCtx, todoID, compiledResult.worksetInputs)
+				}
+				if _, inputErr := worksetInputLookup(); inputErr != nil {
+					err = c.blockTaskExecutionEnvelopePreflight(task, c.todoItemByID(todoID), inputErr)
+					return
+				}
+			}
+			_, inputErr := c.resultRuntimeInputValuesWithContext(taskCtx, compiledResult, todoID)
 			if inputErr != nil {
 				err = c.blockTaskExecutionEnvelopePreflight(task, c.todoItemByID(todoID), inputErr)
 				return
@@ -1237,9 +1251,11 @@ retryLoop:
 					return c.verifiedWorksetPathSelection(taskCtx, todoID, compiledResult.worksetPaths)
 				}
 			}
-			var runtimeInputLookup func() (map[string]any, error)
+			var runtimeInputLookup func(*CompiledResultContract) (map[string]any, error)
 			if compiledResult != nil && len(compiledResult.runtimeInputs) > 0 {
-				runtimeInputLookup = func() (map[string]any, error) { return c.resultRuntimeInputValues(compiledResult, todoID) }
+				runtimeInputLookup = func(spec *CompiledResultContract) (map[string]any, error) {
+					return c.resultRuntimeInputValuesWithContext(taskCtx, spec, todoID)
+				}
 			}
 			if c.workerAgentOverride != nil {
 				output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, currentPrompt, conversationHistory, timing, c.planSubmissionStop(task, todoID)...)
@@ -1287,10 +1303,13 @@ retryLoop:
 							ExecutionTarget:             target,
 							BackendBinding:              backendBinding,
 							ArtifactScope:               cloneArtifactAccessScope(attemptArtifactScope),
+							sealFanoutResult:            c.isModelFanoutLeaf(todoID) && c.modelFanout.sealExternalResult,
+							modelExecutionID:            contextManifest.ModelExecutionID,
 							invariantRepairInstructions: invariantRepairPrompt,
 							resultContractSchema:        compiledResult,
 							resultEvidenceInputs:        c.dependencyResultsForTaskWithContext(taskCtx, todoID),
 							resultRuntimeInputs:         runtimeInputLookup,
+							resultWorksetInputIDs:       worksetInputLookup,
 							resultWorksetPaths:          pathLookup,
 							resultProjectClaims: func(input SubmitResultInput) (SubmitResultInput, error) {
 								return c.projectResultClaims(withInvocationMetadata(taskCtx, invocationMetadataFromManifest(&contextManifest)), todoID, input)
@@ -1328,6 +1347,7 @@ retryLoop:
 					ag = attemptResult.agent
 					attemptProviderTurnID = attemptResult.ProviderTurnID
 					attemptProviderTranscriptRef = attemptResult.TranscriptRef
+					externalCorrection = attemptResult.repairProvenance
 				}
 			}
 			if _, stopped := asCheckpointControlError(err); stopped {
@@ -1433,6 +1453,36 @@ retryLoop:
 			ProviderTurnID:        attemptProviderTurnID,
 			ProviderTranscriptRef: attemptProviderTranscriptRef,
 		}
+		submissionFailure := submissionFailureDetails(steps)
+		externalSubmission, rejectedExternalSubmission := errors.AsType[*externalResultAdmissionError](err)
+		_, attemptedExternalRepair := errors.AsType[*externalResultRepairError](err)
+		attemptedExternalRepair = attemptedExternalRepair || externalCorrection != nil && err != nil
+		var repairFailure RepairFailureReason
+		if externalCorrection != nil || attemptedExternalRepair {
+			submissionFailure.Reason = RepairFailureInvalidSchema
+		} else if rejectedExternalSubmission {
+			submissionFailure.Reason = externalSubmission.reason
+		}
+		if rejectedExternalSubmission {
+			repairFailure = externalSubmission.reason
+		}
+		if item := c.todoItemByID(todoID); !runtimeCollection && item != nil && item.ResultContract != nil && item.ResultContract.Normalizer != "" && attemptIdentityOK {
+			receipt.ResultWorkDispatchID = attemptIdentity.DispatchID
+			receipt.ResultWorkOccurrenceRevision = attemptIdentity.OccurrenceRevision
+		}
+		receipt.WorkSubmissionFailure = submissionFailure.Reason
+		receipt.InterruptedResultNormalization = submissionFailure.Normalization
+		receipt.RepairProvenance = externalCorrection
+		if rejectedExternalSubmission || attemptedExternalRepair {
+			if receipt.RepairProvenance == nil {
+				receipt.RepairProvenance = &RepairProvenance{Attempted: attemptedExternalRepair}
+			}
+			receipt.RepairProvenance.Success = false
+			receipt.RepairProvenance.FailureReason = repairFailure
+			receipt.RepairProvenance.Error = utils.TruncateRunes(utils.RedactSecrets(err.Error()), resultPayloadMaxErrors*resultPayloadErrorMaxRunes)
+		} else if stopsResultSubmission(receipt.WorkSubmissionFailure) {
+			receipt.RepairProvenance = &RepairProvenance{FailureReason: receipt.WorkSubmissionFailure, Error: repairValidationError(steps)}
+		}
 		receipt.ToolInvocations, receipt.ToolInvocationsTruncated = dynamicInvocations.snapshot()
 		if c.toolSequenceObservable(attemptTarget) {
 			receipt.ToolSequence = toolSequenceRecord(executedCalls.snapshot())
@@ -1446,6 +1496,9 @@ retryLoop:
 			receipt.ProviderSessionID = durable.BackendBinding.SessionID
 			receipt.ExecutionWorldID = durable.BackendBinding.ExecutionWorldID
 		}
+		if isolated != nil {
+			receipt.ExecutionWorldID = isolated.worldID()
+		}
 		if err == nil {
 			zero := 0
 			receipt.ExitCode = &zero
@@ -1454,6 +1507,18 @@ retryLoop:
 		if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 			_ = c.setAttemptReceipt(todoID, &receipt)
 		}
+		if err != nil && c.isModelFanoutLeaf(todoID) && c.modelFanout.sealExternalResult {
+			reason := localResultRejectionReason(err)
+			if reason == RepairFailureCommit || reason == RepairFailureSource {
+				closeTranscript()
+				return "", &resultCollectionFailure{Reason: reason, Cause: err}
+			}
+		}
+		if rejectedExternalSubmission {
+			c.PersistFailureWithClassAndStatusAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), NeedsHuman, FailureProtocol, TaskBlocked, output)
+			closeTranscript()
+			return "", err
+		}
 
 		if strings.TrimSpace(output) != "" {
 			lastOutput = output
@@ -1461,7 +1526,7 @@ retryLoop:
 		// A terminal attach cancels the active model round and parks this task
 		// until the human explicitly detaches. Re-use its recorded conversation
 		// history and the same retry budget when control comes back.
-		if c.waitForTerminalResume(parentCtx, todoID) {
+		if !attemptedExternalRepair && c.waitForTerminalResume(parentCtx, todoID) {
 			if len(conversationHistory) == 0 && len(steps) > 0 {
 				conversationHistory = append(conversationHistory, fantasy.NewUserMessage(currentPrompt))
 			}
@@ -1471,9 +1536,6 @@ retryLoop:
 			attempt--
 			closeTranscript()
 			continue
-		}
-		if isolated != nil {
-			receipt.ExecutionWorldID = isolated.worldID()
 		}
 		deprecatedReport := runtimeCollection && errors.Is(err, errDeprecatedResultTransport) && parentCtx.Err() == nil
 		if deprecatedReport {
@@ -1533,9 +1595,11 @@ retryLoop:
 				if isolated != nil {
 					isolated.state = isolatedAttemptRetained
 				}
-				c.recordCollectionStopReceipt(todoID, err)
 				_ = c.setAttemptReceipt(todoID, &receipt)
-				c.PersistFailureWithClassAndStatusAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), NeedsHuman, FailureProtocol, TaskBlocked, output)
+				c.recordCollectionStopReceipt(todoID, err)
+				if !returnedCollectionCanResume(c.todoItemByID(todoID), err) {
+					c.PersistFailureWithClassAndStatusAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), NeedsHuman, FailureProtocol, TaskBlocked, output)
+				}
 				closeTranscript()
 				return "", err
 			}
@@ -1607,8 +1671,13 @@ retryLoop:
 			}
 			if typedRes == nil {
 				if task.Execution.RequiresResult {
-					if reason := submissionFailureFromSteps(steps); reason != "" && reason != RepairFailureInvalidSchema {
-						err = fmt.Errorf("result submission stopped (%s): %s", reason, repairValidationError(steps))
+					if reason := receipt.WorkSubmissionFailure; stopsResultSubmission(reason) {
+						err = fmt.Errorf("result submission stopped (%s): %s", reason, receipt.RepairProvenance.Error)
+						if canResumeDirectNormalization(c.todoItemByID(todoID)) {
+							retainIsolatedNormalization(isolated, true)
+							closeTranscript()
+							return "", errors.Join(rejectLocalResult(reason, err), c.checkpointNormalizedContinuation(parentCtx, todoID, output))
+						}
 						c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, todoID, c.FailureDetail(err, FailureSourceError), NeedsHuman, FailureProtocol, TaskBlocked, output)
 						closeTranscript()
 						return "", err
@@ -1677,8 +1746,8 @@ retryLoop:
 							noRepairEvidence := strings.TrimSpace(output) == "" && !hasSuccessfulObservation && rejectedSubmission == ""
 							finalizationBinding := c.taskFinalizationBinding(todoID, false)
 							repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Repair Instructions\n%s", utils.TruncateRunes(task.Goal, 4000), repairEvidence, protocolRepairInstructions(rejectedSubmission != "" || resultProtocolLoop))
-							if resultProtocolLoop {
-								repairPrompt += fmt.Sprintf("\n## Runtime validation error\n%s\n", schemaRepairDiagnostic(attemptEvidence.resultText))
+							if resultProtocolLoop || receipt.WorkSubmissionFailure == RepairFailureInvalidSchema {
+								repairPrompt += fmt.Sprintf("\n## Runtime validation error\n%s\n", schemaRepairDiagnostic(repairValidationError(steps)))
 							}
 							if budgetExhausted {
 								repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Finalization Instructions\nYou ran out of steps (%d/%d) before submitting a result. The evidence above is bounded and this turn is only for reporting it. Call submit_result exactly once using the bound result contract, and do NOT call any other tools or emit a prose final response. Use `success` only when fully met; otherwise use `partial` or `blocked` truthfully.", utils.TruncateRunes(task.Goal, 4000), repairEvidence, len(steps), stepBudget)
@@ -1697,7 +1766,7 @@ retryLoop:
 							repairAttempts := make([]RepairAttemptProvenance, 0, 2)
 							var repairTools ResolvedWorkerTools
 							var repairCallEvidence *toolCallEvidence
-							runRepair := func(prompt string) ([]fantasy.StepResult, error) {
+							runRepair := func(prompt, rejected string, correction bool, history []RepairAttemptProvenance) ([]fantasy.StepResult, error) {
 								var repairAg fantasy.Agent
 								workerCtx := withoutCoordinatorRequestPreflight(parentCtx)
 								workerCtx = withInvocationMetadata(workerCtx, invocationMetadataFromRequest(request, contextManifest))
@@ -1804,12 +1873,17 @@ retryLoop:
 								if prepareErr != nil {
 									return nil, fmt.Errorf("prepare protocol repair prompt: %w", prepareErr)
 								}
+								if correction {
+									if err := c.reserveProtocolSchemaCorrection(todoID, agentName, omitRejectedSubmission(prompt, rejected), len(history)+1, history); err != nil {
+										return nil, err
+									}
+								}
 								_, repairSteps, callErr := c.runAgentWithStatusAndHistory(repairCtx, repairAg, agentName, preparedPrompt, nil, timing, fantasy.StepCountIs(1))
 								typedRes = c.GetTaskResult(todoID)
 								return repairSteps, callErr
 							}
 
-							repairSteps, repairErr := runRepair(repairPrompt)
+							repairSteps, repairErr := runRepair(repairPrompt, rejectedSubmission, receipt.WorkSubmissionFailure == RepairFailureInvalidSchema, nil)
 							repairSuccess := typedRes != nil && isLocalSubmittedResultSource(typedRes.Source) && validateCompletedTaskResult(typedRes) == nil
 							repairDiagnostic := repairValidationError(repairSteps)
 							// §7: classify the repair failure sub-reason so the next-step
@@ -1830,14 +1904,15 @@ retryLoop:
 								repairReason, reclassifyExecution = RepairFailureNoEvidence, true
 							}
 							repairAttempts = append(repairAttempts, RepairAttemptProvenance{
-								Attempt:         1,
-								InvocationRunID: c.executionRunID,
-								Success:         repairSuccess,
-								Prompt:          omitRejectedSubmission(repairPrompt, rejectedSubmission),
-								SubmittedResult: typedRes,
-								FailureReason:   repairReason,
-								Error:           repairDiagnostic,
-								Generation:      protocolRepairGenerationDiagnostic(repairSteps),
+								Attempt:                        1,
+								InvocationRunID:                c.executionRunID,
+								Success:                        repairSuccess,
+								Prompt:                         omitRejectedSubmission(repairPrompt, rejectedSubmission),
+								SubmittedResult:                typedRes,
+								FailureReason:                  repairReason,
+								Error:                          repairDiagnostic,
+								Generation:                     protocolRepairGenerationDiagnostic(repairSteps),
+								InterruptedResultNormalization: submissionFailureDetails(repairSteps).Normalization,
 							})
 
 							// Schema correction, failed preparation and a missing tool
@@ -1845,7 +1920,7 @@ retryLoop:
 							// Retain the original observations and never replay tools.
 							retryFinalization := hasSuccessfulObservation &&
 								c.protocolRepairCanRetryFinalization(task, todoID, repairReason) && parentCtx.Err() == nil
-							for !repairSuccess && len(repairAttempts) < protocolRepairAttemptLimit(repairAttempts) &&
+							for !repairSuccess && len(repairAttempts) < protocolRepairLimit(receipt.WorkSubmissionFailure, repairAttempts) &&
 								(repairReason == RepairFailureInvalidSchema || retryFinalization) {
 								typedRes = nil
 								// If the worker only observed evidence, the first repair is
@@ -1867,7 +1942,7 @@ retryLoop:
 										schemaRepairPrompt += "\n" + fenceUntrusted("text", schemaRepairDiagnostic(repairErr.Error()))
 									}
 								}
-								schemaRepairSteps, schemaRepairErr := runRepair(schemaRepairPrompt)
+								schemaRepairSteps, schemaRepairErr := runRepair(schemaRepairPrompt, schemaRejectedSubmission, repairReason == RepairFailureInvalidSchema, repairAttempts)
 								repairSuccess = typedRes != nil && isLocalSubmittedResultSource(typedRes.Source) && validateCompletedTaskResult(typedRes) == nil
 								if schemaRepairErr != nil {
 									repairErr = schemaRepairErr
@@ -1881,14 +1956,15 @@ retryLoop:
 									repairReason, reclassifyExecution = RepairFailureNoEvidence, true
 								}
 								repairAttempts = append(repairAttempts, RepairAttemptProvenance{
-									Attempt:         len(repairAttempts) + 1,
-									InvocationRunID: c.executionRunID,
-									Success:         repairSuccess,
-									Prompt:          omitRejectedSubmission(schemaRepairPrompt, schemaRejectedSubmission),
-									SubmittedResult: typedRes,
-									FailureReason:   repairReason,
-									Error:           repairValidationError(schemaRepairSteps),
-									Generation:      protocolRepairGenerationDiagnostic(schemaRepairSteps),
+									Attempt:                        len(repairAttempts) + 1,
+									InvocationRunID:                c.executionRunID,
+									Success:                        repairSuccess,
+									Prompt:                         omitRejectedSubmission(schemaRepairPrompt, schemaRejectedSubmission),
+									SubmittedResult:                typedRes,
+									FailureReason:                  repairReason,
+									Error:                          repairValidationError(schemaRepairSteps),
+									Generation:                     protocolRepairGenerationDiagnostic(schemaRepairSteps),
+									InterruptedResultNormalization: submissionFailureDetails(schemaRepairSteps).Normalization,
 								})
 								repairSteps = schemaRepairSteps
 								repairDiagnostic = repairValidationError(schemaRepairSteps)
@@ -1900,7 +1976,8 @@ retryLoop:
 							// tools and the declared evidence contract validates the full text.
 							// This preserves the typed-result/report pipeline without allowing
 							// an incomplete or mutating free-text claim to become success.
-							if task.InvariantVerification == "" && !repairSuccess && !reclassifyExecution && typedRes == nil &&
+							if task.InvariantVerification == "" && receipt.WorkSubmissionFailure != RepairFailureInvalidSchema && !protocolSchemaCorrectionConsumed(repairAttempts) && !repairSuccess && !reclassifyExecution && typedRes == nil &&
+								!isTerminalResultSubmissionFailure(repairReason) &&
 								resolvedSideEffect == SideEffectNone && protocolAttemptWasReadOnly(steps, c.readOnlyToolCall) {
 								if promoted := promoteValidatedReadOnlyHandoff(task, todoID, agentName, output); promoted != nil {
 									c.attachTaskKnowledgeCoverage(todoID, attempt, contextManifest.ModelExecutionID, promoted)
@@ -1914,7 +1991,9 @@ retryLoop:
 									last.SubmittedResult = promoted
 								}
 							}
-							receipt.FinishedAt = time.Now()
+							if receipt.ResultWorkDispatchID == "" {
+								receipt.FinishedAt = time.Now()
+							}
 							repairPromptForReceipt := repairPrompt
 							if len(repairAttempts) > 0 {
 								repairPromptForReceipt = repairAttempts[len(repairAttempts)-1].Prompt
@@ -2006,7 +2085,8 @@ retryLoop:
 									receipt.RepairProvenance.Error = err.Error()
 								}
 							}
-							if !repairSuccess && repairReason == RepairFailureNoToolCall && !budgetExhausted &&
+							if !repairSuccess && repairReason == RepairFailureNoToolCall && !budgetExhausted && receipt.WorkSubmissionFailure != RepairFailureInvalidSchema &&
+								!protocolSchemaCorrectionConsumed(repairAttempts) &&
 								!protocolCapabilityRetryUsed && !c.protocolRepairUsesToolEvidence(todoID) && (protocolAttemptWasReadOnly(steps, c.readOnlyToolCall) || attemptDispositions.onlyPolicyDeniedToolCalls(steps)) && parentCtx.Err() == nil {
 								// No state-changing tool ran, so one fresh worker attempt is
 								// safe. Override the provisional protocol error only after the
@@ -2024,6 +2104,18 @@ retryLoop:
 								receipt.RepairProvenance.Error = err.Error()
 							}
 							c.applyResultContractReceipt(todoID, typedRes, &receipt)
+							if !repairSuccess && isTerminalResultSubmissionFailure(repairReason) && normalizationContract(c.todoItemByID(todoID)) {
+								failure := rejectLocalResult(repairReason, err)
+								receipt.ExitCode = new(1)
+								if receiptErr := c.setAttemptReceipt(todoID, &receipt); receiptErr != nil {
+									failure = errors.Join(failure, receiptErr)
+								}
+								current := c.todoItemByID(todoID)
+								resumable := repairReason == RepairFailureCommit && canResumeDirectNormalization(current)
+								retainIsolatedNormalization(isolated, resumable)
+								closeTranscript()
+								return "", c.settleNormalizedSubmissionFailure(parentCtx, current, task, output, repairReason, failure)
+							}
 							if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 								_ = c.setAttemptReceipt(todoID, &receipt)
 							}
@@ -2045,8 +2137,14 @@ retryLoop:
 					err = withFailureClassOverride(resultErr, FailureExecution)
 				}
 			}
-			if err == nil && typedRes != nil && taskResultStatusIsSuccessful(typedRes.Status) {
-				if evidenceErr := c.validateRequiredEvidenceDelivery(todoID, attempt); evidenceErr != nil {
+			current := c.todoItemByID(todoID)
+			normalizedCollection := isCommittedNormalizedCollection(current)
+			normalizedDirect := !runtimeCollection && normalizationContract(current) &&
+				receipt.ResultWorkDispatchID != "" && receipt.ResultCollection == nil && isCompletedLocalResult(typedRes)
+			normalized := normalizedCollection || normalizedDirect
+			durableVerification := normalized || c.isCommittedFanoutCollection(current)
+			if err == nil && !normalized && typedRes != nil && taskResultStatusIsSuccessful(typedRes.Status) {
+				if evidenceErr := c.validateRequiredEvidenceDelivery(parentCtx, todoID, attempt); evidenceErr != nil {
 					err = withFailureClassOverride(evidenceErr, FailureProtocol)
 				}
 			}
@@ -2080,7 +2178,34 @@ retryLoop:
 			// A receipt transcript is also captured for summary-mode tasks that
 			// require a typed result, but that must not change the task's output
 			// contract. Only an explicit verbatim task is reduced to a manifest.
-			if err == nil && typedRes != nil && attemptIdentityOK {
+			if err == nil && normalizedCollection {
+				if terminalErr := c.verifyNormalizedCollectionTerminal(parentCtx, current, task, coordinatorOutput); terminalErr != nil {
+					retainIsolatedNormalization(isolated, localResultRejectionReason(terminalErr) == RepairFailureCommit)
+					closeTranscript()
+					return "", terminalErr
+				}
+				typedRes, err = c.finalizeNormalizedCollectionResult(parentCtx, current, typedRes)
+				if err != nil {
+					retainIsolatedNormalization(isolated, localResultRejectionReason(err) == RepairFailureCommit)
+					closeTranscript()
+					return "", c.settleNormalizedRecoveryRead(current, task, err)
+				}
+				coordinatorOutput = coordinatorTaskOutput(coordinatorOutput, typedRes)
+			} else if err == nil && normalizedDirect {
+				typedRes, err = c.finalizeLiveNormalizedResult(parentCtx, current, typedRes, &receipt)
+				if err != nil {
+					closeTranscript()
+					if localResultRejectionReason(err) == RepairFailureCommit {
+						retainIsolatedNormalization(isolated, true)
+						return "", c.normalizedCompletionWriteFailure(parentCtx, todoID, coordinatorOutput, err)
+					}
+					return "", c.settleNormalizedRecoveryRead(c.todoItemByID(todoID), task, err)
+				}
+				if terminalErr := c.verifyNormalizedWorkTerminal(parentCtx, current, task, &receipt, coordinatorOutput); terminalErr != nil {
+					closeTranscript()
+					return "", terminalErr
+				}
+			} else if err == nil && typedRes != nil && attemptIdentityOK {
 				if mediaErr := c.finalizeTaskMedia(parentCtx, attemptIdentity); mediaErr != nil {
 					err = withFailureClassOverride(mediaErr, FailurePolicy)
 				} else {
@@ -2115,10 +2240,16 @@ retryLoop:
 			// Deliverable verification: run an objective check before accepting
 			// the agent's claim of success. A non-zero exit converts this into a
 			// failure that flows into the normal retry path below.
-			if err == nil && (task.Verify != "" || task.VerifySpec != nil) {
-				if statusErr := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskVerifying, "running objective verification", "", nil); statusErr != nil {
+			hasObjective := task.Verify != "" || task.VerifySpec != nil
+			if err == nil && (hasObjective || normalized) {
+				if statusErr := c.checkpointWorkerCompletion(parentCtx, todoID, &receipt, typedRes, coordinatorOutput, normalized); statusErr != nil {
 					err = fmt.Errorf("enter verifying state: %w", statusErr)
-				} else {
+					if normalized {
+						retainIsolatedNormalization(isolated, true)
+						closeTranscript()
+						return "", c.normalizedCompletionWriteFailure(parentCtx, todoID, coordinatorOutput, err)
+					}
+				} else if hasObjective {
 					c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 					vMsg := task.Verify
 					if vMsg == "" && task.VerifySpec != nil {
@@ -2126,8 +2257,20 @@ retryLoop:
 					}
 					c.report(c.newEvent("verify_start").withAgent(agentName).withMessage(vMsg).withTodoID(todoID))
 				}
-				if err == nil {
-					verification, verr := c.verifyTaskDeliverableWithSpecAndResult(c.withIsolatedAttempt(parentCtx, isolated), agentDef, task, steps, typedRes)
+				if err == nil && hasObjective {
+					verifyCtx := c.withIsolatedAttempt(parentCtx, isolated)
+					var verification *VerificationResult
+					var verr error
+					if durableVerification {
+						verification, verr = c.verifyNormalizedDeliverable(verifyCtx, todoID, agentDef, task, typedRes, coordinatorOutput)
+						if reason := localResultRejectionReason(verr); reason == RepairFailureCommit || reason == RepairFailureSource {
+							retainIsolatedNormalization(isolated, reason == RepairFailureCommit)
+							closeTranscript()
+							return "", c.settleNormalizedRecoveryRead(c.todoItemByID(todoID), task, verr)
+						}
+					} else {
+						verification, verr = c.verifyTaskDeliverableWithSpecAndResult(verifyCtx, agentDef, task, steps, typedRes)
+					}
 					if verification != nil {
 						c.noteObjectiveVerifierResult(todoID, verr == nil && isVerifySuccess(verification))
 						_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
@@ -2143,7 +2286,18 @@ retryLoop:
 			// Adversarial verification: skeptic votes try to refute the result.
 			// A refutation flows into the same retry path as a failed verify.
 			if err == nil && task.AdversarialVerify > 0 {
-				if averr := c.adversarialVerify(parentCtx, task, todoID, coordinatorOutput); averr != nil {
+				var averr error
+				if durableVerification {
+					averr = c.verifyNormalizedWithSkeptic(c.withIsolatedAttempt(parentCtx, isolated), task, todoID, typedRes, coordinatorOutput)
+					if reason := localResultRejectionReason(averr); reason == RepairFailureCommit || reason == RepairFailureSource {
+						retainIsolatedNormalization(isolated, reason == RepairFailureCommit)
+						closeTranscript()
+						return "", c.settleNormalizedRecoveryRead(c.todoItemByID(todoID), task, averr)
+					}
+				} else {
+					averr = c.adversarialVerify(parentCtx, task, todoID, coordinatorOutput)
+				}
+				if averr != nil {
 					err = averr
 					c.report(c.newEvent("skeptic").withAgent(agentName).withMessage(averr.Error()).withTodoID(todoID))
 				} else {
@@ -2154,7 +2308,7 @@ retryLoop:
 			// A terminal child is an independent source of truth. Do this even
 			// when the task has no objective verifier: a worker success claim must
 			// not turn a failed terminal command into a successful task.
-			if err == nil {
+			if err == nil && !normalized {
 				if terminalErr := c.terminalTaskFailure(parentCtx, todoID); terminalErr != nil {
 					err = terminalErr
 					c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("terminal evidence rejected completion: %v", terminalErr)).withTodoID(todoID))
@@ -2167,12 +2321,24 @@ retryLoop:
 				if typedRes != nil && isSubmittedResultSource(typedRes.Source) {
 					receipt.HandoffState = ResultHandoffSubmitted
 				}
+				applyReceipt := &receipt
+				if normalized || runtimeCollection {
+					applyReceipt = c.todoItemByID(todoID).ExecutionReceipt
+				}
 				err = c.integrateIsolatedAttempt(parentCtx, isolated, isolatedApplyEvidence{
-					TypedResult: typedRes, VerifyResult: verifyResultForTodo(c, todoID), Receipt: &receipt, CoordinatorOutput: coordinatorOutput,
+					TypedResult: typedRes, VerifyResult: verifyResultForTodo(c, todoID), Receipt: applyReceipt, CoordinatorOutput: coordinatorOutput,
 				})
+				if localResultRejectionReason(err) == RepairFailureCommit {
+					closeTranscript()
+					return "", err
+				}
+				if (normalized || runtimeCollection) && localResultRejectionReason(err) == RepairFailureSource {
+					closeTranscript()
+					return "", c.settleNormalizedRecoveryRead(c.todoItemByID(todoID), task, err)
+				}
 			}
 			if err == nil {
-				if typedRes != nil && isSubmittedResultSource(typedRes.Source) {
+				if !normalized && typedRes != nil && isSubmittedResultSource(typedRes.Source) {
 					receipt.HandoffState = ResultHandoffSubmitted
 					if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 						_ = c.setAttemptReceipt(todoID, &receipt)
@@ -2184,6 +2350,10 @@ retryLoop:
 				duration, modelTime, toolTime := timing.snapshot()
 				if statusErr := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskDone, utils.TruncateRunes(coordinatorOutput, summaryMaxRunes), coordinatorOutput, nil); statusErr != nil {
 					closeTranscript()
+					current := c.todoItemByID(todoID)
+					if isNormalizedVerificationPending(current) || isCommittedNormalizedCollection(current) {
+						return "", rejectLocalResultPersistence(statusErr)
+					}
 					return "", fmt.Errorf("mark task done: %w", statusErr)
 				}
 				c.releaseIsolatedAttempt(isolated)
@@ -2226,6 +2396,12 @@ retryLoop:
 			}
 		}
 
+		if canResumeDirectNormalization(c.todoItemByID(todoID)) {
+			retainIsolatedNormalization(isolated, true)
+			closeTranscript()
+			return "", errors.Join(rejectLocalResult(RepairFailureCommit, err), c.checkpointNormalizedContinuation(parentCtx, todoID, output))
+		}
+
 		// A model stream may exit cleanly even though its required handoff,
 		// verifier, or result-only repair failed. The durable attempt receipt
 		// must describe the task outcome, not just the provider transport exit;
@@ -2252,7 +2428,7 @@ retryLoop:
 			ResolveFindings: environmentFindingsFromVerifyResult(verifyResult),
 		})
 		// The failed attempt's world never reached the canonical project; a
-		// retry copies the project afresh. A retained world stays for review.
+		// retry copies the project afresh.
 		c.closeIsolatedAttempt(parentCtx, isolated, string(currentClass))
 		isolated = nil
 		// A provider failure on a route-bound task may move the next attempt
@@ -2312,14 +2488,14 @@ retryLoop:
 			PreviousFingerprint: lastFingerprint,
 			TerminalBlocked:     terminalBlocked,
 			ProtocolFailure:     protocolFailure,
-			ResultRepairExhausted: protocolRepairTerminalFailure && !protocolCapabilityFallback &&
+			ResultRepairExhausted: attemptedExternalRepair || protocolRepairTerminalFailure && !protocolCapabilityFallback &&
 				(resolvedSideEffect != SideEffectNone || c.protocolRepairUsesToolEvidence(todoID)),
 			UnfixableVerify:     isUnfixableVerifyFailure(err),
 			SameFailureRepeated: lastErr != nil && sameFailure(lastErr.Error(), err.Error()),
 			ContextCancelled:    parentCtx.Err() != nil,
 			Replayable:          CanAutomaticallyReplay(task),
 			ProtocolRepairRetry: c.protocolRepairAllowsRetry(task),
-			ProtocolRetrySafe:   protocolFailure && resolvedSideEffect == SideEffectNone && protocolAttemptWasReadOnly(steps, c.readOnlyToolCall),
+			ProtocolRetrySafe:   protocolFailure && (receipt.ResultWorkDispatchID == "" || !hasBoundProtocolSchemaRepair(&receipt)) && resolvedSideEffect == SideEffectNone && protocolAttemptWasReadOnly(steps, c.readOnlyToolCall),
 		}
 		disposition, reason := DecideRecovery(recoveryInput)
 		if policyDenialRepairExhausted {
@@ -2822,7 +2998,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", blocked)
 		return "", blocked
 	}
-	origins, err := c.runtimeActionRecoveryOrigins()
+	origins, err := c.runtimeActionRecoveryOrigins(ctx)
 	if err != nil {
 		failure := fmt.Errorf("authorize native action recovery sources: %w", err)
 		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", failure)
@@ -3211,7 +3387,9 @@ func (c *Coordinator) materializeCheckpointedProtocolRepair(item *TodoItem, agen
 	if receipt.StartedAt.IsZero() {
 		receipt.StartedAt = time.Now()
 	}
-	receipt.FinishedAt = time.Now()
+	if receipt.ResultWorkDispatchID == "" {
+		receipt.FinishedAt = time.Now()
+	}
 
 	var prior *RepairProvenance
 	if receipt.RepairProvenance != nil {
@@ -3293,7 +3471,9 @@ func (c *Coordinator) persistProtocolRepairPreparationFailure(item *TodoItem, ag
 	if receipt.StartedAt.IsZero() {
 		receipt.StartedAt = time.Now()
 	}
-	receipt.FinishedAt = time.Now()
+	if receipt.ResultWorkDispatchID == "" {
+		receipt.FinishedAt = time.Now()
+	}
 
 	repairHistory := append([]RepairAttemptProvenance(nil), history...)
 	repairHistory = append(repairHistory, RepairAttemptProvenance{
@@ -3341,9 +3521,26 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 			return redispatched, err
 		}
 		parentCtx = boundCtx
-		defer func() { c.closeIsolatedAttempt(parentCtx, repairWorld, "protocol_repair_exit") }()
+		defer func() {
+			current := c.todoItemByID(item.ID)
+			retainIsolatedNormalization(repairWorld, canResumeDirectNormalization(current) ||
+				isNormalizedVerificationPending(current) || normalizedDirectContinuationReceipt(current) && current.Status == TaskProtocolIncomplete)
+			c.closeIsolatedAttempt(parentCtx, repairWorld, "protocol_repair_exit")
+		}()
 	}
+	if isNormalizedVerificationPending(item) {
+		return c.resumeNormalizedVerification(parentCtx, task, item)
+	}
+	return c.resumeProtocolIncompleteResult(parentCtx, task, item)
+}
+
+func (c *Coordinator) resumeProtocolIncompleteResult(parentCtx context.Context, task TaskDef, item *TodoItem) (string, error) {
 	output := item.Output
+
+	hasCompletedResult := item.TypedResult != nil && isLocalSubmittedResultSource(item.TypedResult.Source) && validateCompletedTaskResult(item.TypedResult) == nil
+	if !hasCompletedResult && canResumeDirectNormalization(item) {
+		return c.resumeDirectNormalization(parentCtx, task, item)
+	}
 
 	if (item.TypedResult == nil || !isLocalSubmittedResultSource(item.TypedResult.Source)) && item.ResultCandidate != nil && item.ResultCandidate.Prepared {
 		return c.resumePreparedResultCandidate(parentCtx, task, item)
@@ -3354,7 +3551,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	// protocol_incomplete task with a valid result but no provenance. Treat
 	// that result as the durable repair boundary: record the missing receipt and
 	// finish locally, without clearing it or making another repair-agent call.
-	if item.TypedResult != nil && isLocalSubmittedResultSource(item.TypedResult.Source) && validateCompletedTaskResult(item.TypedResult) == nil {
+	if hasCompletedResult {
 		agentName := strings.ToLower(strings.TrimSpace(item.Agent))
 		if agentName == "" {
 			agentName = strings.ToLower(strings.TrimSpace(task.Agent))
@@ -3363,8 +3560,20 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 			agentName = "worker"
 		}
 		resolvedModel := task.Model
+		if normalizedDirectContinuationReceipt(item) && item.ExecutionReceipt.RepairProvenance.Success {
+			c.storeSubmittedTaskResult(item.ID, item.TypedResult)
+			return c.finishProtocolRepair(parentCtx, item, task, agentName, resolvedModel, item.TypedResult, output)
+		}
 		materialize := c.materializeCheckpointedProtocolRepair
-		if item.ResultCandidate != nil && item.ResultCandidate.Prepared {
+		if canResumeDirectNormalization(item) {
+			materialize = func(item *TodoItem, _ string, result *TaskResult) error {
+				return c.materializeDirectNormalizationReceipt(item, result)
+			}
+		} else if normalizedDirectContinuationReceipt(item) {
+			materialize = func(item *TodoItem, agentName string, result *TaskResult) error {
+				return c.materializeNormalizedSchemaCorrection(item, agentName, result)
+			}
+		} else if item.ResultCandidate != nil && item.ResultCandidate.Prepared {
 			materialize = func(item *TodoItem, _ string, result *TaskResult) error {
 				return c.materializePreparedCandidateReceipt(item, result)
 			}
@@ -3384,6 +3593,9 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		agentName = "worker"
 	}
 	resolvedModel := task.Model
+	if item.ExecutionReceipt != nil && stopsResultSubmission(item.ExecutionReceipt.WorkSubmissionFailure) {
+		return "", fmt.Errorf("result-only repair cannot retry submission failure %q", item.ExecutionReceipt.WorkSubmissionFailure)
+	}
 
 	// If a successful repair was checkpointed before the status transition,
 	// finalize it locally. This avoids spending another repair turn and still
@@ -3470,13 +3682,23 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	repairEvidence, evidenceErr := c.restoreProtocolRepairToolEvidence(parentCtx, item)
 	if evidenceErr != nil {
 		bindErr = fmt.Errorf("restore protocol repair evidence: %w", evidenceErr)
+		if normalizedDirectContinuationReceipt(item) {
+			return "", c.settleNormalizedRecoveryRead(item, task, rejectNormalizationRecoveryRead(bindErr))
+		}
 	}
 	restoredSteps := protocolRepairTranscriptSteps(repairEvidence)
 	observationText, hasSuccessfulObservation := c.protocolRepairObservations(item.ID, repairEvidence, restoredSteps)
-	if strings.TrimSpace(output) == "" && !hasSuccessfulObservation && bindErr == nil {
+	rejectedSubmission, rejectionErr := c.recoveredNormalizationRejection(parentCtx, item)
+	if rejectionErr != nil {
+		return "", c.settleNormalizedRecoveryRead(item, task, rejectNormalizationRecoveryRead(rejectionErr))
+	}
+	if rejectedSubmission == "" {
+		rejectedSubmission = protocolRepairRejectedSubmission(nil, restoredSteps)
+	}
+	if strings.TrimSpace(output) == "" && !hasSuccessfulObservation && rejectedSubmission == "" && bindErr == nil {
 		bindErr = errors.New("protocol-incomplete checkpoint has no worker output or authenticated observations for result-only repair")
 	}
-	executionEvidence := output + observationText + protocolRepairRejectedSubmission(nil, restoredSteps)
+	executionEvidence := output + observationText + rejectedSubmission
 	repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Execution Output\n%s\n\n## Repair Instructions\nThe worker has not supplied an accepted submit_result. Call submit_result exactly once using only the execution facts above and the bound result contract. Do NOT execute work, inspect files, call any other tool, or emit a prose final response.%s%s", task.Goal, executionEvidence, invariantRepairInstructions, finalizationBinding)
 	if item.ExecutionReceipt != nil && item.ExecutionReceipt.ArtifactScope != nil {
 		workerCtx = context.WithValue(workerCtx, artifactAccessScopeKey, cloneArtifactAccessScope(item.ExecutionReceipt.ArtifactScope))
@@ -3577,6 +3799,12 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	repairCtx = context.WithValue(repairCtx, hooks.TaskDescKey, task.Goal)
 	if task.InvariantVerification != "" {
 		repairCtx = withInvocationMetadata(repairCtx, invariantRepairMetadata)
+	} else if item.ResultContract != nil && item.ResultContract.Normalizer != "" && item.ExecutionReceipt != nil && item.ExecutionReceipt.ResultWorkDispatchID != "" {
+		manifest, manifestErr := authoritativeTaskContextManifest(item, item.ExecutionReceipt.Attempt, item.ExecutionReceipt.ModelExecutionID)
+		if manifestErr != nil {
+			return "", fmt.Errorf("restore normalization repair context: %w", manifestErr)
+		}
+		repairCtx = withInvocationMetadata(repairCtx, invocationMetadataFromManifest(manifest))
 	}
 	repairCtx = withContextWindowRequestDescriptor(repairCtx, c.newContextWindowRequestDescriptorWithContext(repairCtx, resolvedModel, agentDef, repairTools.Tools, agentName, "protocol-repair"))
 	timing := &taskTiming{}
@@ -3589,7 +3817,6 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	}
 	var repairSuccess bool
 	var runErr error
-	rejectedSubmission := protocolRepairRejectedSubmission(nil, restoredSteps)
 	for attempt := priorAttempts + 1; attempt <= taskProtocolRepairAttemptLimit(c.todoItemByID(item.ID)); attempt++ {
 		if attempt > priorAttempts+1 {
 			createRepairAgent()
@@ -3633,6 +3860,11 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 			}
 			break
 		}
+		if repairReason == RepairFailureInvalidSchema || item.ExecutionReceipt != nil && item.ExecutionReceipt.WorkSubmissionFailure == RepairFailureInvalidSchema {
+			if err := c.reserveProtocolSchemaCorrection(item.ID, agentName, omitRejectedSubmission(repairPrompt, rejectedSubmission), attempt, repairHistory); err != nil {
+				return "", err
+			}
+		}
 		_, steps, callErr := c.runAgentWithStatusAndHistory(attemptCtx, repairAgent, agentName, preparedPrompt, nil, timing, fantasy.StepCountIs(1))
 		promptForReceipt := omitRejectedSubmission(repairPrompt, rejectedSubmission)
 		if latest := protocolRepairRejectedSubmission(repairCallEvidence, steps); latest != "" {
@@ -3648,15 +3880,16 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		repairDiagnostic := repairValidationError(steps)
 		repairSuccess = typedRes != nil && isLocalSubmittedResultSource(typedRes.Source) && validateCompletedTaskResult(typedRes) == nil
 		repairHistory = append(repairHistory, RepairAttemptProvenance{
-			Attempt:         attempt,
-			InvocationRunID: c.executionRunID,
-			Model:           resolvedModel,
-			Success:         repairSuccess,
-			Prompt:          promptForReceipt,
-			SubmittedResult: typedRes,
-			FailureReason:   repairReason,
-			Error:           repairDiagnostic,
-			Generation:      protocolRepairGenerationDiagnostic(steps),
+			Attempt:                        attempt,
+			InvocationRunID:                c.executionRunID,
+			Model:                          resolvedModel,
+			Success:                        repairSuccess,
+			Prompt:                         promptForReceipt,
+			SubmittedResult:                typedRes,
+			FailureReason:                  repairReason,
+			Error:                          repairDiagnostic,
+			Generation:                     protocolRepairGenerationDiagnostic(steps),
+			InterruptedResultNormalization: submissionFailureDetails(steps).Normalization,
 		})
 		if err := c.checkpointProtocolRepairAttempt(item, agentName, repairPrompt, repairHistory, typedRes, repairSuccess, repairReason, runErr); err != nil {
 			return "", err
@@ -3674,24 +3907,92 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 		repairReason = RepairFailureNoToolCall
 	}
 	err = fmt.Errorf("protocol result-only repair failed for task %s (%s): %s", item.ID, agentName, repairReason)
+	if canResumeDirectNormalization(c.todoItemByID(item.ID)) {
+		return "", errors.Join(rejectLocalResult(RepairFailureCommit, err), c.checkpointNormalizedContinuation(parentCtx, item.ID, output))
+	}
 	detail := c.FailureDetail(err, FailureSourceError)
 	c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
 	return "", err
 }
 
 func (c *Coordinator) finishProtocolRepair(ctx context.Context, item *TodoItem, task TaskDef, agentName, resolvedModel string, result *TaskResult, output string) (string, error) {
-	output = coordinatorTaskOutput(output, result)
-	if err := c.terminalTaskFailure(ctx, item.ID); err != nil {
-		detail := c.FailureDetail(err, FailureSourceError)
-		c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureVerify, TaskBlocked, output)
-		return "", err
-	}
-	if task.Verify != "" || task.VerifySpec != nil {
-		if err := c.commitTaskTransitionFromCurrent(ctx, item.ID, TaskVerifying, "running objective verification", output, nil); err != nil {
+	collection := isCommittedNormalizedCollection(item)
+	completionInput := coordinatorTaskOutput(output, result)
+	output = completionInput
+	current := c.todoItemByID(item.ID)
+	direct := current != nil && current.ResultContract != nil && current.ResultContract.Normalizer != "" && currentResultCollection(current) == nil
+	normalized := direct || collection
+	durableVerification := normalized || c.isCommittedFanoutCollection(item)
+	if direct {
+		task = taskDefFromTodoItem(current)
+		ctx = context.WithValue(ctx, todoIDKey{}, item.ID)
+		ctx = context.WithValue(ctx, protocolRepairExecutionKey{}, true)
+		var err error
+		result, output, err = c.finalizeRecoveredNormalizedResult(ctx, current, task, result, output)
+		if err != nil {
+			if reason := localResultRejectionReason(err); reason == RepairFailureCommit || reason == RepairFailureSource {
+				return "", c.settleNormalizedRecoveryRead(current, task, err)
+			}
+			class := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err})
+			c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, c.FailureDetail(err, FailureSourceError), NeedsHuman, class, TaskBlocked, completionInput)
 			return "", err
 		}
-		verification, err := c.verifyTaskDeliverableWithSpecAndResult(ctx, nil, task, nil, result)
+	}
+	if collection {
+		if err := c.verifyNormalizedCollectionTerminal(ctx, current, task, output); err != nil {
+			return "", err
+		}
+		var err error
+		result, err = c.finalizeNormalizedCollectionResult(ctx, current, result)
+		if err != nil {
+			return "", c.settleNormalizedRecoveryRead(current, task, err)
+		}
+		output = coordinatorTaskOutput(output, result)
+		if taskUsesVerbatimTranscript(task) {
+			output = formatVerbatimTranscriptManifest(result.RawOutputRef)
+		}
+	}
+	if direct {
+		current = c.todoItemByID(item.ID)
+		if err := c.verifyNormalizedWorkTerminal(ctx, current, task, current.ExecutionReceipt, output); err != nil {
+			return "", err
+		}
+	} else if !collection {
+		if err := c.terminalTaskFailure(ctx, item.ID); err != nil {
+			detail := c.FailureDetail(err, FailureSourceError)
+			c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureVerify, TaskBlocked, output)
+			return "", err
+		}
+	}
+	if normalized {
+		current = c.todoItemByID(item.ID)
+		if current.Status != TaskVerifying {
+			receipt := cloneExecutionReceipt(current.ExecutionReceipt)
+			if err := c.checkpointWorkerCompletion(ctx, item.ID, &receipt, result, output, true); err != nil {
+				return "", c.normalizedCompletionWriteFailure(ctx, item.ID, output, err)
+			}
+		}
+	}
+	if task.Verify != "" || task.VerifySpec != nil {
+		var verification *VerificationResult
+		var err error
+		if !normalized {
+			if err := c.commitTaskTransitionFromCurrent(ctx, item.ID, TaskVerifying, "running objective verification", output, nil); err != nil {
+				return "", err
+			}
+		}
+		if durableVerification {
+			verification, err = c.verifyNormalizedDeliverable(ctx, item.ID, c.session.Agents[agentName], task, result, output)
+			if reason := localResultRejectionReason(err); reason == RepairFailureCommit || reason == RepairFailureSource {
+				return "", c.settleNormalizedRecoveryRead(c.todoItemByID(item.ID), task, err)
+			}
+		} else {
+			verification, err = c.verifyTaskDeliverableWithSpecAndResult(ctx, nil, task, nil, result)
+		}
 		if verification != nil {
+			if normalized {
+				c.noteObjectiveVerifierResult(item.ID, err == nil && isVerifySuccess(verification))
+			}
 			_ = c.taskTracker.TodoList().SetVerificationResult(item.ID, verification)
 		}
 		if err != nil {
@@ -3700,11 +4001,20 @@ func (c *Coordinator) finishProtocolRepair(ctx context.Context, item *TodoItem, 
 			return "", err
 		}
 	}
-	if err := validateTaskOutput(task, output); err != nil {
+	if err := validateTaskOutput(task, completionInput); err != nil {
 		completionErr := fmt.Errorf("task completion validation failed after protocol repair: %w", err)
 		detail := c.FailureDetail(completionErr, FailureSourceError)
 		c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, output)
 		return "", completionErr
+	}
+	if durableVerification && task.AdversarialVerify > 0 {
+		if err := c.verifyNormalizedWithSkeptic(ctx, task, item.ID, result, output); err != nil {
+			if reason := localResultRejectionReason(err); reason == RepairFailureCommit || reason == RepairFailureSource {
+				return "", c.settleNormalizedRecoveryRead(c.todoItemByID(item.ID), task, err)
+			}
+			c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, item.ID, c.FailureDetail(err, FailureSourceError), NeedsHuman, FailureVerify, TaskBlocked, output)
+			return "", err
+		}
 	}
 	if handled, redispatched, err := c.applyIsolatedProtocolRepair(ctx, item, task, agentName, result, output); handled {
 		return redispatched, err
@@ -3720,6 +4030,9 @@ func (c *Coordinator) finishProtocolRepair(ctx context.Context, item *TodoItem, 
 		}
 	}
 	if err := c.commitTaskTransitionFromCurrent(ctx, item.ID, TaskDone, summary, output, nil); err != nil {
+		if normalized {
+			return "", rejectLocalResultPersistence(err)
+		}
 		return "", err
 	}
 	c.releaseIsolatedAttempt(isolatedAttemptFromContext(ctx))
@@ -4339,6 +4652,8 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	}
 	acceptedTerminalResult := &acceptedTerminalResultStop{}
 	ctx = context.WithValue(ctx, acceptedTerminalResultStopKey{}, acceptedTerminalResult)
+	submissionTurn := new(atomic.Bool)
+	ctx = context.WithValue(ctx, resultSubmissionTurnKey{}, submissionTurn)
 	ctx = mcp.WithToolAuthorizer(ctx, func(callCtx context.Context, server, tool, input string) error {
 		if _, ok := c.mcpManager.WorkerPolicy(server + "__" + tool); ok {
 			if denial, _ := c.authorizeDynamicLogicalInvocation(callCtx, agentName, server+"__"+tool, input); denial != "" {
@@ -4486,6 +4801,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		// agent.CreateAgent — see internal/agent/toolcall_repair.go.
 		RepairToolCall: agent.RepairConcatenatedToolCall,
 		PrepareStep: func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
+			submissionTurn.Store(false)
 			if err := toolMediaFailure.failure(); err != nil {
 				return ctx, fantasy.PrepareStepResult{}, err
 			}
@@ -4935,7 +5251,8 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					lastToolCall.consecutiveSuccesses++
 				}
 			}
-			if tr.ToolName == submitResultToolName && tracked {
+			submissionFailure := submissionFailureMetadata(tr.ClientMetadata)
+			if tr.ToolName == submitResultToolName && tracked && submissionFailure != ignoredSiblingSubmission && submissionFailure != submissionNeedsArtifactRead {
 				if ev, _ := ctx.Value(toolCallEvidenceKey{}).(*toolCallEvidence); ev != nil {
 					if isErrResult {
 						ev.rejectedSubmitInput, ev.rejectedSubmitError = callInput, resultPreview
@@ -4944,7 +5261,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					}
 				}
 			}
-			if isErrResult {
+			if isErrResult && submissionFailure != ignoredSiblingSubmission && submissionFailure != submissionNeedsArtifactRead {
 				if fingerprint, deterministic := submitResultFailureFingerprint(tr.ToolName, resultPreview); deterministic {
 					submitResultFailures[fingerprint]++
 					if submitResultFailures[fingerprint] >= maxRepeatedSubmitResultFailures {
@@ -4953,7 +5270,8 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				}
 			}
 			loopDetectMu.Unlock()
-			if isErrResult && repeatedProtocolErr == nil && todoID != CoordTodoID {
+			classifiedSubmissionFailure := tr.ToolName == submitResultToolName && submissionFailure != ""
+			if isErrResult && !classifiedSubmissionFailure && repeatedProtocolErr == nil && todoID != CoordTodoID {
 				recovery, recoveryErr := c.prepareToolFailureRecovery(ctx, agentName, tr.ToolCallID, tr.ToolName, callInput)
 				if recoveryErr != nil {
 					return fmt.Errorf("prepare tool-failure recovery context: %w", recoveryErr)
@@ -5484,7 +5802,10 @@ func (c *Coordinator) verifyTaskDeliverableWithSpecAndResult(parentCtx context.C
 			}
 		}()
 	}
+	return c.runTaskDeliverableVerification(parentCtx, agentDef, task, steps, taskResult)
+}
 
+func (c *Coordinator) runTaskDeliverableVerification(parentCtx context.Context, agentDef *agent.AgentDef, task TaskDef, steps []fantasy.StepResult, taskResult *TaskResult) (*VerificationResult, error) {
 	spec := task.VerifySpec
 	if spec == nil && task.Verify != "" {
 		spec = &agent.VerificationSpec{

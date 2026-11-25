@@ -18,6 +18,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/fsutil"
 	"github.com/kjelly/hufu/internal/media"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 // PutArtifactRequest describes an immutable artifact to persist. Content is
@@ -118,7 +119,7 @@ func NewFileArtifactStore(workspace, sourceDir string) (*FileArtifactStore, erro
 	if workspace == "" {
 		return nil, fmt.Errorf("artifact store: empty workspace")
 	}
-	root := filepath.Join(workspace, logsDir, "artifacts")
+	root := runtimestore.ArtifactRoot(workspace)
 	for _, dir := range []string{filepath.Join(root, "data"), filepath.Join(root, "meta")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, fmt.Errorf("artifact store mkdir: %w", err)
@@ -135,7 +136,7 @@ func OpenFileArtifactStoreReadOnly(workspace, sourceDir string) (*FileArtifactSt
 	if workspace == "" {
 		return nil, fmt.Errorf("artifact store: empty workspace")
 	}
-	root := filepath.Join(workspace, logsDir, "artifacts")
+	root := runtimestore.ArtifactRoot(workspace)
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, fmt.Errorf("open read-only artifact store: %w", err)
@@ -156,6 +157,10 @@ func (s *FileArtifactStore) Put(ctx context.Context, req PutArtifactRequest) (Ar
 	if strings.HasPrefix(req.ID, "media-") || req.Kind == "image" || req.Role == "media" || strings.HasPrefix(req.MediaType, "image/") {
 		return s.putMedia(ctx, req)
 	}
+	return s.putFile(req)
+}
+
+func (s *FileArtifactStore) putFile(req PutArtifactRequest) (ArtifactPutResult, error) {
 	data := req.Content
 	if req.SourcePath != "" {
 		path, err := resolveArtifactSourcePath(s.sourceDir, req.SourcePath)
@@ -220,6 +225,8 @@ func (s *FileArtifactStore) createMetadata(path string, encoded []byte, ref Arti
 	return createOrVerifyArtifactMetadata(path, encoded, ref, origin)
 }
 
+var errArtifactCASConflict = errors.New("artifact CAS conflict")
+
 // Publish complete bytes atomically before exposing the shared CAS path. An
 // existing object never grants ownership to this Put call.
 func createOrVerifyArtifactFile(path string, data []byte) (bool, error) {
@@ -230,12 +237,20 @@ func createOrVerifyArtifactFile(path string, data []byte) (bool, error) {
 	if !errors.Is(err, os.ErrExist) {
 		return false, fmt.Errorf("create artifact %q: %w", filepath.Base(path), err)
 	}
-	existing, readErr := os.ReadFile(path)
+	file, readErr := openBoundedArtifact(path)
+	if readErr != nil {
+		return false, fmt.Errorf("read existing artifact %q: %w", filepath.Base(path), readErr)
+	}
+	defer func() { _ = file.Close() }()
+	existing, readErr := readBoundedRegularFile(context.Background(), file, len(data))
+	if errors.Is(readErr, ErrReadLimit) {
+		return false, fmt.Errorf("artifact %q already exists with a larger size: %w", filepath.Base(path), errArtifactCASConflict)
+	}
 	if readErr != nil {
 		return false, fmt.Errorf("read existing artifact %q: %w", filepath.Base(path), readErr)
 	}
 	if !bytes.Equal(existing, data) {
-		return false, fmt.Errorf("artifact %q already exists with different content", filepath.Base(path))
+		return false, fmt.Errorf("artifact %q already exists with different content: %w", filepath.Base(path), errArtifactCASConflict)
 	}
 	return false, nil
 }
@@ -255,7 +270,7 @@ func createOrVerifyArtifactMetadata(path string, encoded []byte, ref ArtifactRef
 	var old immutableArtifactMetadata
 	if json.Unmarshal(existing, &old) != nil || old.SHA256 != ref.SHA256 || old.ByteSize != ref.ByteSize ||
 		old.RetrievalURL != origin.RetrievalURL || !slices.Equal(old.ParentSourceIDs, origin.ParentSourceIDs) {
-		return false, fmt.Errorf("artifact %q metadata conflicts", ref.ID)
+		return false, fmt.Errorf("artifact %q metadata conflicts: %w", ref.ID, errArtifactCASConflict)
 	}
 	return false, nil
 }
@@ -284,15 +299,44 @@ func (s *FileArtifactStore) Verify(ctx context.Context, ref ArtifactRef) error {
 	if isMediaArtifactID(ref.ID) {
 		return s.verifyMedia(ctx, ref)
 	}
-	b, err := readArtifactFile(ctx, filepath.Join(s.root, "data", ref.ID))
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	path := filepath.Join(s.root, "data", ref.ID)
+	matches, err := verifyFileArtifactContent(ctx, path, ref)
 	if err != nil {
 		return fmt.Errorf("read artifact %q: %w", ref.ID, err)
 	}
-	h := sha256.Sum256(b)
-	if hex.EncodeToString(h[:]) != ref.SHA256 || int64(len(b)) != ref.ByteSize {
+	if !matches {
 		return fmt.Errorf("artifact %q hash or size mismatch", ref.ID)
 	}
 	return nil
+}
+
+func verifyFileArtifactContent(ctx context.Context, path string, ref ArtifactRef) (bool, error) {
+	if _, bounded := ctx.Value(artifactReadBudgetKey{}).(*ArtifactReadBudget); bounded {
+		body, err := readArtifactFile(ctx, path)
+		return err == nil && int64(len(body)) == ref.ByteSize && sha256HexBytes(body) == ref.SHA256, err
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	file, err := openBoundedArtifact(path)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() != ref.ByteSize {
+		return false, err
+	}
+	hash := sha256.New()
+	n, err := io.Copy(hash, io.LimitReader(contextArtifactReader{ctx: ctx, reader: file}, ref.ByteSize))
+	if err != nil || n != ref.ByteSize {
+		return false, err
+	}
+	final, err := file.Stat()
+	return err == nil && final.Size() == ref.ByteSize && hex.EncodeToString(hash.Sum(nil)) == ref.SHA256, err
 }
 
 func (s *FileArtifactStore) Open(ctx context.Context, id string) (io.ReadCloser, error) {
@@ -669,102 +713,6 @@ func (m EvidenceManifest) Verify(ctx context.Context, store ArtifactStore) error
 	}
 	if primaryRequirements == 1 && strings.EqualFold(m.Status, "accepted") && primaryProofs != 1 {
 		return fmt.Errorf("accepted decision manifest requires exactly one primary decision proof")
-	}
-	return nil
-}
-
-func verifyEvidenceBinding(manifest EvidenceManifest, result EvidenceResult) error {
-	if result.Binding == nil {
-		return fmt.Errorf("evidence requirement %q has no sealed execution binding", result.RequirementID)
-	}
-	b := result.Binding
-	wantTask, err := evidenceProducerTask(manifest, result)
-	if err != nil {
-		return err
-	}
-	if (b.RunID != manifest.RunID && !manifest.recoveryBindingMatches(b)) || b.TaskID == "" || b.TaskID != wantTask || b.Attempt <= 0 || b.ModelExecutionID == "" || b.ProducerID == "" || b.TranscriptRef == "" {
-		return fmt.Errorf("evidence requirement %q has conflicting execution binding", result.RequirementID)
-	}
-	if strings.HasPrefix(b.TranscriptRef, "sha256-") && !slices.Contains(b.ArtifactIDs, b.TranscriptRef) {
-		return fmt.Errorf("evidence requirement %q transcript is outside artifact membership", result.RequirementID)
-	}
-	if err := verifyEvidenceInputBinding(result.RequirementID, b); err != nil {
-		return err
-	}
-	if b.ActionInvocationID != "" || b.RuntimeOutputsHash != "" {
-		if strings.TrimSpace(b.ActionInvocationID) == "" || !runInputHashPattern.MatchString(b.RuntimeOutputsHash) {
-			return fmt.Errorf("evidence requirement %q has incomplete runtime output binding", result.RequirementID)
-		}
-	}
-	if b.RuntimeMediaHash != "" && !runInputHashPattern.MatchString(b.RuntimeMediaHash) {
-		return fmt.Errorf("evidence requirement %q has an invalid runtime media binding", result.RequirementID)
-	}
-	wantIDs := make([]string, 0, len(result.ArtifactRefs))
-	if len(result.ArtifactRefs) == 0 {
-		return fmt.Errorf("evidence requirement %q has no transcript/artifact membership", result.RequirementID)
-	}
-	seen := make(map[string]bool, len(result.ArtifactRefs))
-	for _, ref := range result.ArtifactRefs {
-		if ref.ID == "" || seen[ref.ID] {
-			return fmt.Errorf("evidence requirement %q has invalid artifact membership", result.RequirementID)
-		}
-		seen[ref.ID] = true
-		wantIDs = append(wantIDs, ref.ID)
-		found := false
-		for _, manifestRef := range manifest.ArtifactRefs {
-			if manifestRef.ID == ref.ID && manifestRef.RunID == b.RunID && manifestRef.TaskID == b.TaskID && manifestRef.Attempt == b.Attempt && (manifestRef.Agent == "" || manifestRef.Agent == b.ProducerID) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("evidence requirement %q references artifact outside manifest", result.RequirementID)
-		}
-	}
-	gotIDs := append([]string(nil), b.ArtifactIDs...)
-	sort.Strings(wantIDs)
-	sort.Strings(gotIDs)
-	if !slices.Equal(wantIDs, gotIDs) {
-		return fmt.Errorf("evidence requirement %q has incomplete artifact membership", result.RequirementID)
-	}
-	return nil
-}
-
-// VerifiedTaskBinding returns only a binding that passed the manifest's
-// structural checks. It is the sole report-facing task identity accessor.
-func (m EvidenceManifest) VerifiedTaskBinding(taskID string) (*EvidenceBinding, bool) {
-	if taskID == "" {
-		return nil, false
-	}
-	for _, result := range m.EvidenceResults {
-		if result.RequirementID != "task:"+taskID || !strings.EqualFold(result.Status, "passed") || result.Binding == nil {
-			continue
-		}
-		if verifyEvidenceBinding(m, result) != nil {
-			return nil, false
-		}
-		binding := *result.Binding
-		binding.ArtifactIDs = append([]string(nil), result.Binding.ArtifactIDs...)
-		binding.BoundInputs = cloneStringMap(result.Binding.BoundInputs)
-		return &binding, true
-	}
-	return nil, false
-}
-
-func verifyEvidenceInputBinding(requirementID string, b *EvidenceBinding) error {
-	if b.RunInputSnapshotID != "" || b.RunInputSnapshotHash != "" || b.MaterializedActionPayloadHash != "" || len(b.BoundInputs) > 0 {
-		if b.RunInputSnapshotID == "" || !runInputHashPattern.MatchString(b.RunInputSnapshotHash) {
-			return fmt.Errorf("evidence requirement %q has incomplete invocation input binding", requirementID)
-		}
-		if (b.MaterializedActionPayloadHash != "" || len(b.BoundInputs) > 0) &&
-			(!runInputHashPattern.MatchString(b.MaterializedActionPayloadHash) || len(b.BoundInputs) == 0) {
-			return fmt.Errorf("evidence requirement %q has incomplete action input binding", requirementID)
-		}
-		for name, hash := range b.BoundInputs {
-			if strings.TrimSpace(name) == "" || !runInputHashPattern.MatchString(hash) {
-				return fmt.Errorf("evidence requirement %q has invalid bound input", requirementID)
-			}
-		}
 	}
 	return nil
 }

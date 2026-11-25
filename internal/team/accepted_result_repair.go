@@ -352,7 +352,7 @@ func (c *Coordinator) validateAcceptedRepairClaims(ctx context.Context, cp *Resu
 		return nil
 	}
 	if _, err := c.readAcceptedRepairResult(ctx, cp.ContractUpgrade.Original, p.ResultSHA256); err != nil {
-		return rejectLocalResult(RepairFailureSource, err)
+		return rejectResultSourceRead(err)
 	}
 	// Compare the complete runtime projection for verbatim work, without
 	// materializing artifacts or asking the model to copy transcript evidence.
@@ -361,7 +361,7 @@ func (c *Coordinator) validateAcceptedRepairClaims(ctx context.Context, cp *Resu
 		result = cloneTaskResult(result)
 		result.TaskID, result.Attempt, result.Agent = cp.TaskID, cp.Attempt, cp.Agent
 		if err := c.attachCollectedTranscript(ctx, item, cp, result); err != nil {
-			return rejectLocalResult(RepairFailureSource, err)
+			return rejectResultSourceRead(err)
 		}
 	}
 	digest, err := acceptedResultSemanticHashWithPaths(result, p.Pointers, p.PathPointers)

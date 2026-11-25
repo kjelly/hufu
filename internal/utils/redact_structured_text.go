@@ -49,20 +49,29 @@ func redactionJSONDocument(content string, offset int) (redactionJSONSpan, bool)
 	return redactionJSONSpan{start: offset + start, end: offset + start + len(trimmed)}, true
 }
 
-func discoverTextSecrets(content string) {
+func discoverTextSecrets(content string, record func(string)) {
 	spans := redactionJSONSpans(content)
 	position := 0
 	for _, span := range spans {
-		learnSecretsFrom(content[position:span.start])
+		discoverPlainTextSecrets(content[position:span.start], record)
 		if value, err := decodeRedactionJSON([]byte(content[span.start:span.end])); err == nil {
-			discoverJSONSecrets(value, "")
+			discoverJSONSecrets(value, "", record)
 		}
 		position = span.end
 	}
-	learnSecretsFrom(content[position:])
+	discoverPlainTextSecrets(content[position:], record)
 }
 
-func redactStructuredText(content string, learn bool) (string, bool) {
+func discoverPlainTextSecrets(content string, record func(string)) {
+	scanTextCredentialValues(content, record)
+	if mayContainURLUserinfo(content) {
+		for _, url := range urlUserInfoRe.FindAllString(content, -1) {
+			_ = redactURLUserinfo(url, record)
+		}
+	}
+}
+
+func redactStructuredText(content string, learn bool, scope *SecretRedactionScope) (string, bool) {
 	spans := redactionJSONSpans(content)
 	if len(spans) == 0 {
 		return "", false
@@ -70,14 +79,14 @@ func redactStructuredText(content string, learn bool) (string, bool) {
 	if learn {
 		// Discover across all blocks before replacing any occurrence, including
 		// a bare value printed before its credential-keyed JSON definition.
-		discoverTextSecrets(content)
+		discoverTextSecrets(content, learnSecretValue)
 	}
 	var out strings.Builder
 	position := 0
 	for _, span := range spans {
-		out.WriteString(redactSecretsPlainText(content[position:span.start], false))
+		out.WriteString(redactSecretsPlainText(content[position:span.start], false, scope))
 		raw := content[span.start:span.end]
-		redacted, err := RedactJSONCompact([]byte(raw))
+		redacted, err := redactJSONCompact([]byte(raw), scope)
 		if err == nil {
 			if ordered, orderErr := redactedJSONInOriginalOrder(jsontext.Value(raw), redacted); orderErr == nil {
 				redacted = ordered
@@ -85,13 +94,13 @@ func redactStructuredText(content string, learn bool) (string, bool) {
 		}
 		if err != nil {
 			// No malformed or ambiguous JSON bypasses ordinary redaction.
-			out.WriteString(redactSecretsPlainText(raw, false))
+			out.WriteString(redactSecretsPlainText(raw, false, scope))
 		} else {
 			out.Write(redacted)
 		}
 		position = span.end
 	}
-	out.WriteString(redactSecretsPlainText(content[position:], false))
+	out.WriteString(redactSecretsPlainText(content[position:], false, scope))
 	result := out.String()
 	// Preserve protections whose scope can cross a fence boundary. Ordinary
 	// key/value expressions must never run over the serialized JSON again.

@@ -12,8 +12,9 @@ import (
 
 // MaterializeRequest projects one snapshot onto a filesystem root.
 type MaterializeRequest struct {
-	Root       string
-	SnapshotID SnapshotID
+	SubjectIdentity os.FileInfo
+	Root            string
+	SnapshotID      SnapshotID
 	// CurrentSnapshotID is the snapshot the root's managed paths currently
 	// equal (the caller captured any drift first). Empty means the root has
 	// no managed paths yet. Only paths managed by the current snapshot are
@@ -51,10 +52,15 @@ func (s *Store) Materialize(ctx context.Context, req MaterializeRequest) (Materi
 	if err != nil {
 		return MaterializeResult{}, err
 	}
-	rootPath, err := CanonicalRoot(req.Root)
+	rootPath, err := operationSubjectRoot(req.Root, req.SubjectIdentity)
 	if err != nil {
 		return MaterializeResult{}, fmt.Errorf("materialize: %w", err)
 	}
+	subject, err := openSubjectDirectory(rootPath, req.SubjectIdentity)
+	if err != nil {
+		return MaterializeResult{}, err
+	}
+	defer func() { _ = subject.close() }()
 	subtrees, err := normalizeSubtrees(req.ExcludeSubtrees)
 	if err != nil {
 		return MaterializeResult{}, fmt.Errorf("materialize: %w", err)
@@ -79,19 +85,20 @@ func (s *Store) Materialize(ctx context.Context, req MaterializeRequest) (Materi
 	if err = s.checkTargetObjects(ctx, rootPath, plan.target, subtrees); err != nil {
 		return MaterializeResult{}, err
 	}
-	root, err := os.OpenRoot(rootPath)
-	if err != nil {
-		return MaterializeResult{}, fmt.Errorf("materialize: open root: %w", err)
-	}
-	defer func() { _ = root.Close() }()
-	m := &materializer{store: s, root: root, plan: &plan}
+	m := &materializer{store: s, root: subject.root, plan: &plan}
 	if err = m.planChanges(ctx); err != nil {
+		return MaterializeResult{}, err
+	}
+	if err = subject.verify(); err != nil {
 		return MaterializeResult{}, err
 	}
 	if err = m.apply(ctx); err != nil {
 		return MaterializeResult{}, err
 	}
 	if err = m.verify(ctx); err != nil {
+		return MaterializeResult{}, err
+	}
+	if err = subject.verify(); err != nil {
 		return MaterializeResult{}, err
 	}
 	return MaterializeResult{FilesWritten: len(plan.writes), FilesDeleted: m.deleted}, nil

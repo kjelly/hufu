@@ -115,6 +115,7 @@ func TestReviewWorksetKeysMatchSchemaAndHandoffIdentity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			value, _, _ := schemaFixture()
 			value["workset_key"] = tc.submitted
+			value["findings"].([]any)[0].(map[string]any)["location"] = "runtime.go:4"
 			candidate := map[string]any{"record": value}
 			if err := schema.Validate(candidate); (err == nil) != tc.schemaValid {
 				t.Fatalf("schema valid=%t, want %t: %v", err == nil, tc.schemaValid, err)

@@ -5,6 +5,8 @@
 
 > A Go CLI tool that orchestrates teams of LLM agents via Ollama to collaboratively accomplish tasks
 
+> **Codex App Server integration: Unsupported.** Hufu development and support for this backend are paused. Its dedicated tests, including live smoke tests, are skipped.
+
 `hufu` is a command-line tool written in Go that coordinates teams of multiple LLM agents (via Ollama), enabling them to work together on complex tasks through division of labor. Teams are discovered by name from configured search paths, and a single prompt can switch between multiple teams or invoke specific agents directly.
 
 - **Module**: `github.com/kjelly/hufu`
@@ -602,7 +604,7 @@ Semantic Retrieval Runtime section. See
 | `--default` | — | `bool` | `false` | Use the built-in default team (coordinator + Helper); no `.agent-teams/` directory required (mutually exclusive with `--agent-team`). Discovers project skills from `.agents/skills/`, global skills from `~/.agents/skills/`, and respects `--skill` forced skills. |
 | `--helper-tools` | — | `string` | `""` | Comma-separated extra tools for the default Helper worker when `--default` is set (e.g. `bash` or `bash,sudo,ssh`). Whitespace trimmed; empty entries dropped. Empty = baseline read-only toolset. |
 | `--auto-approve` | — | `bool` | `false` | Automatically choose clearly safe `ask_user` options; dangerous or ambiguous choices still prompt the user |
-| `--model` / `-m` | `-m` | `string` | `""` | Override the worker execution target only (for example `codex/gpt-5.6-luna` or `local/qwen3:8b`) |
+| `--model` / `-m` | `-m` | `string` | `""` | Override the worker execution target only (for example `local/qwen3:8b` or `ollama/qwen3.5:27b`) |
 | `--worker-model` | — | `[]string` | `nil` | Override the execution target of specific workers as `agent=target` (repeatable or comma-separated); wins over `--model` for that worker. See [Worker Model Selection](#worker-model-selection) |
 | `--coordinator-model` / `-c` | `-c` | `string` | `""` | Override the coordinator's independent LLM target |
 | `--context-window` | — | `int` | `0` | Explicit positive model context capacity in tokens for pre-provider admission; `0` uses provider metadata or the model registry |
@@ -637,7 +639,7 @@ Semantic Retrieval Runtime section. See
 
 `-m` / `--model` retargets every worker for one run; `--worker-model agent=target`
 retargets individual workers and wins over `-m` for those workers. Both take the
-same execution-target syntax (`codex/gpt-6-sol`, `ollama/qwen3.5:27b`, or a bare
+same execution-target syntax (`local/qwen3:8b`, `ollama/qwen3.5:27b`, or a bare
 model resolved through the team's backend defaults) and go through the same
 backend, capability, and admission checks. They are runtime overlays: the
 Git-tracked `.agent-teams/<team>/*.md` and `team.yaml` are never edited.
@@ -645,15 +647,14 @@ Git-tracked `.agent-teams/<team>/*.md` and `team.yaml` are never edited.
 
 ```bash
 # Change all workers temporarily
-hufu @hufu-coding -m codex/gpt-6-luna "implement feature X"
+hufu run --team dev-team -m local/qwen3:8b -- "implement feature X"
 
 # Change only the expensive roles
-hufu @hufu-coding \
-  -m codex/gpt-6-luna \
-  --worker-model coder=codex/gpt-6-sol \
-  --worker-model reviewer=codex/gpt-6-sol \
-  --worker-model final-sa=codex/gpt-6-sol \
-  "implement feature X"
+hufu run --team dev-team \
+  -m local/qwen3:8b \
+  --worker-model coder=ollama/qwen3.5:27b \
+  --worker-model reviewer=ollama/qwen3.5:27b \
+  -- "implement feature X"
 ```
 
 To keep the choice without touching agent Markdown, save it as a profile in
@@ -662,12 +663,12 @@ To keep the choice without touching agent Markdown, save it as a profile in
 ```yaml
 profiles:
   coding-balanced:
-    model: codex/gpt-6-luna
-    worker-model: "coder=codex/gpt-6-sol,reviewer=codex/gpt-6-sol,final-sa=codex/gpt-6-sol"
+    model: local/qwen3:8b
+    worker-model: "coder=ollama/qwen3.5:27b,reviewer=ollama/qwen3.5:27b"
 ```
 
 ```bash
-hufu @hufu-coding --profile coding-balanced "implement feature X"
+hufu run --team dev-team --profile coding-balanced -- "implement feature X"
 ```
 
 For repeated runs in one project, put `default-profile` in that project's
@@ -1013,11 +1014,9 @@ workspace: workspace             # Legacy/unmanaged compatibility field; managed
 # === Execution Targets ===
 # `model` remains accepted for legacy configurations. New teams should use
 # the role-specific target keys below.
-worker-model: codex/gpt-5.6-luna  # Worker backend/model target
+worker-model: local/qwen3:8b      # Worker backend/model target
 coordinator-model: local/qwen3:8b # Coordinator LLM target
 default-llm-backend: local         # Bare worker model target default
-backends:
-  codex: {}                        # Built-in Codex app-server backend
 
 # === Legacy Model Settings ===
 model: ollama/qwen3:8b

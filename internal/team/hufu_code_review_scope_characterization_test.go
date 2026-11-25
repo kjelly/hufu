@@ -197,7 +197,7 @@ func TestHufuCodeReviewRepairExampleSatisfiesResultSchema(t *testing.T) {
 	c := newTestCoordinator(t, withCoordinatorWorkspace(session.Workspace))
 	c.session = session
 	_, source := runtimeWorksetProducerFixture(t, c, []byte(`{"schema_version":3,"items":[{"key":"unit-0000","bindings":{"key":"unit-0000","lens":"general","review_revision":"frozen","reference_candidate_ids":"[]"}}]}`))
-	children, err := c.expandFanOutTasks([]TaskDef{{ID: "example", Agent: "reviewer", FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "seed", Artifact: source.ID}, GoalTemplate: "Review {key}"}}})
+	children, err := c.expandFanOutTasks(t.Context(), []TaskDef{{ID: "example", Agent: "reviewer", FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "seed", Artifact: source.ID}, GoalTemplate: "Review {key}"}}})
 	if err != nil || len(children) != 1 {
 		t.Fatalf("expand example: %v", err)
 	}
@@ -538,7 +538,7 @@ func TestHufuCodeReviewReferenceScopeReachesWorkerPromptAndSubmission(t *testing
 			c.session = session
 			_, source := runtimeWorksetProducerFixture(t, c, []byte(`{"schema_version":3,"items":[{"key":"unit-0000","bindings":{"key":"unit-0000","lens":"documentation-risk","review_revision":"frozen","reference_candidate_ids":"[]"}},{"key":"unit-0001","bindings":{"key":"unit-0001","lens":"documentation-risk","review_revision":"frozen","reference_candidate_ids":"[\"ref-000000\"]"}}]}`))
 			parent.FanOut = &FanOutSpec{SourceArtifact: FactRef{TaskID: "seed", Artifact: source.ID}, GoalTemplate: parent.FanOut.GoalTemplate}
-			children, err := c.expandFanOutTasks([]TaskDef{parent})
+			children, err := c.expandFanOutTasks(t.Context(), []TaskDef{parent})
 			if err != nil {
 				t.Fatal(err)
 			}

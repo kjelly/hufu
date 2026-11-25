@@ -6,6 +6,9 @@
 > Supersedes: the former standalone coding-team implementation spec
 > Superseded-By: —
 
+> **Unsupported.** All five workers use Hufu's Codex App Server integration.
+> Development, support, and dedicated tests for that integration are paused.
+
 A reliability-oriented coding team: Hufu owns the control plane (task
 admission, retry, failure classification, recovery, and final acceptance);
 every worker's actual reasoning turn executes through the `codex`
@@ -185,11 +188,16 @@ effect once a role is codex-bound — the sandbox mode is the only gate that
 matters for these roles now (`TestHufuCodingAllRolesBoundToCodex`,
 `TestHufuCodingReadOnlyRolesSideEffectNoneGatesCodexSandbox`).
 
-## Running it
+## Inspecting the team
 
 ```bash
 hufu team validate --team hufu-coding
 hufu list hufu-coding
+```
+
+Historical launch example from before Codex App Server support was paused.
+
+```bash
 hufu --agent-team hufu-coding --report \
   "Implement <requested change>. Find and fix the root cause, add regression
    tests, and finish only after verification and independent review pass."
@@ -200,13 +208,10 @@ hufu --agent-team hufu-coding --report \
 The `codex` subagent-provider command in `team.yaml` passes both
 `-c agents.enabled=false` and `-c features.multi_agent_v2=false`, because
 Codex's `features.multi_agent_v2` can otherwise take precedence over
-`[agents].enabled`. This is asserted by a config-lint regression test
-(fails `hufu team validate`-style checks if either flag is missing) and, when
-credentials are available, by the opt-in `HUFU_CODEX_SMOKE=1` live suite,
-which additionally proves the running Codex worker cannot expose a native
-multi-agent tool. The deterministic (non-live) test suite cannot observe real
-Codex CLI behavior, so it only proves Hufu's own configuration is correct —
-see the completion report for the exact split.
+`[agents].enabled`. The dedicated configuration regression checks both
+flags. The live smoke case tests whether a running Codex worker can expose a
+native multi-agent tool. Both tests currently skip, including when
+`HUFU_CODEX_SMOKE=1`.
 
 ## 固定驗收條件
 

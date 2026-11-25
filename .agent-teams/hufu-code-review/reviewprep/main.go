@@ -25,6 +25,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/kjelly/hufu/internal/processutil"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -39,7 +40,7 @@ const (
 	defaultMaxChangedPaths   = 256
 	defaultMaxWorksetItems   = 64
 	routingDocumentation     = "documentation"
-	maxSnapshotRelatedPaths  = 24
+	maxSnapshotRelatedPaths  = 16
 )
 
 type actionRequest struct {
@@ -136,48 +137,52 @@ type actionResult struct {
 }
 
 type goTestVerification struct {
+	Gap                  string `json:"gap,omitempty"`
 	TimeoutKind          string `json:"timeout_kind"`
 	SummaryTruncated     bool   `json:"summary_truncated"`
 	OutputArtifactID     string `json:"output_artifact_id"`
 	OutputArtifactSHA256 string `json:"output_artifact_sha256"`
 
-	Completed        bool     `json:"completed"`
-	Passed           bool     `json:"passed"`
-	ReviewedRevision string   `json:"reviewed_revision"`
-	BaseRevision     string   `json:"base_revision"`
-	Packages         []string `json:"packages"`
-	Command          []string `json:"command"`
-	ExitCode         int      `json:"exit_code"`
-	TimedOut         bool     `json:"timed_out"`
-	SnapshotID       string   `json:"snapshot_id,omitempty"`
-	ContentSHA256    string   `json:"content_sha256,omitempty"`
-	OutputSHA256     string   `json:"output_sha256"`
-	OutputBytes      int      `json:"output_bytes"`
-	OutputTruncated  bool     `json:"output_truncated"`
-	Diagnostic       string   `json:"diagnostic,omitempty"`
+	Completed        bool       `json:"completed"`
+	Passed           bool       `json:"passed"`
+	ReviewedRevision string     `json:"reviewed_revision"`
+	BaseRevision     string     `json:"base_revision"`
+	Packages         []string   `json:"packages"`
+	Command          []string   `json:"command"`
+	Commands         [][]string `json:"commands,omitempty"`
+	ExitCode         int        `json:"exit_code"`
+	TimedOut         bool       `json:"timed_out"`
+	SnapshotID       string     `json:"snapshot_id,omitempty"`
+	ContentSHA256    string     `json:"content_sha256,omitempty"`
+	OutputSHA256     string     `json:"output_sha256"`
+	OutputBytes      int        `json:"output_bytes"`
+	OutputTruncated  bool       `json:"output_truncated"`
+	Diagnostic       string     `json:"diagnostic,omitempty"`
 }
 
 type goTestReceipt struct {
+	Gap                  string `json:"gap,omitempty"`
 	TimeoutKind          string `json:"timeout_kind"`
 	SummaryTruncated     bool   `json:"summary_truncated"`
 	OutputArtifactID     string `json:"output_artifact_id"`
 	OutputArtifactSHA256 string `json:"output_artifact_sha256"`
 
-	Completed          bool     `json:"completed"`
-	Passed             bool     `json:"passed"`
-	ReviewedRevision   string   `json:"reviewed_revision"`
-	BaseRevision       string   `json:"base_revision"`
-	Packages           []string `json:"packages"`
-	Command            []string `json:"command"`
-	ExitCode           int      `json:"exit_code"`
-	TimedOut           bool     `json:"timed_out"`
-	OutputTruncated    bool     `json:"output_truncated"`
-	Diagnostic         string   `json:"diagnostic,omitempty"`
-	ArtifactID         string   `json:"artifact_id"`
-	ArtifactSHA256     string   `json:"artifact_sha256"`
-	RequestedInputHash string   `json:"requested_input_hash"`
-	SnapshotID         string   `json:"snapshot_id,omitempty"`
-	ContentSHA256      string   `json:"content_sha256,omitempty"`
+	Completed          bool       `json:"completed"`
+	Passed             bool       `json:"passed"`
+	ReviewedRevision   string     `json:"reviewed_revision"`
+	BaseRevision       string     `json:"base_revision"`
+	Packages           []string   `json:"packages"`
+	Command            []string   `json:"command"`
+	Commands           [][]string `json:"commands,omitempty"`
+	ExitCode           int        `json:"exit_code"`
+	TimedOut           bool       `json:"timed_out"`
+	OutputTruncated    bool       `json:"output_truncated"`
+	Diagnostic         string     `json:"diagnostic,omitempty"`
+	ArtifactID         string     `json:"artifact_id"`
+	ArtifactSHA256     string     `json:"artifact_sha256"`
+	RequestedInputHash string     `json:"requested_input_hash"`
+	SnapshotID         string     `json:"snapshot_id,omitempty"`
+	ContentSHA256      string     `json:"content_sha256,omitempty"`
 }
 
 type cappedBuffer struct {
@@ -803,9 +808,10 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 		if err != nil {
 			return actionResult{}, err
 		}
-		if frozen != nil {
-			pinnedConfig.Scope.Head = frozen.Revision
+		if frozen == nil {
+			return actionResult{}, errors.New("snapshot verification requires a verified producer workset")
 		}
+		pinnedConfig.Scope.Head = frozen.Revision
 	}
 	resolution, err := resolveRequestedRange(ctx, repo, pinnedConfig)
 	if err != nil {
@@ -831,33 +837,30 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 		return actionResult{}, err
 	}
 	defer snapshot.Close()
+	var targets snapshotGoTestTargets
 	if reviewRangeValue.isRepositorySnapshot() {
 		identity, inventoryErr := repositorySnapshotInventory(ctx, repo, snapshot)
 		if inventoryErr != nil {
 			return actionResult{}, inventoryErr
 		}
-		if frozen != nil && (identity.ID != frozen.ID || identity.ContentSHA256 != frozen.ContentSHA256) {
-			return actionResult{}, errors.New("snapshot_mismatch: verifier source differs from workset source")
-		}
 		snapshot.identity = identity
-		paths = eligibleSnapshotPaths(identity)
+		paths, err = snapshotSelectedTestPaths(frozen, identity)
+		if err != nil {
+			return actionResult{}, err
+		}
+		targets.plan, err = snapshot.planSnapshotGoTests(paths)
+		if err != nil {
+			return actionResult{}, err
+		}
+	} else {
+		targets.packages = targetedGoTestPackages(snapshot.root, paths)
 	}
 
-	testPaths := paths
-	if reviewRangeValue.isRepositorySnapshot() {
-		testPaths = snapshotPlannedTestPaths(snapshot, paths)
-	}
-
-	goTestEnvironment, err := sanitizedGoTestEnvironment(ctx)
-	if err != nil {
-		return actionResult{}, err
-	}
-	packages := targetedGoTestPackages(snapshot.root, testPaths)
 	if err := os.MkdirAll(outputDir, 0o700); err != nil {
 		return actionResult{}, fmt.Errorf("create verification output directory: %w", err)
 	}
 	outputPath := filepath.Join(outputDir, "targeted-go-tests.log")
-	verification, err := runSnapshotGoTests(ctx, snapshot, packages, goTestEnvironment, outputPath, defaultGoTestLimits())
+	verification, err := runSnapshotGoTests(ctx, snapshot, targets, nil, outputPath, defaultGoTestLimits())
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -889,10 +892,10 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 	}
 	reportArtifact.Description = "Go test evidence from the immutable reviewed-revision snapshot"
 	receipt := goTestReceipt{
-		Completed: verification.Completed,
-		Passed:    verification.Passed, ReviewedRevision: verification.ReviewedRevision,
+		Completed: verification.Completed, Gap: verification.Gap,
+		Passed: verification.Passed, ReviewedRevision: verification.ReviewedRevision,
 		BaseRevision: verification.BaseRevision, Packages: verification.Packages,
-		Command: verification.Command, ExitCode: verification.ExitCode,
+		Command: verification.Command, Commands: verification.Commands, ExitCode: verification.ExitCode,
 		TimedOut: verification.TimedOut, OutputTruncated: verification.OutputTruncated,
 		TimeoutKind: verification.TimeoutKind, SummaryTruncated: verification.SummaryTruncated,
 		OutputArtifactID: outputArtifact.ID, OutputArtifactSHA256: outputArtifact.SHA256,
@@ -905,6 +908,7 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 	}
 	return actionResult{Outputs: map[string]any{
 		"test_execution_completed": receipt.Completed,
+		"test_evidence_sealed":     receipt.Completed || receipt.Gap != "",
 		"scope": scopeAttestation{
 			Requested: config.Scope, RequestedInputHash: receipt.RequestedInputHash,
 			Resolved: resolvedScope{
@@ -920,27 +924,6 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 			"passed":    receipt.Passed, "timed_out": receipt.TimedOut, "output_truncated": receipt.OutputTruncated,
 		},
 	}, Artifacts: []artifact{reportArtifact, outputArtifact}}, nil
-}
-
-func snapshotPlannedTestPaths(snapshot *reviewSourceSnapshot, fallback []string) []string {
-	if snapshot == nil || snapshot.identity == nil || snapshot.identity.Plan == nil {
-		return fallback
-	}
-	plannedPaths := make(map[string]struct{})
-	for _, ws := range snapshot.identity.Plan.Worksets {
-		for _, src := range ws.Sources {
-			plannedPaths[src.Path] = struct{}{}
-		}
-	}
-	if len(plannedPaths) == 0 {
-		return fallback
-	}
-	result := make([]string, 0, len(plannedPaths))
-	for p := range plannedPaths {
-		result = append(result, p)
-	}
-	sort.Strings(result)
-	return result
 }
 
 func targetedGoTestPackages(snapshotRoot string, changed []string) []string {
@@ -987,7 +970,7 @@ func sanitizedGoTestEnvironment(ctx context.Context) ([]string, error) {
 	diagnostic := &cappedBuffer{limit: 16 * 1024}
 	probe.Stdout = output
 	probe.Stderr = diagnostic
-	if err := probe.Run(); err != nil {
+	if err := processutil.RunContextCommand(probe, time.Second); err != nil {
 		return nil, fmt.Errorf("resolve Go test cache paths: %w: %s", err, strings.TrimSpace(diagnostic.String()))
 	}
 	var paths map[string]string
@@ -1400,6 +1383,9 @@ func validateConfig(config Config) error {
 	}
 	if config.MaxSourceSnapshotBytes <= 0 || config.MaxReviewInputTokens <= 0 {
 		return errors.New("max_source_snapshot_bytes and max_review_input_tokens must be positive")
+	}
+	if config.MaxReviewInputTokens > defaultMaxReviewInputTokens {
+		return fmt.Errorf("max_review_input_tokens cannot exceed %d", defaultMaxReviewInputTokens)
 	}
 	if config.MaxTotalDiffBytes <= 0 || config.MaxTotalDiffLines <= 0 || config.MaxChangedPaths <= 0 || config.MaxWorksetItems <= 0 {
 		return errors.New("max_total_diff_bytes, max_total_diff_lines, max_changed_paths, and max_workset_items must be positive")
@@ -3073,22 +3059,23 @@ func reviewDiff(ctx context.Context, repo string, r reviewRange, diffPlan select
 			if err != nil {
 				return "", fmt.Errorf("diff selected commit %q: %w", commit.commit, err)
 			}
-			selectedDiff.WriteString(diff)
+			selectedDiff.WriteString(annotateOldRevision(diff, commit.parent))
 		}
 		return selectedDiff.String(), nil
 	}
 	if !r.isWorkingTree() {
-		return git(ctx, repo, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0", r.Start+".."+r.End, "--", path)
+		diff, err := git(ctx, repo, append(frozenPatchArgs(), r.Start+".."+r.End, "--", path)...)
+		return annotateOldRevision(diff, r.Start), err
 	}
-	diff, err := git(ctx, repo, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0", r.Start, "--", path)
+	diff, err := git(ctx, repo, append(frozenPatchArgs(), r.Start, "--", path)...)
 	if err != nil || diff != "" {
-		return diff, err
+		return annotateOldRevision(diff, r.Start), err
 	}
 	fullPath := filepath.Join(repo, filepath.FromSlash(path))
 	if _, err := os.Lstat(fullPath); err != nil {
 		return "", err
 	}
-	diff, err = gitWithExitCodeOne(ctx, repo, "diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0", "--", os.DevNull, path)
+	diff, err = gitWithExitCodeOne(ctx, repo, append(frozenPatchArgs(), "--no-index", "--", os.DevNull, path)...)
 	if err != nil {
 		return "", err
 	}
@@ -3096,6 +3083,21 @@ func reviewDiff(ctx context.Context, repo string, r reviewRange, diffPlan select
 		return fmt.Sprintf("diff --git a/%s b/%s\nnew file mode 100644\n", path, path), nil
 	}
 	return diff, nil
+}
+
+func annotateOldRevision(diff, revision string) string {
+	var annotated strings.Builder
+	for _, line := range strings.SplitAfter(diff, "\n") {
+		annotated.WriteString(line)
+		if strings.HasPrefix(line, "diff --git ") {
+			annotated.WriteString("hufu-old-revision " + revision + "\n")
+		}
+	}
+	return annotated.String()
+}
+
+func frozenPatchArgs() []string {
+	return []string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--unified=0"}
 }
 
 func writeItems(artifactRoot, outputDir string, batches []*batch, snapshot *reviewSourceSnapshot) ([]item, error) {
@@ -3164,7 +3166,7 @@ func writeItems(artifactRoot, outputDir string, batches []*batch, snapshot *revi
 			DiffPath:      filepath.ToSlash(filepath.Join("batches", key, "diff.patch")),
 			DiffSHA:       sha256Hex(current.diff.Bytes()), DiffBytes: current.diff.Len(), DiffLines: current.lines,
 			SourceSnapshotBytes:        int(snapshotArtifact.Bytes),
-			EstimatedReviewInputTokens: estimateReviewInputTokens(current.diff.Len()) + estimateReviewInputTokens(int(snapshotArtifact.Bytes)) + estimateReviewInputTokens(int(inventoryArtifact.Bytes)),
+			EstimatedReviewInputTokens: estimateReviewItemTokens(current.diff.Len(), int(snapshotArtifact.Bytes), int(inventoryArtifact.Bytes)),
 		})
 		items[len(items)-1].Bindings["evidence_inventory"] = inventoryArtifact.Path
 		if !snapshot.skipFrozenSource {
@@ -3262,9 +3264,18 @@ func splitDiff(diff []byte) [][]byte {
 	var units [][]byte
 	var current bytes.Buffer
 	for _, line := range lines {
+		if bytes.HasPrefix(line, []byte("diff --git ")) {
+			if current.Len() != 0 {
+				units = append(units, bytes.Clone(current.Bytes()))
+			} else if header.Len() != 0 {
+				units = append(units, bytes.Clone(header.Bytes()))
+			}
+			current.Reset()
+			header.Reset()
+		}
 		if bytes.HasPrefix(line, []byte("@@ ")) {
 			if current.Len() > 0 {
-				units = append(units, append([]byte(nil), current.Bytes()...))
+				units = append(units, bytes.Clone(current.Bytes()))
 			}
 			current.Reset()
 			current.Write(header.Bytes())
@@ -3278,10 +3289,9 @@ func splitDiff(diff []byte) [][]byte {
 		current.Write(line)
 	}
 	if current.Len() > 0 {
-		units = append(units, append([]byte(nil), current.Bytes()...))
-	}
-	if len(units) == 0 && len(diff) > 0 {
-		return [][]byte{append([]byte(nil), diff...)}
+		units = append(units, bytes.Clone(current.Bytes()))
+	} else if header.Len() > 0 {
+		units = append(units, bytes.Clone(header.Bytes()))
 	}
 	return units
 }

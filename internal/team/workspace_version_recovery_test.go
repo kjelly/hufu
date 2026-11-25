@@ -162,6 +162,174 @@ func TestWorkspaceRestoreCrashRecovery(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRecoveryPreservesNewerProviderDisposition(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		stage     string
+		interrupt bool
+		newer     bool
+	}{
+		{name: "adopt", stage: "adopt:captured", newer: true},
+		{name: "restore", stage: "restore:materialized", newer: true},
+		{name: "restarted restore keeps newer marker", stage: "restore:event_committed", interrupt: true, newer: true},
+		{name: "restarted restore clears its marker", stage: "restore:materialized", interrupt: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			f := newVersionFixture(t)
+			f.write("a.txt", "accepted")
+			baseline, _, err := f.ops().SnapshotNow(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			publish := func() {
+				t.Helper()
+				if err := versionstore.RecordProviderRecovery(f.version.StateDir, f.subject, "provider_pending", "unaccepted work"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			currentToken := func() string {
+				t.Helper()
+				state, _, err := f.store.GetSubjectState(ctx, f.subject)
+				if err != nil || !state.RecoveryRequired {
+					t.Fatalf("read provider recovery disposition: %v, %+v", err, state)
+				}
+				return state.RecoveryToken()
+			}
+			f.write("a.txt", "unaccepted")
+			publish()
+			oldToken := currentToken()
+			var newerToken string
+			previous := workspaceVersionStageHook
+			t.Cleanup(func() { workspaceVersionStageHook = previous })
+			workspaceVersionStageHook = func(stage string) error {
+				if stage != tc.stage {
+					return nil
+				}
+				if tc.newer {
+					publish()
+					newerToken = currentToken()
+					if newerToken == oldToken {
+						t.Fatal("identical marker contents reused the earlier authority")
+					}
+				}
+				if tc.interrupt {
+					return errSimulatedCrash
+				}
+				return nil
+			}
+			if tc.stage == "adopt:captured" {
+				_, err = f.ops().Adopt(ctx)
+			} else {
+				_, _, err = f.ops().Restore(ctx, baseline.ID)
+			}
+			noCrash()
+			if tc.interrupt {
+				if !errors.Is(err, errSimulatedCrash) {
+					t.Fatalf("interrupted restore: %v", err)
+				}
+				if ops, err := f.store.IncompleteOperations(ctx); err != nil || len(ops) != 1 || ops[0].RecoveryToken != oldToken {
+					t.Fatalf("restore did not persist the earlier authority: %+v, %v", ops, err)
+				}
+				if report := recoverFixture(t, f); len(report.Completed) != 1 || f.read("a.txt") != "accepted" {
+					t.Fatalf("restore did not complete forward: %+v", report)
+				}
+			} else if !errors.Is(err, versionstore.ErrWorkspaceRecoveryChanged) {
+				t.Fatalf("newer marker did not remain authoritative: %v", err)
+			}
+			if tc.newer {
+				if got := currentToken(); got != newerToken {
+					t.Fatalf("expected the newer provider disposition, got %q", got)
+				}
+				head := f.head("main")
+				if tc.stage == "adopt:captured" {
+					if head.ID != baseline.ID {
+						t.Fatalf("stale adopt published a head: %+v", head)
+					}
+				} else if head.Reason != versionstore.SnapshotRestore || head.Parent != baseline.ID {
+					t.Fatalf("newer provider disposition changed restore's authorized head: %+v", head)
+				}
+				if _, _, err := f.ops().SnapshotNow(ctx); !errors.Is(err, versionstore.ErrWorkspaceRecoveryRequired) {
+					t.Fatalf("ordinary snapshot ignored the newer disposition: %v", err)
+				}
+				if _, err := f.ops().Adopt(ctx); err != nil {
+					t.Fatalf("explicit adopt of the latest disposition: %v", err)
+				}
+			}
+			state, _, err := f.store.GetSubjectState(ctx, f.subject)
+			if err != nil || state.RecoveryRequired {
+				t.Fatalf("taken recovery disposition was not cleared: %v, %+v", err, state)
+			}
+		})
+	}
+}
+
+func TestWorkspaceRecoveryMarkerPreventsLiveCaptureAcceptance(t *testing.T) {
+	for _, operation := range []string{"adopt", "admission", "checkpoint"} {
+		t.Run(operation, func(t *testing.T) {
+			ctx := t.Context()
+			f := newVersionFixture(t)
+			f.write("a.txt", "accepted")
+			baseline, _, err := f.ops().SnapshotNow(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			publish := func(detail string) {
+				t.Helper()
+				if err := versionstore.RecordProviderRecovery(f.version.StateDir, f.subject, "unauthorized_mutation", detail); err != nil {
+					t.Fatal(err)
+				}
+			}
+			stage := "live:before_capture"
+			if operation == "adopt" {
+				stage = "adopt:before_capture"
+				publish("first disposition")
+			}
+			previous := workspaceVersionStageHook
+			t.Cleanup(func() { workspaceVersionStageHook = previous })
+			workspaceVersionStageHook = func(reached string) error {
+				if reached == stage {
+					f.write("a.txt", "unaccepted provider bytes")
+					publish("new disposition before capture")
+				}
+				return nil
+			}
+			switch operation {
+			case "adopt":
+				_, err = f.ops().Adopt(ctx)
+			case "admission":
+				err = runtimeCoordinator(t, f).admitWorkspaceVersion(ctx)
+			case "checkpoint":
+				err = f.ops().checkpointRun(ctx, "main")
+			}
+			noCrash()
+			if !errors.Is(err, versionstore.ErrWorkspaceRecoveryChanged) {
+				t.Fatalf("operation lost the newer disposition: %v", err)
+			}
+			events, err := f.events.ReadEvents()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, event := range events {
+				if payload, ok := decodeWorkspaceSnapshotEvent(event); ok && versionstore.SnapshotID(payload.SnapshotID) != baseline.ID {
+					t.Fatalf("stale operation left a recoverable snapshot commit: %+v", payload)
+				}
+			}
+			report := recoverFixture(t, f)
+			for _, action := range report.Snapshots {
+				if action.Kind != versionstore.RecoveryOrphaned {
+					t.Fatalf("restart published guarded bytes: %+v", action)
+				}
+			}
+			state, _, err := f.store.GetSubjectState(ctx, f.subject)
+			if err != nil || !state.RecoveryRequired || state.RecoveryDetail != "new disposition before capture" ||
+				f.head("main").ID != baseline.ID || f.read("a.txt") != "unaccepted provider bytes" {
+				t.Fatalf("guard, accepted head, or operator data changed: %+v, %v", state, err)
+			}
+		})
+	}
+}
+
 func hashTree(t *testing.T, root string) string {
 	t.Helper()
 	var lines []string

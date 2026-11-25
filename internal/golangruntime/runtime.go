@@ -38,8 +38,9 @@ const (
 	// TrustedStaticMode makes the provider's authority explicit in team.yaml.
 	TrustedStaticMode = "trusted-static"
 
-	defaultOutputLimit = 1024 * 1024
-	defaultErrorLimit  = 16 * 1024
+	defaultOutputLimit  = 1024 * 1024
+	defaultErrorLimit   = 16 * 1024
+	resultNormalizerEnv = "HUFU_INTERNAL_RESULT_NORMALIZER"
 )
 
 // actionStateSymbols lends trusted actions read-only runtime state and shared
@@ -129,6 +130,10 @@ func SourceFiles(program Program) ([]string, error) {
 
 // Execute invokes a prepared program through the current Hufu executable.
 func Execute(ctx context.Context, executable string, program Program, input []byte, env []string, outputLimit, errorLimit int) (Result, error) {
+	return execute(ctx, executable, program, input, env, outputLimit, errorLimit, false)
+}
+
+func execute(ctx context.Context, executable string, program Program, input []byte, env []string, outputLimit, errorLimit int, normalizer bool) (Result, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -154,8 +159,21 @@ func Execute(ctx context.Context, executable string, program Program, input []by
 	cmd.Stdin = bytes.NewReader(input)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	if len(env) > 0 {
-		cmd.Env = slices.Clone(env)
+	if normalizer {
+		scratch, err := os.MkdirTemp("", "hufu-normalizer-")
+		if err != nil {
+			return Result{}, fmt.Errorf("create result normalizer workspace: %w", err)
+		}
+		defer func() { _ = os.RemoveAll(scratch) }()
+		cmd.Dir = scratch
+		cmd.Env = []string{resultNormalizerEnv + "=1", "GOMAXPROCS=2", "TMPDIR=" + scratch}
+	} else {
+		if len(env) == 0 {
+			env = os.Environ()
+		}
+		cmd.Env = slices.DeleteFunc(slices.Clone(env), func(value string) bool {
+			return strings.HasPrefix(value, resultNormalizerEnv+"=")
+		})
 	}
 	configureProcessAttributes(cmd)
 	processutil.ConfigureCommandReaping(cmd, 500*time.Millisecond)
@@ -177,9 +195,21 @@ func Execute(ctx context.Context, executable string, program Program, input []by
 	return result, nil
 }
 
+// ExecuteNormalizer runs the data-only variant with an isolated environment.
+func ExecuteNormalizer(ctx context.Context, executable string, program Program, input []byte, limit int) (Result, error) {
+	return execute(ctx, executable, program, input, nil, limit, defaultErrorLimit, true)
+}
+
 // RunChild executes the hidden child mode. It is called before Cobra or any
 // interactive runtime initialization in cmd/hufu.
 func RunChild(source, expectedDigest string, in io.Reader, out, errOut io.Writer) int {
+	normalizer := os.Getenv(resultNormalizerEnv) == "1"
+	if normalizer {
+		if err := limitNormalizerMemory(); err != nil {
+			writeDiagnostic(errOut, "limit result normalizer memory: %v\n", err)
+			return 1
+		}
+	}
 	digest, err := inspectPackage(source)
 	if err != nil {
 		writeDiagnostic(errOut, "inspect trusted Go action: %v\n", err)
@@ -195,7 +225,18 @@ func RunChild(source, expectedDigest string, in io.Reader, out, errOut io.Writer
 		return 1
 	}
 	defer cleanup()
-	runtime := interp.New(interp.Options{GoPath: goPath, Stdin: in, Stdout: out, Stderr: errOut, Unrestricted: true})
+	runtime := interp.New(interp.Options{GoPath: goPath, Stdin: in, Stdout: out, Stderr: errOut, Unrestricted: !normalizer})
+	if err := loadActionSymbols(runtime, normalizer); err != nil {
+		writeDiagnostic(errOut, "load Go action symbols: %v\n", err)
+		return 1
+	}
+	return runActionPackage(runtime, in, out, errOut)
+}
+
+func loadActionSymbols(runtime *interp.Interpreter, normalizer bool) error {
+	if normalizer {
+		return runtime.Use(normalizerSymbols())
+	}
 	trustedSymbols := make(interp.Exports, len(stdlib.Symbols))
 	for packagePath, symbols := range stdlib.Symbols {
 		trustedSymbols[packagePath] = make(map[string]reflect.Value, len(symbols))
@@ -212,17 +253,15 @@ func RunChild(source, expectedDigest string, in io.Reader, out, errOut io.Writer
 		}
 	}
 	if err := runtime.Use(trustedSymbols); err != nil {
-		writeDiagnostic(errOut, "load Go standard library: %v\n", err)
-		return 1
+		return err
 	}
 	if err := runtime.Use(interp.Symbols); err != nil {
-		writeDiagnostic(errOut, "load Go interpreter symbols: %v\n", err)
-		return 1
+		return err
 	}
-	if err := runtime.Use(actionStateSymbols); err != nil {
-		writeDiagnostic(errOut, "load Hufu action state symbols: %v\n", err)
-		return 1
-	}
+	return runtime.Use(actionStateSymbols)
+}
+
+func runActionPackage(runtime *interp.Interpreter, in io.Reader, out, errOut io.Writer) int {
 	if _, err := runtime.EvalPathWithContext(context.Background(), "action"); err != nil {
 		writeDiagnostic(errOut, "load trusted Go action: %v\n", err)
 		return 1

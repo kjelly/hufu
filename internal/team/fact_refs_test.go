@@ -40,7 +40,7 @@ func TestResolveFactRefs_SubstitutesFactByName(t *testing.T) {
 		},
 	}}
 
-	resolved, err := c.resolveFactRefs(tasks)
+	resolved, err := c.resolveFactRefs(t.Context(), tasks)
 	if err != nil {
 		t.Fatalf("resolveFactRefs failed: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestResolveFactRefs_StringFactIsNotJSONQuoted(t *testing.T) {
 		Facts: map[string]any{"resolved_path": "/workspace/out/report.json"},
 	})
 	tasks := []TaskDef{{Agent: "w", Goal: "Read {path}.", FactRefs: []FactRef{{Name: "path", TaskID: "1", Fact: "resolved_path"}}}}
-	resolved, err := c.resolveFactRefs(tasks)
+	resolved, err := c.resolveFactRefs(t.Context(), tasks)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestResolveFactRefs_SubstitutesArtifactByDescription(t *testing.T) {
 		Artifacts: []ArtifactRef{{Path: artifactPath, Description: "items"}},
 	})
 	tasks := []TaskDef{{Agent: "w", Goal: "Read {items}.", FactRefs: []FactRef{{Name: "items", TaskID: "1", Artifact: "items"}}}}
-	resolved, err := c.resolveFactRefs(tasks)
+	resolved, err := c.resolveFactRefs(t.Context(), tasks)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestCharacterizationFactRefAcceptsStaleArtifactPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resolved, err := c.resolveFactRefs([]TaskDef{{
+	resolved, err := c.resolveFactRefs(t.Context(), []TaskDef{{
 		Agent: "worker", Goal: "consume {items}",
 		FactRefs: []FactRef{{Name: "items", TaskID: "producer", Artifact: "items"}},
 	}})
@@ -131,7 +131,7 @@ func TestResolveFactRefs_NoFactRefsPassThroughUnchanged(t *testing.T) {
 	t.Parallel()
 	c := &Coordinator{session: &TeamSession{}, taskTracker: NewTaskTracker()}
 	tasks := []TaskDef{{Agent: "a", Goal: "g1"}, {Agent: "b", Goal: "g2"}}
-	resolved, err := c.resolveFactRefs(tasks)
+	resolved, err := c.resolveFactRefs(t.Context(), tasks)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestResolveFactRefs_UnresolvedTaskFailsClosed(t *testing.T) {
 	t.Parallel()
 	c := &Coordinator{session: &TeamSession{}, taskTracker: NewTaskTracker()}
 	tasks := []TaskDef{{Agent: "w", Goal: "{x}", FactRefs: []FactRef{{Name: "x", TaskID: "99", Fact: "missing"}}}}
-	if _, err := c.resolveFactRefs(tasks); err == nil || !strings.Contains(err.Error(), "no submitted result yet") {
+	if _, err := c.resolveFactRefs(t.Context(), tasks); err == nil || !strings.Contains(err.Error(), "no submitted result yet") {
 		t.Fatalf("expected an unresolved-task error, got %v", err)
 	}
 }
@@ -153,7 +153,7 @@ func TestResolveFactRefs_UnknownFactNameFailsClosed(t *testing.T) {
 	t.Parallel()
 	c := coordinatorWithTaskResult("1", &TaskResult{TaskID: "1", Status: "success", Summary: "s", Source: "submitted", Facts: map[string]any{"a": 1}})
 	tasks := []TaskDef{{Agent: "w", Goal: "{x}", FactRefs: []FactRef{{Name: "x", TaskID: "1", Fact: "b"}}}}
-	if _, err := c.resolveFactRefs(tasks); err == nil || !strings.Contains(err.Error(), `no fact named "b"`) {
+	if _, err := c.resolveFactRefs(t.Context(), tasks); err == nil || !strings.Contains(err.Error(), `no fact named "b"`) {
 		t.Fatalf("expected an unknown-fact error, got %v", err)
 	}
 }
@@ -162,7 +162,7 @@ func TestResolveFactRefs_UnknownArtifactDescriptionFailsClosed(t *testing.T) {
 	t.Parallel()
 	c := coordinatorWithTaskResult("1", &TaskResult{TaskID: "1", Status: "success", Summary: "s", Source: "submitted"})
 	tasks := []TaskDef{{Agent: "w", Goal: "{x}", FactRefs: []FactRef{{Name: "x", TaskID: "1", Artifact: "manifest"}}}}
-	if _, err := c.resolveFactRefs(tasks); err == nil || !strings.Contains(err.Error(), `no artifact named "manifest"`) {
+	if _, err := c.resolveFactRefs(t.Context(), tasks); err == nil || !strings.Contains(err.Error(), `no artifact named "manifest"`) {
 		t.Fatalf("expected an unknown-artifact error, got %v", err)
 	}
 }
@@ -175,7 +175,7 @@ func TestResolveFactRefs_RequiresExactlyOneOfFactOrArtifact(t *testing.T) {
 		{Name: "x", TaskID: "1", Fact: "a", Artifact: "b"}, // both
 	} {
 		tasks := []TaskDef{{Agent: "w", Goal: "{x}", FactRefs: []FactRef{ref}}}
-		if _, err := c.resolveFactRefs(tasks); err == nil || !strings.Contains(err.Error(), "exactly one of fact or artifact") {
+		if _, err := c.resolveFactRefs(t.Context(), tasks); err == nil || !strings.Contains(err.Error(), "exactly one of fact or artifact") {
 			t.Fatalf("ref=%#v: expected an exactly-one error, got %v", ref, err)
 		}
 	}

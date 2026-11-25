@@ -255,18 +255,18 @@ func TestContractFinalReportPreservesEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &Coordinator{session: &TeamSession{ResultContracts: map[string]*CompiledResultContract{compiled.ID: compiled}}, taskTracker: NewTaskTracker()}
-	if _, configured, err := c.renderedContractFinalReport(); !configured || err == nil {
+	if _, configured, err := c.renderedContractFinalReport(t.Context()); !configured || err == nil {
 		t.Fatal("missing report did not fail closed")
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", ResultContract: &ref}})[0]
 	item.Status = TaskDone
 	item.TypedResult = &TaskResult{Status: TaskResultStatusSuccess, StructuredPayload: payload}
-	text, configured, err := c.renderedContractFinalReport()
+	text, configured, err := c.renderedContractFinalReport(t.Context())
 	if err != nil || !configured || !strings.Contains(text, "Verdict: unverified") || !strings.Contains(text, "Original limitation.") || !strings.Contains(text, "Source: document-a") || strings.Contains(text, "conclusive") {
 		t.Fatalf("report=%q err=%v", text, err)
 	}
 	payload.SHA256 = "forged"
-	if _, _, err := c.renderedContractFinalReport(); err == nil {
+	if _, _, err := c.renderedContractFinalReport(t.Context()); err == nil {
 		t.Fatal("tampered payload accepted")
 	}
 }

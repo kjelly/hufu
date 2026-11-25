@@ -1,20 +1,299 @@
 package team
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"charm.land/fantasy"
+	"github.com/kjelly/hufu/internal/execution"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 func observedFilesTestSchema() string {
 	return strings.Replace(artifactKeysTestSchema, `"pointers":`, `"runtime_owned_files_read":true,"pointers":`, 1)
+}
+
+func TestResultCollectionAuthenticatesObservedSourcesBeforeCollector(t *testing.T) {
+	for _, corrupt := range []bool{false, true} {
+		name := "temporary_io"
+		if corrupt {
+			name = "corrupt"
+		}
+		t.Run(name, func(t *testing.T) {
+			var calls atomic.Int32
+			var proposal atomic.Pointer[string]
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/chat/completions" {
+					_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 131072","model_info":{"general.architecture":"qwen2","qwen2.context_length":131072},"capabilities":["completion","tools"]}`)
+					return
+				}
+				calls.Add(1)
+				writeNativeRepairStream(t, w, map[string]any{"content": *proposal.Load()}, "stop", "test")
+			}))
+			t.Cleanup(server.Close)
+			c, item, cp, ref := beginCollectionWithObservedArtifact(t, server.URL+"/v1")
+			proposal.Store(new(fmt.Sprintf(`{"status":"success","summary":"original evidence verified","structured_payload":{"claims":[{"evidence":[%q]}]}}`, ref.ID)))
+			path := normalizedArtifactData(c, ref.ID)
+			var restore func()
+			want := RepairFailureCommit
+			if corrupt {
+				want = RepairFailureSource
+				if err := os.WriteFile(path, []byte("replaced source bytes"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				restore = faultNormalizedEvidencePath(t, path, true)
+			}
+			c = reopenRecoveryCoordinator(t, c)
+			forbidden := scriptWorker(failTurn(errors.New("unexpected work or legacy repair")))
+			c.workerAgentOverride, c.repairAgentOverride = forbidden, forbidden
+			c.executionRunID = "read-original-observed-source"
+			ctx := WithSessionResume(t.Context())
+			count, err := c.ResumeInterruptedTasks(ctx)
+			after := todoByID(t, c, item.ID)
+			pinned := currentResultCollection(after)
+			if count != 1 || localResultRejectionReason(err) != want || calls.Load() != 0 || forbidden.Calls() != 0 ||
+				pinned == nil || pinned.Work != cp.Work || pinned.TurnsUsed != cp.TurnsUsed {
+				t.Fatalf("count=%d status=%s checkpoint=%+v collector=%d work=%d err=%v", count, after.Status, pinned, calls.Load(), forbidden.Calls(), err)
+			}
+			if corrupt {
+				if after.Status != TaskBlocked || pinned.FailureReason != RepairFailureSource {
+					t.Fatalf("corrupt source was not blocked: %+v", pinned)
+				}
+				return
+			}
+			if after.Status != TaskInProgress || pinned.State != ResultCollectionPending {
+				t.Fatalf("temporary fault replaced pending checkpoint: %+v", pinned)
+			}
+			restore()
+			c = reopenRecoveryCoordinator(t, c)
+			c.workerAgentOverride, c.repairAgentOverride = forbidden, forbidden
+			c.executionRunID = "resume-observed-source"
+			count, err = c.ResumeInterruptedTasks(ctx)
+			after = todoByID(t, c, item.ID)
+			pinned = currentResultCollection(after)
+			if err != nil || count != 1 || after.Status != TaskDone || calls.Load() != 1 || forbidden.Calls() != 0 ||
+				pinned == nil || pinned.Work != cp.Work || pinned.TurnsUsed != 1 || after.TypedResult == nil ||
+				!slices.Equal(after.TypedResult.FilesRead, []FileRef{{Path: ref.ID}}) {
+				t.Fatalf("recovered count=%d status=%s checkpoint=%+v collector=%d work=%d err=%v", count, after.Status, pinned, calls.Load(), forbidden.Calls(), err)
+			}
+		})
+	}
+}
+
+func beginCollectionWithObservedArtifact(t *testing.T, endpoint string) (*Coordinator, *TodoItem, *ResultCollectionCheckpoint, ArtifactRef) {
+	t.Helper()
+	compiled, err := CompileResultContractDocument("keys.json", []byte(observedFilesTestSchema()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, item, ctx, receipt := resultCollectionTaskFixture(t, endpoint, true, func(spec *TodoSpec) {
+		spec.ResultContract = new(compiled.ref(true))
+	}, func(c *Coordinator) {
+		c.session.Agents["worker"].Tools = "view"
+		c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
+	})
+	source := observeCollectionArtifact(t, c, item, ctx, &receipt, "authorized observed source")
+	cp, err := c.beginResultCollection(ctx, item.ID, receipt, "complete work that read the original source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, item, cp, source
+}
+
+func observeCollectionArtifact(t *testing.T, c *Coordinator, item *TodoItem, ctx context.Context, receipt *ExecutionReceipt, content string) ArtifactRef {
+	t.Helper()
+	store, err := NewFileArtifactStore(c.artifactStoreRootPath(), c.projectDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.Put(ctx, PutArtifactRequest{Kind: "test", Path: "source.txt", Content: []byte(content), TaskID: "producer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt.ArtifactScope = &ArtifactAccessScope{RunID: receipt.RunID, TaskID: item.ID, Attempt: 1, AuthorizedRefs: []ArtifactRef{source.ArtifactRef}}
+	observeScopedCollectionArtifact(t, c, item, ctx, receipt, source.ID)
+	return source.ArtifactRef
+}
+
+func observeScopedCollectionArtifact(t *testing.T, c *Coordinator, item *TodoItem, ctx context.Context, receipt *ExecutionReceipt, sourceID string) {
+	t.Helper()
+	ctx = context.WithValue(ctx, artifactAccessScopeKey, receipt.ArtifactScope)
+	ctx = withInvocationMetadata(ctx, InvocationMetadata{RunID: receipt.RunID, TaskID: item.ID, AgentName: item.Agent, Attempt: 1, ModelExecutionID: receipt.ModelExecutionID})
+	ctx = tools.SetToolsAllowed(ctx, []string{"view"})
+	view := tools.NewViewTool(tools.WithArtifactOpener(c.openArtifactRef))
+	call := fantasy.ToolCall{ID: "observed-source", Name: "view", Input: fmt.Sprintf(`{"artifact_ref":%q,"byte_limit":1024}`, sourceID)}
+	response, err := view.Run(ctx, call)
+	if err != nil || response.IsError {
+		t.Fatalf("view: %v %s", err, response.Content)
+	}
+	if err := c.captureDecisionArtifactRead(ctx, view, call, &response); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResultCollectionFanoutAuthenticatesAllObservedSourcesBeforeProvider(t *testing.T) {
+	var providerCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providerCalls.Add(1)
+		http.Error(w, "source preflight must precede model discovery and collection", http.StatusBadRequest)
+	}))
+	t.Cleanup(server.Close)
+	compiled, err := CompileResultContractDocument("keys.json", []byte(observedFilesTestSchema()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, item, _, receipt := resultCollectionTaskFixture(t, server.URL+"/v1", true, func(spec *TodoSpec) {
+		spec.ResultContract = new(compiled.ref(true))
+		spec.ExecutionTopology = []execution.ExecutionTarget{spec.ExecutionTarget, spec.ExecutionTarget}
+	}, func(c *Coordinator) {
+		c.session.Agents["worker"].Tools = "view"
+		c.session.Agents["worker"].ExtraModels = []string{"ollama/test"}
+		c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
+	})
+	var checkpoints [2]*ResultCollectionCheckpoint
+	for i := range checkpoints {
+		var source ArtifactRef
+		_, _, checkpoints[i], err = beginFanoutWorkForRecovery(t, c, item, receipt, i, func(leaf *Coordinator, ctx context.Context, receipt *ExecutionReceipt) {
+			source = observeCollectionArtifact(t, leaf, item, ctx, receipt, fmt.Sprintf("slot %d original source", i))
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 1 {
+			if err := os.WriteFile(normalizedArtifactData(c, source.ID), []byte("replacement"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	c = reopenRecoveryCoordinator(t, c)
+	c.executionRunID = "cold-two-local-slots"
+	var boundaries atomic.Int32
+	ctx, cancel := context.WithCancelCause(WithSessionResume(t.Context()))
+	defer cancel(nil)
+	c.setInvocationWatchdog(c.newInvocationWatchdog(ctx, cancel))
+	defer c.setInvocationWatchdog(nil)
+	c.providerBoundaryStarted = false
+	c.providerBoundaryStart = func(context.Context, string) error {
+		boundaries.Add(1)
+		return errors.New("unverified sibling crossed the provider boundary")
+	}
+	count, err := c.ResumeInterruptedTasks(ctx)
+	after := todoByID(t, c, item.ID)
+	if count != 1 || localResultRejectionReason(err) != RepairFailureSource || after.Status != TaskBlocked || boundaries.Load() != 0 || providerCalls.Load() != 0 {
+		t.Fatalf("count=%d status=%s boundaries=%d calls=%d err=%v", count, after.Status, boundaries.Load(), providerCalls.Load(), err)
+	}
+	if !strings.Contains(err.Error(), "observed artifact source integrity") {
+		t.Fatalf("recovery did not reach the damaged observation: %v", err)
+	}
+	for i, original := range checkpoints {
+		if actual := currentFanoutCollection(after, i); !sameCanonicalEvidence(actual, original) {
+			t.Fatalf("slot %d changed during failed preflight: %+v", i, actual)
+		}
+	}
+}
+
+func TestResultCollectionFanoutChecksUnsettledDecisionObservationBeforeProvider(t *testing.T) {
+	c, item, _, receipt, decisionCalls := configuredDecisionCollectionFixture(t, "http://127.0.0.1:1/v1", 1, 0, func(spec *TodoSpec) {
+		spec.ExecutionTopology = append(spec.ExecutionTopology, spec.ExecutionTarget)
+	}, nil)
+	_, _, first, err := beginFanoutWorkForRecovery(t, c, item, receipt, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, second, err := beginFanoutWorkForRecovery(t, c, item, receipt, 1, func(leaf *Coordinator, ctx context.Context, receipt *ExecutionReceipt) {
+		observeScopedCollectionArtifact(t, leaf, item, ctx, receipt, receipt.ArtifactScope.AuthorizedRefs[0].ID)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := c.EventJournal().ReadEvents(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output string
+	for _, event := range events {
+		if event.Type != string(EventDecisionArtifactObserved) || event.TaskID != item.ID {
+			continue
+		}
+		var obs decisionArtifactObservation
+		if err := json.Unmarshal(event.Payload, &obs); err != nil {
+			t.Fatal(err)
+		}
+		if obs.ModelExecutionID == second.ModelExecutionID {
+			output = obs.Output.ID
+		}
+	}
+	if output == "" {
+		t.Fatal("fixture did not record the authentic decision-only observation")
+	}
+	damageFanoutCAS(t, normalizedArtifactData(c, output), false)
+	assertFanoutPreflightRejects(t, c, item, "observation_integrity_invalid", first, second)
+	if decisionCalls.Load() != 0 {
+		t.Fatalf("unsettled decision dispatched: %d", decisionCalls.Load())
+	}
+}
+
+func TestResultCollectionFanoutChecksAcceptedObservedSourcesAfterParentWriteFault(t *testing.T) {
+	for _, scenario := range []string{"corrupt", "missing"} {
+		t.Run(scenario, func(t *testing.T) {
+			c, item, checkpoints, cited := acceptedObservedFanoutFixture(t)
+			c.providerBoundaryStart = func(context.Context, string) error { return nil }
+			execJournal(t, c.session.Workspace, `CREATE TRIGGER refuse_cited_parent BEFORE INSERT ON events WHEN NEW.type='task_completed' BEGIN SELECT RAISE(ABORT, 'fixture parent completion write failure'); END`)
+			count, err := c.ResumeInterruptedTasks(WithSessionResume(t.Context()))
+			if count != 1 || localResultRejectionReason(err) != RepairFailureCommit {
+				t.Fatalf("expected aggregate publication fault: count=%d err=%v", count, err)
+			}
+			execJournal(t, c.session.Workspace, "DROP TRIGGER refuse_cited_parent")
+			damageFanoutCAS(t, normalizedArtifactData(c, cited.ID), scenario == "missing")
+			assertFanoutPreflightRejects(t, c, item, "observed artifact source integrity", checkpoints...)
+		})
+	}
+}
+
+func acceptedObservedFanoutFixture(t *testing.T) (*Coordinator, *TodoItem, []*ResultCollectionCheckpoint, ArtifactRef) {
+	t.Helper()
+	compiled, err := CompileResultContractDocument("keys.json", []byte(observedFilesTestSchema()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, item, _, receipt := resultCollectionTaskFixture(t, "http://127.0.0.1:1/v1", true, func(spec *TodoSpec) {
+		spec.ResultContract = new(compiled.ref(true))
+		spec.ExecutionTopology = append(spec.ExecutionTopology, spec.ExecutionTarget)
+	}, func(c *Coordinator) {
+		c.session.Agents["worker"].Tools = "view"
+		c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
+	})
+	var checkpoints []*ResultCollectionCheckpoint
+	var source ArtifactRef
+	for index := range 2 {
+		leaf, ctx, cp, err := beginFanoutWorkForRecovery(t, c, item, receipt, index, func(leaf *Coordinator, ctx context.Context, receipt *ExecutionReceipt) {
+			source = observeCollectionArtifact(t, leaf, item, ctx, receipt, fmt.Sprintf("accepted original source in slot %d", index))
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		commitNormalizedCollectionFixture(t, leaf, ctx, cp, fmt.Sprintf(`{"claims":[{"evidence":[%q]}]}`, source.ID))
+		current := todoByID(t, leaf, item.ID)
+		cp = currentResultCollection(current)
+		result, err := leaf.acceptedCollectionResult(t.Context(), current, cp)
+		if err != nil || result == nil || len(result.FilesRead) != 1 || result.FilesRead[0].Path != source.ID {
+			t.Fatalf("committed result lacks its optional observed source: %+v err=%v", result, err)
+		}
+		checkpoints = append(checkpoints, cp)
+	}
+	return reopenRecoveryCoordinator(t, c), item, checkpoints, source
 }
 
 func TestRuntimeOwnedFilesReadAdmission(t *testing.T) {

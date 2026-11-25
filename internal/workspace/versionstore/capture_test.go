@@ -70,6 +70,45 @@ func gitInit(t *testing.T, root string) {
 	run("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
 }
 
+func TestCapturePlanKeepsAdmittedGitDirectory(t *testing.T) {
+	ctx := t.Context()
+	store := openTestStore(t)
+	parent := t.TempDir()
+	root, replacement := filepath.Join(parent, "admitted"), filepath.Join(parent, "replacement")
+	writeFiles(t, root, map[string]string{"admitted.txt": "admitted"})
+	writeFiles(t, replacement, map[string]string{"replacement.txt": "replacement"})
+	gitInit(t, root)
+	gitInit(t, replacement)
+	req := baseRequest(root)
+	identity, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SubjectIdentity = identity
+	plan, err := store.planCapture(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.subject, err = openSubjectDirectory(plan.root, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = plan.subject.close() }()
+	if err := os.Rename(root, filepath.Join(parent, "moved")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, root); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := discoverCandidates(ctx, plan.subject.discoveryPath(), plan.policy)
+	if err != nil || len(candidates.paths) != 1 || candidates.paths[0] != "admitted.txt" {
+		t.Fatalf("Git discovery used the replacement after planning: %+v, %v", candidates, err)
+	}
+	if _, err := store.captureOnce(ctx, plan); !errors.Is(err, ErrVersionedWorkspaceUnresolved) {
+		t.Fatalf("capture accepted after the admitted path changed: %v", err)
+	}
+}
+
 func TestCaptureRecordsRegularFilesModesAndSymlinks(t *testing.T) {
 	store := openTestStore(t)
 	root := t.TempDir()

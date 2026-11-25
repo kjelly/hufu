@@ -33,7 +33,7 @@ func runtimeWorksetFixture(t *testing.T) (*Coordinator, *TodoItem, *CompiledResu
 	c.storeSubmittedTaskResult(producer.ID, result)
 	c.taskTracker.TodoList().UpdateStatus(producer.ID, TaskDone, "prepared")
 	ref := compiled.ref(true)
-	children, err := c.expandFanOutTasks([]TaskDef{{ID: "fanout", Agent: "worker", ResultContract: &ref, FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: producer.ID, Artifact: source.ID}, GoalTemplate: "Evaluate {label}"}}})
+	children, err := c.expandFanOutTasks(t.Context(), []TaskDef{{ID: "fanout", Agent: "worker", ResultContract: &ref, FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: producer.ID, Artifact: source.ID}, GoalTemplate: "Evaluate {label}"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,9 @@ func TestRuntimeResultInputsBindFrozenWorksetValues(t *testing.T) {
 			var rejection string
 			if external {
 				proposal := raw
-				request := AttemptRequest{Task: taskDefFromTodoItem(item), resultContractSchema: compiled, resultRuntimeInputs: func() (map[string]any, error) { return c.resultRuntimeInputValues(compiled, item.ID) }}
+				request := AttemptRequest{Task: taskDefFromTodoItem(item), resultContractSchema: compiled, resultRuntimeInputs: func(spec *CompiledResultContract) (map[string]any, error) {
+					return c.resultRuntimeInputValues(spec, item.ID)
+				}}
 				var err error
 				payload, err = canonicalExternalStructuredPayload(request, &WorkerResultProposal{StructuredPayloadJSON: &proposal}, nil)
 				if err != nil {
@@ -101,7 +103,7 @@ func TestRuntimeResultInputsBindFrozenWorksetValues(t *testing.T) {
 			if err := json.Unmarshal(encoded, &restored); err != nil {
 				t.Fatal(err)
 			}
-			if err := c.validateSubmittedEvidenceInputs(item.ID, &restored); err != nil {
+			if err := c.validateSubmittedEvidenceInputs(t.Context(), item.ID, &restored); err != nil {
 				t.Fatal(err)
 			}
 		}

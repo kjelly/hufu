@@ -128,6 +128,7 @@ func TestDispatchStatusEventShowsTaskTimeout(t *testing.T) {
 }
 
 func TestDispatchStatusEventShowsCodexActivity(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	w := &testStatusWriter{}
 	dispatchStatusEvent(w, &reporterState{}, team.StatusEvent{
 		Type: "codex_activity", Agent: "coder", Model: "codex/gpt-5.6-luna", Message: "Codex is still working (10s elapsed)",
@@ -140,6 +141,7 @@ func TestDispatchStatusEventShowsCodexActivity(t *testing.T) {
 }
 
 func TestDispatchStatusEventWrapsCodexActivityDetails(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	t.Setenv("COLUMNS", "40")
 	w := &testStatusWriter{}
 	dispatchStatusEvent(w, &reporterState{}, team.StatusEvent{
@@ -157,6 +159,7 @@ func TestDispatchStatusEventWrapsCodexActivityDetails(t *testing.T) {
 }
 
 func TestDispatchStatusEventCodexActivityFitsTerminalWidth(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	const width = 40
 	t.Setenv("COLUMNS", "40")
 
@@ -216,6 +219,7 @@ func TestDispatchStatusEventCodexActivityFitsTerminalWidth(t *testing.T) {
 }
 
 func TestDispatchStatusEventAdvancesANSIStyledCodexActivity(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	const width = 40
 	t.Setenv("COLUMNS", "40")
 

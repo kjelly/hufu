@@ -111,7 +111,7 @@ func TestRecoveredArtifactScopeRequiresCanonicalOrigin(t *testing.T) {
 			if err != nil || len(scope.AuthorizedRefs) != 1 || scope.RunID != c.executionRunID || scope.AuthorizedRefs[0].RunID != "source-run" {
 				t.Fatalf("scope=%+v err=%v", scope, err)
 			}
-			origins, err := c.runtimeActionRecoveryOrigins()
+			origins, err := c.runtimeActionRecoveryOrigins(t.Context())
 			if err != nil || len(origins) != 1 || origins["1"] != "source-run" {
 				t.Fatalf("native adapter lost canonical recovery origins: origins=%v err=%v", origins, err)
 			}

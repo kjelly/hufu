@@ -70,9 +70,15 @@ func todoReplayWorksetConflictError(conflicts todoReplayWorksetConflicts) error 
 // ReduceToSessionData replays a sequence of RunEvents to reconstruct a SessionData projection.
 func ReduceToSessionData(events []RunEvent) *SessionData {
 	events = normalizeReplayEvents(events)
-	session := NewSession()
+	session := newSessionAt("")
 	builds := make(map[string]*buildinfo.Info)
 	for _, e := range events {
+		if e.Timestamp != "" {
+			if session.CreatedAt == "" {
+				session.CreatedAt = e.Timestamp
+			}
+			session.UpdatedAt = e.Timestamp
+		}
 		switch e.Type {
 		case string(EventTaskRemoved):
 			var removed struct {
@@ -98,9 +104,6 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			var started LifecycleEventPayload
 			if json.Unmarshal(e.Payload, &started) == nil {
 				builds[e.RunID] = started.HufuBuild
-			}
-			if session.CreatedAt == "" && e.Timestamp != "" {
-				session.CreatedAt = e.Timestamp
 			}
 			if pending := session.PendingWrapUp; pending != nil && pending.RunID != "" && pending.RunID != e.RunID {
 				session.PendingWrapUp = nil
@@ -549,8 +552,7 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 			continue
 		}
 		if e.Type == string(EventTaskResultCollectionCheckpointed) {
-			var payload resultCollectionEvent
-			if validateResultCollectionEvent(e) == nil && json.Unmarshal(e.Payload, &payload) == nil {
+			if payload, err := decodeResultCollectionEvent(e); err == nil {
 				applyResultCollectionEvent(taskMap[e.TaskID], payload)
 			}
 			continue
@@ -1375,6 +1377,9 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 		case "task_verifying":
 			if !isReducerTerminalTaskStatus(item.Status) {
 				item.Status = TaskVerifying
+				if payload.Output != "" {
+					item.Output = payload.Output
+				}
 			}
 		case "task_planned":
 			if !isReducerTerminalTaskStatus(item.Status) {

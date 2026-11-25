@@ -754,7 +754,7 @@ func TestDelegationPolicyAdmitsRuntimeProducerFanOutAndPreservesFinish(t *testin
 		ID: "review-workset", Agent: "reviewer", Goal: "review workset", Phase: PhaseExecute, ContractID: "review-workset",
 		FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "produce-workset", Artifact: "workset-manifest"}, GoalTemplate: "review {name}"},
 	}
-	expanded, err := c.expandFanOutTasks([]TaskDef{review})
+	expanded, err := c.expandFanOutTasks(t.Context(), []TaskDef{review})
 	if err != nil {
 		t.Fatalf("expand review workset: %v", err)
 	}
@@ -821,7 +821,7 @@ func TestDelegationPolicyAdmitsRuntimeProducerFanOutAndPreservesFinish(t *testin
 	}
 
 	beforeSecondDispatch := len(tracker.TodoList().Items())
-	expandedAgain, err := c.expandFanOutTasks([]TaskDef{review})
+	expandedAgain, err := c.expandFanOutTasks(t.Context(), []TaskDef{review})
 	if err != nil {
 		t.Fatalf("re-expand review workset: %v", err)
 	}

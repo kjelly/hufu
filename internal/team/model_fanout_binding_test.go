@@ -1,8 +1,12 @@
 package team
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -12,6 +16,88 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/execution"
 )
+
+func TestModelFanoutRetryResumesDurableBackendSession(t *testing.T) {
+	for _, scenario := range []string{"stable_slot", "legacy_task", "ambiguous_legacy"} {
+		t.Run(scenario, func(t *testing.T) {
+			if scenario == "stable_slot" || scenario == "legacy_task" {
+				skipUnsupportedCodexIntegration(t)
+			}
+			const threadID = "thread-reusable"
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/chat/completions" {
+					_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 131072","model_info":{"general.architecture":"qwen2","qwen2.context_length":131072},"capabilities":["completion","tools"]}`)
+					return
+				}
+				writeNativeRepairStream(t, w, map[string]any{"content": "local result"}, "stop", "test")
+			}))
+			t.Cleanup(server.Close)
+			external := execution.ExecutionTarget{Backend: "codex", Model: "gpt-5-codex"}
+			local := execution.ExecutionTarget{Backend: "ollama", Model: "test"}
+			if scenario == "ambiguous_legacy" {
+				local = external
+			}
+			topology := []execution.ExecutionTarget{external, local}
+			c, item, _, _ := resultCollectionTaskFixture(t, server.URL+"/v1", true, func(spec *TodoSpec) {
+				spec.Model, spec.SideEffect, spec.Recovery = external.String(), SideEffectNone, RecoveryRetry
+				spec.Execution = ExecutionContract{}
+				spec.ExecutionTopology, spec.ExecutionTarget = topology, external
+			}, func(c *Coordinator) {
+				def := c.session.Agents["worker"]
+				def.Generation.Model, def.ExtraModels = external.String(), []string{local.String()}
+				def.ResultTransport = agent.ResultTransportTool
+				def.Tools = "view"
+				c.coreTools = workerInvariantCoreTools(t)
+				fixture := newCodexE2ECoordinatorBase(t, newCodexWorkspace(t), []fakeCodexStep{
+					codexInitializeStep(t),
+					codexThreadResumeStep(t, threadID, c.projectDir, codexSandboxReadOnly),
+					fakeCodexTurnCompletedStep(t, "turn-reused", `{"status":"success","summary":"reused external session"}`),
+				}, def)
+				c.session.Config.SubagentProviders = fixture.session.Config.SubagentProviders
+			})
+			binding := ProviderBinding{Provider: external.Backend, SessionID: threadID, ResumeSupported: true}
+			if scenario == "stable_slot" {
+				leaf := cloneCoordinator(c, c.session)
+				leaf.modelFanout = &modelFanoutBinding{parent: c, taskID: item.ID, index: 0, target: external}
+				leaf.taskTracker = NewTaskTracker()
+				leaf.taskTracker.TodoList().AddReserved([]*TodoItem{cloneTodoItem(item)})
+				if err := leaf.persistProviderSessionBinding(t.Context(), item.ID, 1, binding); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := c.persistProviderSessionBinding(t.Context(), item.ID, 1, binding); err != nil {
+				t.Fatal(err)
+			}
+			c = reopenRecoveryCoordinator(t, c)
+			c.coreTools = workerInvariantCoreTools(t)
+			c.executionRunID = "resumed-fanout-attempt"
+			count, err := c.ResumeInterruptedTasks(WithSessionResume(t.Context()))
+			resumed := todoByID(t, c, item.ID)
+			calls := readRawCalls(t, filepath.Join(filepath.Dir(os.Getenv(fakeCodexServerScriptEnvVar)), "raw_calls.log"))
+			if scenario == "ambiguous_legacy" {
+				if count != 1 || err == nil || len(calls) != 0 {
+					t.Fatalf("ambiguous legacy binding reached Codex: count=%d calls=%v err=%v", count, rawCallMethods(t, calls), err)
+				}
+				return
+			}
+			if count != 1 || err != nil || resumed.Status != TaskDone || resumed.OccurrenceRevision <= item.OccurrenceRevision {
+				t.Fatalf("ordinary recovery count=%d status=%s revision=%d original=%d err=%v", count, resumed.Status, resumed.OccurrenceRevision, item.OccurrenceRevision, err)
+			}
+			if want := []string{"initialize", "thread/resume", "turn/start"}; !slices.Equal(rawCallMethods(t, calls), want) {
+				t.Fatalf("recovered Codex calls = %v, want %v", rawCallMethods(t, calls), want)
+			}
+			var params struct {
+				ThreadID string `json:"threadId"`
+			}
+			if err := json.Unmarshal(calls[1]["params"], &params); err != nil || params.ThreadID != threadID {
+				t.Fatalf("resumed wrong session: %s, err=%v", calls[1]["params"], err)
+			}
+			saved, err := c.readFanoutBackendSession(resumed, 0)
+			if err != nil || saved == nil || saved.Binding.SessionID != threadID {
+				t.Fatalf("retry did not retain its slot session: %+v, err=%v", saved, err)
+			}
+		})
+	}
+}
 
 func TestModelFanoutExecutionIDKeepsPersistedIdentity(t *testing.T) {
 	for _, test := range []struct {
@@ -54,7 +140,7 @@ func TestModelFanoutRejectsDriftBeforeProvider(t *testing.T) {
 				task.ExecutionTopology[1].Model = "forged"
 				want = "differs from parent admitted topology"
 			}
-			_, err := parent.executeSingleAgentWithModel(t.Context(), "worker", def, task, item.ID, "extra-1", 1)
+			_, err := parent.executeSingleAgentWithModel(t.Context(), "worker", def, task, item.ID, "extra-1", 1, nil)
 			if err == nil || !strings.Contains(err.Error(), want) {
 				t.Fatalf("drift rejection: %v", err)
 			}

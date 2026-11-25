@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -67,12 +68,12 @@ func releaseLocalExecutionWorldLease(root string, lease *localExecutionWorldLeas
 // roots, sanitize the environment, and take a baseline snapshot so an
 // external provider's actual effect can be verified afterward.
 type LocalExecutionWorld struct {
-	snapshotter WorkspaceSnapshotter
+	snapshotter *defaultWorkspaceSnapshotter
 }
 
 // NewLocalExecutionWorld returns the "local-sandbox" ExecutionWorld.
 func NewLocalExecutionWorld() *LocalExecutionWorld {
-	return &LocalExecutionWorld{snapshotter: NewWorkspaceSnapshotter()}
+	return &LocalExecutionWorld{snapshotter: &defaultWorkspaceSnapshotter{}}
 }
 
 func (w *LocalExecutionWorld) Name() string { return localExecutionWorldName }
@@ -99,7 +100,8 @@ func (w *LocalExecutionWorld) Prepare(ctx context.Context, spec ExecutionWorldSp
 	if err != nil {
 		return nil, fmt.Errorf("execution world: resolve cwd: %w", err)
 	}
-	if !isWithinRoot(absRoot, absCWD) {
+	relativeCWD, err := filepath.Rel(absRoot, absCWD)
+	if err != nil || !filepath.IsLocal(relativeCWD) {
 		return nil, fmt.Errorf("execution world: cwd %q is not inside root %q", cwd, root)
 	}
 
@@ -116,9 +118,12 @@ func (w *LocalExecutionWorld) Prepare(ctx context.Context, spec ExecutionWorldSp
 		readOnly = spec.ReadOnlyRoots
 	}
 
-	leaseRoot, err := resolveSnapshotRoot(absRoot)
+	leaseRoot, admittedRoot, err := resolveSnapshotDirectory(absRoot)
 	if err != nil {
 		return nil, fmt.Errorf("execution world: resolve lease root: %w", err)
+	}
+	if spec.RootIdentity != nil && leaseRoot != absRoot {
+		return nil, errWorkspaceSnapshotRootChanged
 	}
 	ignoredSnapshotPaths, err := hufuControlWorkspaceSnapshotPaths(leaseRoot, spec.ControlWorkspace)
 	if err != nil {
@@ -132,14 +137,36 @@ func (w *LocalExecutionWorld) Prepare(ctx context.Context, spec ExecutionWorldSp
 	if err != nil {
 		return nil, fmt.Errorf("execution world: acquire workspace lease: %w", err)
 	}
-	baseline, err := w.snapshot(ctx, absRoot, ignoredSnapshotPaths)
+	rootDirectory, cwdDirectory, err := openLocalExecutionDirectories(leaseRoot, relativeCWD)
 	if err != nil {
 		releaseLease()
+		return nil, fmt.Errorf("execution world: pin workspace directories: %w", err)
+	}
+	releaseWorld := sync.OnceFunc(func() {
+		if cwdDirectory != rootDirectory {
+			_ = cwdDirectory.Close()
+		}
+		_ = rootDirectory.Close()
+		releaseLease()
+	})
+	rootInfo, err := rootDirectory.Stat()
+	if err != nil {
+		releaseWorld()
+		return nil, fmt.Errorf("execution world: stat pinned workspace root: %w", err)
+	}
+	if !os.SameFile(admittedRoot, rootInfo) ||
+		(spec.RootIdentity != nil && !os.SameFile(spec.RootIdentity, rootInfo)) {
+		releaseWorld()
+		return nil, errWorkspaceSnapshotRootChanged
+	}
+	baseline, err := w.snapshotter.snapshotPinned(ctx, absRoot, leaseRoot, rootDirectory, ignoredSnapshotPaths)
+	if err != nil {
+		releaseWorld()
 		return nil, fmt.Errorf("execution world: baseline snapshot: %w", err)
 	}
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		releaseLease()
+		releaseWorld()
 		return nil, ctxErr
 	}
 
@@ -159,26 +186,44 @@ func (w *LocalExecutionWorld) Prepare(ctx context.Context, spec ExecutionWorldSp
 		Environment:          environment,
 		Baseline:             baseline,
 		snapshotIgnoredPaths: ignoredSnapshotPaths,
-		releaseLease:         releaseLease,
+		localRoot:            rootDirectory,
+		localCWD:             cwdDirectory,
+		releaseLease:         releaseWorld,
 	}, nil
 }
 
-func (w *LocalExecutionWorld) Snapshot(ctx context.Context, prepared *PreparedExecutionWorld) (WorkspaceSnapshot, error) {
-	if prepared == nil {
-		return WorkspaceSnapshot{}, fmt.Errorf("execution world: prepared world is unavailable")
+func openLocalExecutionDirectories(root, relativeCWD string) (*os.File, *os.File, error) {
+	rootHandle, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, nil, err
 	}
-	return w.snapshot(ctx, prepared.Root, prepared.snapshotIgnoredPaths)
+	defer func() { _ = rootHandle.Close() }()
+	rootDir, err := rootHandle.Open(".")
+	if err != nil {
+		return nil, nil, err
+	}
+	if relativeCWD == "." {
+		return rootDir, rootDir, nil
+	}
+	cwdHandle, err := rootHandle.OpenRoot(relativeCWD)
+	if err != nil {
+		_ = rootDir.Close()
+		return nil, nil, err
+	}
+	defer func() { _ = cwdHandle.Close() }()
+	cwdDir, err := cwdHandle.Open(".")
+	if err != nil {
+		_ = rootDir.Close()
+		return nil, nil, err
+	}
+	return rootDir, cwdDir, nil
 }
 
-func (w *LocalExecutionWorld) snapshot(ctx context.Context, root string, ignoredPaths []string) (WorkspaceSnapshot, error) {
-	if len(ignoredPaths) == 0 {
-		return w.snapshotter.Snapshot(ctx, root)
+func (w *LocalExecutionWorld) Snapshot(ctx context.Context, prepared *PreparedExecutionWorld) (WorkspaceSnapshot, error) {
+	if prepared == nil || prepared.localRoot == nil {
+		return WorkspaceSnapshot{}, fmt.Errorf("execution world: prepared world is unavailable")
 	}
-	snapshotter, ok := w.snapshotter.(workspaceSnapshotterWithIgnoredFiles)
-	if !ok {
-		return WorkspaceSnapshot{}, fmt.Errorf("execution world: snapshotter cannot enforce Hufu checkpoint exclusions")
-	}
-	return snapshotter.SnapshotWithIgnoredFiles(ctx, root, ignoredPaths)
+	return w.snapshotter.snapshotPinned(ctx, prepared.Root, prepared.Baseline.Root, prepared.localRoot, prepared.snapshotIgnoredPaths)
 }
 
 // Release relinquishes the process-local shared-workspace lease. A future

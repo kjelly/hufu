@@ -20,13 +20,9 @@ type task struct {
 	EvidenceFrom []string `json:"evidence_from"`
 	SnapshotID   string   `json:"run_input_snapshot_id"`
 	Binding      *struct {
-		Bindings     map[string]string `json:"bindings"`
-		TouchedPaths []string          `json:"touched_paths"`
-		Inputs       []struct {
-			ID     string `json:"id"`
-			Kind   string `json:"kind"`
-			SHA256 string `json:"sha256"`
-		} `json:"inputs"`
+		Bindings     map[string]string   `json:"bindings"`
+		TouchedPaths []string            `json:"touched_paths"`
+		Inputs       []sourceArtifactRef `json:"inputs"`
 	} `json:"workset_binding"`
 	Receipt *struct {
 		RunID              string `json:"run_id"`

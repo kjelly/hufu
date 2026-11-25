@@ -68,7 +68,7 @@ func collectionFrozenPathProducer(t *testing.T, c *Coordinator, snapshot *RunInp
 		t.Fatal(err)
 	}
 	*input = assigned.ArtifactRef
-	manifest, err := json.Marshal(WorksetManifest{SchemaVersion: WorksetSchemaVersion, Items: []WorksetItem{{Key: "sample", TouchedPaths: paths, Inputs: []ArtifactRef{*input}}}})
+	manifest, err := json.Marshal(WorksetManifest{SchemaVersion: WorksetSchemaVersion, Items: []WorksetItem{{Key: "sample", Bindings: map[string]string{"identity": "frozen-sample"}, TouchedPaths: paths, Inputs: []ArtifactRef{*input}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func collectionFrozenPathProducer(t *testing.T, c *Coordinator, snapshot *RunInp
 	if err := c.CommitTaskTransition(t.Context(), item.ID, TaskInProgress, TaskDone, "prepared", "prepared", map[string]any{"execution_receipt": receipt}); err != nil {
 		t.Fatal(err)
 	}
-	expanded, err := c.expandFanOutTasks([]TaskDef{{ID: "research", Agent: "worker", FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: definition.ID, Artifact: source.ID}, GoalTemplate: "Review the immutable source."}}})
+	expanded, err := c.expandFanOutTasks(t.Context(), []TaskDef{{ID: "research", Agent: "worker", FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: definition.ID, Artifact: source.ID}, GoalTemplate: "Review the immutable source."}}})
 	if err != nil || len(expanded) != 1 {
 		t.Fatalf("expand assigned paths: %v", err)
 	}

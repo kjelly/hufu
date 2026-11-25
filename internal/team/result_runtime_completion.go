@@ -44,17 +44,21 @@ func bindRuntimeCompletion(pointer, status, summary string, supplied bool, looku
 	if pointer == "" || (status != "" && validWorkerResultProposalStatus(status) && !taskResultStatusIsSuccessful(status)) {
 		return status, summary, nil
 	}
-	if supplied || status != "" || summary != "" {
-		return "", "", fmt.Errorf("successful status and summary are runtime-owned; omit both fields")
-	}
 	if lookup == nil {
-		return "", "", fmt.Errorf("runtime completion source is unavailable")
+		return "", "", rejectResultSourceRead(fmt.Errorf("runtime completion source is unavailable"))
 	}
 	values, err := lookup()
 	if err != nil {
-		return "", "", err
+		return "", "", rejectResultSourceRead(err)
 	}
-	return runtimeCompletionFields(values[pointer])
+	statusFromSource, summaryFromSource, err := runtimeCompletionFields(values[pointer])
+	if err != nil {
+		return "", "", rejectResultSourceRead(err)
+	}
+	if supplied || status != "" || summary != "" {
+		return "", "", rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("successful status and summary are runtime-owned; omit both fields"))
+	}
+	return statusFromSource, summaryFromSource, nil
 }
 
 func omitRuntimeCompletionRequirements(parameters map[string]any, required []string) []string {
@@ -72,4 +76,17 @@ func runtimeCompletionFailure(compiled *CompiledResultContract, status string) b
 
 func hasRuntimeCompletion(compiled *CompiledResultContract) bool {
 	return compiled != nil && compiled.runtimeCompletion != ""
+}
+
+// The completion input supplies a successful outcome. An unsuccessful
+// envelope can omit that input while still requiring the other sources.
+func withoutRuntimeCompletionInput(compiled *CompiledResultContract) *CompiledResultContract {
+	subset := *compiled
+	subset.runtimeInputs = nil
+	for _, spec := range compiled.runtimeInputs {
+		if spec.Target != compiled.runtimeCompletion {
+			subset.runtimeInputs = append(subset.runtimeInputs, spec)
+		}
+	}
+	return &subset
 }

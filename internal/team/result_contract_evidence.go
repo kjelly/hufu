@@ -2,6 +2,7 @@ package team
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -603,7 +604,7 @@ func finalReportTemplateValue(value any) any {
 
 // renderedContractFinalReport seals the declared terminal worker's payload
 // without a second model synthesis. Templates are team-owned and schema-hashed.
-func (c *Coordinator) renderedContractFinalReport() (string, bool, error) {
+func (c *Coordinator) renderedContractFinalReport(ctx context.Context) (string, bool, error) {
 	if c == nil || c.session == nil || c.taskTracker == nil {
 		return "", false, nil
 	}
@@ -637,14 +638,8 @@ func (c *Coordinator) renderedContractFinalReport() (string, bool, error) {
 		return "", false, nil
 	}
 	payload := selected.TypedResult.StructuredPayload
-	if err := c.validateSubmittedEvidenceInputs(selected.ID, payload); err != nil {
+	if err := c.validateAcceptedDependencyPayloadWithContext(ctx, selected); err != nil {
 		return "", true, err
-	}
-	if err := c.validateResultReferenceReads(selected.ID, selected.TypedResult); err != nil {
-		return "", true, err
-	}
-	if payload.Contract != *selected.ResultContract {
-		return "", true, fmt.Errorf("final report payload identity does not match its contract or hash")
 	}
 	compiled, err := c.compiledResultContract(selected.ResultContract)
 	if err != nil {

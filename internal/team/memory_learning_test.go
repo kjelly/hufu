@@ -3,8 +3,11 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+
+	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
@@ -239,4 +242,64 @@ func memoryValidationCoordinator(t *testing.T) (*Coordinator, MemoryInjectionMan
 	}
 	c := &Coordinator{contextRepo: repo, taskTracker: tracker, executionRunID: "run-1", taskAttempts: map[string]int{tasks[0].ID: 1}}
 	return c, manifest
+}
+
+func TestDirectResultChecksLiveMemoryBeforeOtherClaims(t *testing.T) {
+	c, manifest := memoryValidationCoordinator(t)
+	c.session = &TeamSession{Config: agent.TeamConfig{MemoryLearning: agent.MemoryLearningPolicy{Mode: agent.MemoryLearningObserve}}}
+	tool := &submitResultTool{coordinator: c, todoID: manifest.TaskID}
+	for _, tc := range []struct {
+		item string
+		want RepairFailureReason
+	}{{"memory-1", RepairFailureInvalidSchema}, {"unknown-memory", RepairFailureSource}} {
+		raw := fmt.Sprintf(`{"status":"success","summary":["malformed"],"memory_uses":[{"retrieval_id":%q,"context_item_id":%q,"disposition":"APPLIED","confidence":1}]}`, manifest.RetrievalID, tc.item)
+		resp, err := tool.Run(t.Context(), fantasy.ToolCall{Name: submitResultToolName, Input: raw})
+		if err != nil || submissionFailureMetadata(resp.Metadata) != tc.want {
+			t.Fatalf("memory %s rejected as %s, %v, want %s", tc.item, resp.Metadata, err, tc.want)
+		}
+	}
+}
+
+func TestNormalizerChecksLegacyMemoryClaimsBeforeAction(t *testing.T) {
+	fixture, manifest := memoryValidationCoordinator(t)
+	calls := 0
+	c, _, item := newDirectNormalizationRun(t, func(ctx context.Context, draft []byte) ([]byte, error) {
+		calls++
+		return echoNormalization(ctx, draft)
+	}, nil)
+	c.contextRepo = fixture.contextRepo
+	c.session.Config.MemoryLearning.Mode = agent.MemoryLearningObserve
+	manifest.TaskID, manifest.RunID, manifest.Agent = item.ID, c.executionRunID, item.Agent
+	if err := c.taskTracker.TodoList().SetMemoryManifest(item.ID, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	ctx := occurrenceTestContext(c, item.ID, manifest.Attempt)
+	tool := &submitResultTool{coordinator: c, todoID: item.ID}
+	for _, tc := range []struct {
+		field, use string
+		want       RepairFailureReason
+	}{
+		{"Memory_Uses", `"context_item_id":"unknown-memory","disposition":"applied","confidence":1`, RepairFailureSource},
+		{"memory_uses", `"Context_Item_Id":"unknown-memory","disposition":"applied","confidence":1`, RepairFailureSource},
+		{"memory_uses", `"context_item_id":"unknown-memory","unknown":true`, RepairFailureSource},
+		{"memory_uses", `"context_item_id":"memory-1","context_item_id":"unknown-memory","disposition":"invalid"`, RepairFailureSource},
+		{"memory_uses", `"retrieval_id":"forged-retrieval","context_item_id":"memory-1","confidence":"invalid"`, RepairFailureSource},
+		{"memory_uses", `"context_item_id":"memory-1","disposition":"invalid","confidence":1`, RepairFailureInvalidSchema},
+		{"memory_uses", `"context_item_id":"memory-1","disposition":"applied","confidence":2`, RepairFailureInvalidSchema},
+		{"Memory_Uses", `"Context_Item_Id":"memory-1","disposition":"applied","confidence":1`, ""},
+	} {
+		wire := fmt.Sprintf(`{"status":"success","summary":"done",%q:[{"retrieval_id":%q,%s}],"structured_payload":%s}`,
+			tc.field, manifest.RetrievalID, tc.use, approvedNormalizationDraft)
+		response, err := tool.Run(ctx, toolCallForTest(wire))
+		if tc.want != "" {
+			if err != nil || !response.IsError || submissionFailureMetadata(response.Metadata) != tc.want || calls != 0 {
+				t.Fatalf("memory %s rejected as %s, want %s, calls=%d response=%+v err=%v", tc.use, response.Metadata, tc.want, calls, response, err)
+			}
+			continue
+		}
+		result := c.GetTaskResult(item.ID)
+		if err != nil || response.IsError || calls != 1 || result == nil || len(result.MemoryUses) != 1 || result.MemoryUses[0].ContextItemID != manifest.Items[0].ContextItemID {
+			t.Fatalf("bound memory claim was not settled: calls=%d result=%+v response=%+v err=%v", calls, result, response, err)
+		}
+	}
 }

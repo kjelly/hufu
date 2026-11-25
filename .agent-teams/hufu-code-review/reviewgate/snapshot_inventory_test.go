@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -25,6 +26,8 @@ func TestSnapshotHandoffFitsRuntimeOutputAndPassesFinalAudit(t *testing.T) {
 	identity := snapshotIdentity{Revision: "frozen-head", Batch: 1, BatchCount: 1, WorksetsPerBatch: 30, FileCount: 2800}
 	digest := sha256.New()
 	const primaryPath = "large.go"
+	firstFragment := []byte("package p\n")
+	firstFragmentHash := fmt.Sprintf("%x", sha256.Sum256(firstFragment))
 	for i := range identity.FileCount {
 		file := snapshotInventoryFile{
 			Path: fmt.Sprintf("docs/%04d-%s.md", i, strings.Repeat("inventory", 12)), Mode: "100644",
@@ -42,7 +45,7 @@ func TestSnapshotHandoffFitsRuntimeOutputAndPassesFinalAudit(t *testing.T) {
 			{Sources: []snapshotPlannedSource{{Path: primaryPath, Spans: []snapshotSpan{{Start: 0, End: 10, StartLine: 1, EndLine: 1}}}}},
 			{Sources: []snapshotPlannedSource{{Path: primaryPath, Spans: []snapshotSpan{{Start: 10, End: 20, StartLine: 2, EndLine: 2}}}}},
 		},
-		BatchSourceSHA256: []string{strings.Repeat("c", 64), strings.Repeat("d", 64)},
+		BatchSourceSHA256: []string{firstFragmentHash, strings.Repeat("d", 64)},
 	}
 	identity.Hash = hex.EncodeToString(digest.Sum(nil))
 	identity.ID = "sha256:" + identity.Hash
@@ -53,10 +56,26 @@ func TestSnapshotHandoffFitsRuntimeOutputAndPassesFinalAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	fullInventory := raw(t, identity)
-	if err := os.WriteFile(filepath.Join(workspace, "inventory.json"), fullInventory, 0o600); err != nil {
+	artifactHash := fmt.Sprintf("%x", sha256.Sum256(fullInventory))
+	artifactDataDirectory := filepath.Join(runtimestore.ArtifactRoot(root), "data")
+	if err := os.MkdirAll(artifactDataDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	artifactHash := fmt.Sprintf("%x", sha256.Sum256(fullInventory))
+	if err := os.WriteFile(filepath.Join(artifactDataDirectory, "sha256-"+artifactHash), fullInventory, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	firstInventory := raw(t, map[string]any{
+		"review_revision": identity.Revision,
+		"sources": []any{map[string]any{"path": primaryPath, "role": "primary", "available_spans": []any{
+			map[string]any{"bundle_start": 0, "bundle_end": len(firstFragment), "start_line": 1, "end_line": 1},
+		}}},
+	})
+	firstInventoryHash := fmt.Sprintf("%x", sha256.Sum256(firstInventory))
+	for hash, data := range map[string][]byte{firstFragmentHash: firstFragment, firstInventoryHash: firstInventory} {
+		if err := os.WriteFile(filepath.Join(artifactDataDirectory, "sha256-"+hash), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	plan := identity.Plan
 	identity.Files = nil
 	identity.Plan = nil
@@ -117,12 +136,13 @@ func TestSnapshotHandoffFitsRuntimeOutputAndPassesFinalAudit(t *testing.T) {
 		item.Binding.TouchedPaths = []string{primaryPath}
 		sha := plan.BatchSourceSHA256[i]
 		id := "sha256-" + sha
-		item.Binding.Inputs = append(item.Binding.Inputs, struct {
-			ID     string `json:"id"`
-			Kind   string `json:"kind"`
-			SHA256 string `json:"sha256"`
-		}{ID: id, Kind: "review_source_snapshot", SHA256: sha})
+		item.Binding.Inputs = append(item.Binding.Inputs, sourceArtifactRef{ID: id, Kind: "review_source_snapshot", SHA256: sha, TaskID: producer.ID, Bytes: int64(len(firstFragment))})
 		item.Result.FilesRead[0].Path = id
+		if i == 0 {
+			inventoryID := "sha256-" + firstInventoryHash
+			item.Binding.Inputs = append(item.Binding.Inputs, sourceArtifactRef{ID: inventoryID, Kind: "review_evidence_inventory", SHA256: firstInventoryHash, TaskID: producer.ID, Bytes: int64(len(firstInventory))})
+			item.Result.FilesRead[1].Path = inventoryID
+		}
 		fixture.Tasks[i] = item
 		reviews = append(reviews, entry(item, r, t))
 	}
@@ -178,6 +198,13 @@ func TestSnapshotHandoffFitsRuntimeOutputAndPassesFinalAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	coveragePath := filepath.Join(artifactDataDirectory, result.Artifacts[0].ID)
+	if err := os.WriteFile(coveragePath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(artifactPath); err != nil {
+		t.Fatal(err)
+	}
 	var coverage snapshotCoverage
 	if err := json.Unmarshal(data, &coverage); err != nil {
 		t.Fatal(err)
@@ -199,7 +226,7 @@ func TestSnapshotHandoffFitsRuntimeOutputAndPassesFinalAudit(t *testing.T) {
 			item.Result.Findings = []finding{{Location: primaryPath + ":2", Summary: "outside", Severity: "info", Evidence: []string{item.Binding.Inputs[0].ID}}}
 			r := record{Kind: "review", Revision: identity.Revision, Key: item.Binding.Bindings["key"], Lens: "general", Findings: item.Result.Findings}
 			item.Result.Payload.Value = raw(t, payload{Record: raw(t, r)})
-		}, "outside the assigned snapshot fragment", ""},
+		}, "outside the cited frozen source side", ""},
 		{"evidence gap in one fragment", func(view *sourceSession) {
 			item := &view.Tasks[1]
 			item.Result.Status = "completed_with_gaps"
@@ -213,7 +240,7 @@ func TestSnapshotHandoffFitsRuntimeOutputAndPassesFinalAudit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			view.Tasks[3].Workspace = workspace
+			view.ArtifactDataDirectory = artifactDataDirectory
 			tc.change(&view)
 			result, err := collectSnapshotCoverage(view)
 			if tc.wantError != "" {
@@ -240,10 +267,10 @@ func TestSnapshotHandoffFitsRuntimeOutputAndPassesFinalAudit(t *testing.T) {
 		split.Plan.BatchSourceSHA256 = split.Plan.BatchSourceSHA256[:1]
 		data := raw(t, split)
 		root := t.TempDir()
-		if err := os.WriteFile(filepath.Join(root, "inventory.json"), data, 0o600); err != nil {
+		hash := fmt.Sprintf("%x", sha256.Sum256(data))
+		if err := os.WriteFile(filepath.Join(root, "sha256-"+hash), data, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		hash := fmt.Sprintf("%x", sha256.Sum256(data))
 		split.Files, split.Plan = nil, nil
 		split.Inventory = &snapshotInventoryReference{ID: "sha256-" + hash, Path: "inventory.json", Kind: "repository_snapshot_inventory", SHA256: hash, Bytes: int64(len(data))}
 		var scope snapshotAttestation
@@ -251,7 +278,7 @@ func TestSnapshotHandoffFitsRuntimeOutputAndPassesFinalAudit(t *testing.T) {
 			t.Fatal(err)
 		}
 		scope.Snapshot = &split
-		view.Tasks[3].Workspace = root
+		view.ArtifactDataDirectory = root
 		view.Tasks[3].Result.RuntimeOutputs["scope"] = raw(t, scope)
 		view.Tasks = append(view.Tasks[:1:1], view.Tasks[2:]...)
 		result, err := collectSnapshotCoverage(view)
@@ -273,7 +300,7 @@ func TestSnapshotHandoffFitsRuntimeOutputAndPassesFinalAudit(t *testing.T) {
 	if err != nil || !bytes.Contains(raw(t, audit), []byte(`"passed":true`)) {
 		t.Fatalf("final audit rejected the verified artifact: %v, %s", err, raw(t, audit))
 	}
-	if err := os.WriteFile(artifactPath, []byte(`{}`), 0o600); err != nil {
+	if err := os.WriteFile(coveragePath, []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := execute("verify-review-report", "verify_review_report", "10"); err == nil || !strings.Contains(err.Error(), "/snapshot_coverage/inventory") {
@@ -303,12 +330,11 @@ func TestSnapshotCoverageLoadsVerifiedInventory(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			path := filepath.Join(root, "inventory.json")
+			artifactHash := fmt.Sprintf("%x", sha256.Sum256(data))
+			path := filepath.Join(root, "sha256-"+artifactHash)
 			if err := os.WriteFile(path, data, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			sum := sha256.Sum256(data)
-			artifactHash := hex.EncodeToString(sum[:])
 			summary := full
 			summary.Files = nil
 			summary.Inventory = &snapshotInventoryReference{ID: "sha256-" + artifactHash, Kind: "repository_snapshot_inventory", Path: "inventory.json", SHA256: artifactHash, Bytes: int64(len(data))}
@@ -336,22 +362,25 @@ func TestSnapshotCoverageLoadsVerifiedInventory(t *testing.T) {
 			case "count":
 				summary.FileCount++
 			case "traversal":
-				summary.Inventory.Path = "../inventory.json"
+				summary.Inventory.SHA256 = strings.Repeat("0", 61) + "../"
+				summary.Inventory.ID = "sha256-" + summary.Inventory.SHA256
 			case "symlink":
 				outside := filepath.Join(t.TempDir(), "outside.json")
 				if err := os.WriteFile(outside, data, 0o600); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.Symlink(outside, filepath.Join(root, "link.json")); err != nil {
+				if err := os.Remove(path); err != nil {
 					t.Fatal(err)
 				}
-				summary.Inventory.Path = "link.json"
+				if err := os.Symlink(outside, path); err != nil {
+					t.Fatal(err)
+				}
 			case "inline_override":
 				summary.Files = files
 			}
 			var current sourceSession
-			view, err := json.Marshal(map[string]any{"tasks": []any{
-				map[string]any{"ID": "1", "contract_id": "produce-workset", "verified_outputs": mode != "unverified", "workspace": root, "typed_result": map[string]any{"runtime_outputs": map[string]any{"scope": map[string]any{"requested": map[string]string{"kind": "repository_snapshot"}, "resolved": map[string]string{"head": summary.Revision}, "satisfied": true, "repository_snapshot": summary}}}},
+			view, err := json.Marshal(map[string]any{"artifact_data_directory": root, "tasks": []any{
+				map[string]any{"ID": "1", "contract_id": "produce-workset", "verified_outputs": mode != "unverified", "workspace": filepath.Join(root, "removed-action"), "typed_result": map[string]any{"runtime_outputs": map[string]any{"scope": map[string]any{"requested": map[string]string{"kind": "repository_snapshot"}, "resolved": map[string]string{"head": summary.Revision}, "satisfied": true, "repository_snapshot": summary}}}},
 				map[string]any{"ID": "2", "contract_id": "verify-targeted-go-tests", "verified_outputs": true, "typed_result": map[string]any{"runtime_outputs": map[string]any{"targeted_go_tests": map[string]string{"snapshot_id": full.ID, "content_sha256": full.Hash, "reviewed_revision": full.Revision}}}},
 			}})
 			if err != nil {

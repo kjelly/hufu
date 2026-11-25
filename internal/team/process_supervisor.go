@@ -18,7 +18,7 @@ type ProcessSpec struct {
 	Env []string
 	// Stdin is optional; nil gives the child no input (like /dev/null). A
 	// long-lived protocol client (e.g. the Codex JSON-RPC transport) passes
-	// the read end of an io.Pipe here and keeps the write end for itself.
+	// the read end of a pipe here and keeps the write end for itself.
 	Stdin io.Reader
 	// Stdout/Stderr are optional bounded writers; nil discards.
 	Stdout io.Writer

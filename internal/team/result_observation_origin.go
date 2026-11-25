@@ -23,8 +23,17 @@ func (c *Coordinator) resultObservationScope(ctx context.Context, taskID string,
 	}
 	evidence, collecting := ctx.Value(resultCollectionEvidenceKey{}).(*taskTranscript)
 	item := c.todoItemByID(taskID)
+	if !collecting || evidence == nil {
+		return origin, nil
+	}
 	cp := currentResultCollection(item)
-	if !collecting || evidence == nil || cp == nil {
+	if scoped, _ := ctx.Value(resultCollectionReadCheckpointKey{}).(*ResultCollectionCheckpoint); scoped != nil && scoped.FanoutLeaf && !c.isModelFanoutLeaf(taskID) {
+		cp = currentFanoutCollection(item, scoped.FanoutIndex)
+		if !sameCanonicalEvidence(cp, scoped) {
+			return origin, errResultCollectionStale
+		}
+	}
+	if cp == nil {
 		return origin, nil
 	}
 	if err := validateResultCollectionCheckpoint(cp); err != nil {

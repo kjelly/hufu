@@ -237,19 +237,28 @@ func newDecisionObservationEvent(events []RunEvent, metadata InvocationMetadata,
 	if evidenceKeys {
 		kind = EventArtifactEvidenceObserved
 	}
-	event := RunEvent{ID: generateEventID(), Type: string(kind), RunID: metadata.RunID, BranchID: branchID, TaskID: metadata.TaskID, Actor: metadata.AgentName, Attempt: metadata.Attempt, IdempotencyKey: strings.Join([]string{"decision-observation", branchID, p.Scope, metadata.RunID, fmt.Sprint(metadata.Attempt), p.CallID}, ":")}
+	legacyKey := strings.Join([]string{"decision-observation", branchID, p.Scope, metadata.RunID, fmt.Sprint(metadata.Attempt), p.CallID}, ":")
+	key := legacyKey
+	if p.ModelExecutionID != "" {
+		key = strings.Join([]string{"decision-observation-model", branchID, p.Scope, metadata.RunID, fmt.Sprint(metadata.Attempt), hashContentKey(p.ModelExecutionID), p.CallID}, ":")
+	}
+	event := RunEvent{ID: generateEventID(), Type: string(kind), RunID: metadata.RunID, BranchID: branchID, TaskID: metadata.TaskID, Actor: metadata.AgentName, Attempt: metadata.Attempt, IdempotencyKey: key}
 	for _, previous := range events {
-		if previous.BranchID != event.BranchID || previous.IdempotencyKey != event.IdempotencyKey {
+		if previous.BranchID != event.BranchID || previous.IdempotencyKey != key && previous.IdempotencyKey != legacyKey {
 			continue
 		}
 		var observed decisionArtifactObservation
 		if err := json.Unmarshal(previous.Payload, &observed); err != nil {
 			return RunEvent{}, err
 		}
+		if previous.IdempotencyKey == legacyKey && observed.ModelExecutionID != p.ModelExecutionID {
+			continue
+		}
 		if previous.Type != event.Type || observed.ErrorCode != "" || observed.Output.SHA256 != decisionBytesHash([]byte(output)) {
 			return RunEvent{}, ErrDecisionIdempotencyConflict
 		}
 		event.ID = previous.ID
+		event.IdempotencyKey = previous.IdempotencyKey
 		// Reuse the durable artifact metadata, including its timestamp.
 		// Append still checks all remaining payload fields for conflict.
 		p.Output = observed.Output

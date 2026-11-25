@@ -21,7 +21,6 @@ import (
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/skill"
-	"github.com/kjelly/hufu/internal/utils"
 )
 
 // executeTaskWithExtraModels executes a task across multiple models when extra-models is configured.
@@ -51,23 +50,49 @@ func (c *Coordinator) executeTaskWithExtraModels(
 			return "", err
 		}
 	}
-	// The parent owns the public watchdog and provider proxy. Private leaves
-	// cannot acquire that ownership when constructing their worker agents.
-	// Establish it before any leaf can create a client against the upstream.
-	if err := c.providerBoundaryRequired(parentCtx); err != nil {
-		return "", fmt.Errorf("start fanout provider boundary: %w", err)
-	}
-	// Fanout is a parent-owned lifecycle boundary. Open the single runtime
-	// occurrence once before any leaf starts; isolated leaves below receive
-	// private Todo state and therefore cannot race this transition or arm a
-	// second decision for the same occurrence.
-	resumingCollection := currentResultCollection(c.todoItemByID(todoID)) != nil
+	item := c.todoItemByID(todoID)
+	resumingCollection := hasCurrentFanoutCollection(item)
+	var recovery []fanoutResumeLeaf
 	defer func() {
 		if returnErr == nil {
 			c.releaseFanoutCollectionWorkspaces(parentCtx, todoID)
 		}
 	}()
-	if item := c.todoItemByID(todoID); item != nil && !resumingCollection {
+	if resumingCollection {
+		if err := c.ensureExecutionPolicySnapshot(); err != nil {
+			return "", err
+		}
+		saved, receipts, err := c.readFanoutSettlement(parentCtx, item)
+		if err != nil {
+			return "", c.settleNormalizedRecoveryRead(item, task, rejectNormalizationRecoveryRead(err))
+		}
+		if saved != nil {
+			return c.commitRecoveredFanoutOutput(parentCtx, item, saved, receipts)
+		}
+		recovery, err = c.prepareFanoutRecovery(parentCtx, item, task, agentDef)
+		if err != nil {
+			return "", c.settleNormalizedRecoveryRead(item, task, rejectNormalizationRecoveryRead(err))
+		}
+		for index, leaf := range recovery {
+			if leaf.completion != nil {
+				if err := c.publishFanoutLeafCompletion(parentCtx, item, index, leaf.completion); err != nil {
+					return "", c.settleNormalizedRecoveryRead(item, task, rejectNormalizationRecoveryRead(err))
+				}
+			}
+		}
+	}
+	// Fresh fanout dispatches workers through the parent's provider proxy.
+	// Recovery starts it only when a collector, skeptic or judge needs it.
+	if !resumingCollection {
+		if err := c.providerBoundaryRequired(parentCtx); err != nil {
+			return "", fmt.Errorf("start fanout provider boundary: %w", err)
+		}
+	}
+	// Fanout is a parent-owned lifecycle boundary. Open the single runtime
+	// occurrence once before any leaf starts; isolated leaves below receive
+	// private Todo state and therefore cannot race this transition or arm a
+	// second decision for the same occurrence.
+	if item != nil && !resumingCollection {
 		expected := TaskPending
 		if item.Status == TaskPlanned {
 			expected = TaskPlanned
@@ -82,7 +107,7 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	// Retries and resumes pass the recorded topology here and never re-expand
 	// live configuration.
 	if len(models) < 2 {
-		return c.executeSingleAgentWithModel(parentCtx, agentName, cloneAgentDef(agentDef), task, todoID, "main", 0)
+		return c.executeSingleAgentWithModel(parentCtx, agentName, cloneAgentDef(agentDef), task, todoID, "main", 0, nil)
 	}
 	// Pin the parent control plane before any leaf is created. The worker
 	// workspace below is deliberately disposable and must never become the
@@ -96,7 +121,14 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	}
 
 	totalModels := len(models)
-	results := make(chan *agentResult, totalModels)
+	if recovery == nil {
+		recovery = make([]fanoutResumeLeaf, totalModels)
+	}
+	type indexedResult struct {
+		index  int
+		result *agentResult
+	}
+	results := make(chan indexedResult, totalModels)
 
 	// Create a deep copy of agentDef with ExtraModels cleared for the main model
 	// to prevent infinite recursion and data races.
@@ -106,8 +138,8 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	mainDef.Generation.Model = mainModel
 
 	go func() {
-		output, err := c.executeSingleAgentWithModel(parentCtx, agentName, mainDef, task, todoID, "main", 0)
-		results <- &agentResult{model: mainModel, output: output, err: err}
+		output, err := c.executeSingleAgentWithModel(parentCtx, agentName, mainDef, task, todoID, "main", 0, &recovery[0])
+		results <- indexedResult{0, &agentResult{model: mainModel, output: output, err: err}}
 	}()
 
 	// Execute each extra model with its own deep copy
@@ -116,36 +148,18 @@ func (c *Coordinator) executeTaskWithExtraModels(
 			extraDef := cloneAgentDef(agentDef)
 			extraDef.ExtraModels = nil
 			extraDef.Generation.Model = model
-			output, err := c.executeSingleAgentWithModel(parentCtx, agentName, extraDef, task, todoID, slot, topologyIndex)
-			results <- &agentResult{model: model, output: output, err: err}
-		}(extraModel, fmt.Sprintf("extra-%d", index+1), index+1)
+			output, err := c.executeSingleAgentWithModel(parentCtx, agentName, extraDef, task, todoID, slot, topologyIndex, &recovery[topologyIndex])
+			results <- indexedResult{topologyIndex, &agentResult{model: model, output: output, err: err}}
+		}(extraModel, fanoutSlotName(index+1), index+1)
 	}
 
 	// Collect all results (continue on error)
-	var allResults []*agentResult
-	for i := 0; i < totalModels; i++ {
+	allResults := make([]*agentResult, totalModels)
+	for range totalModels {
 		result := <-results
-		allResults = append(allResults, result)
+		allResults[result.index] = result.result
 	}
-	var leafErrors []string
-	for _, result := range allResults {
-		if result != nil && result.err != nil {
-			leafErrors = append(leafErrors, fmt.Sprintf("%s: %v", result.model, result.err))
-		}
-	}
-	if len(leafErrors) > 0 {
-		err := fmt.Errorf("fanout leaf execution failed: %s", strings.Join(leafErrors, "; "))
-		collectionFailed := resumingCollection
-		for _, leaf := range allResults {
-			if _, ok := errors.AsType[*resultCollectionFailure](leaf.err); ok {
-				collectionFailed = true
-			}
-		}
-		if collectionFailed {
-			c.PersistFailureWithClassAndStatusAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), NeedsHuman, FailureProtocol, TaskBlocked, "")
-		} else {
-			c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), RetryNone, FailureExecution)
-		}
+	if err := c.settleFanoutLeafFailures(agentName, taskDesc, todoID, resumingCollection, allResults); err != nil {
 		return "", err
 	}
 
@@ -155,27 +169,75 @@ func (c *Coordinator) executeTaskWithExtraModels(
 		return "", err
 	}
 
+	item = c.todoItemByID(todoID)
+	var slots []fanoutSettlementSlot
+	if hasCurrentFanoutCollection(item) {
+		pinned, _, err := c.fanoutSettlementSlots(parentCtx, item)
+		if err != nil {
+			return "", c.settleNormalizedRecoveryRead(item, task, rejectNormalizationRecoveryRead(err))
+		}
+		if len(pinned) != len(allResults) {
+			return "", c.settleNormalizedRecoveryRead(item, task, rejectLocalResult(RepairFailureSource, errResultCollectionStale))
+		}
+		slots = pinned
+	}
 	// Judge the candidates when a judge model is configured; otherwise (or
 	// if the judge fails) fall back to the plain concatenation merge.
-	judged, err := c.judgeAgentResults(parentCtx, taskDesc, todoID, allResults)
-	if err == nil {
-		if statusErr := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskDone, utils.TruncateRunes(judged, summaryMaxRunes), judged, nil); statusErr != nil {
-			return "", fmt.Errorf("mark fanout task done: %w", statusErr)
+	output, err := c.judgeAgentResults(parentCtx, taskDesc, todoID, allResults)
+	if err != nil {
+		if !errors.Is(err, errNoJudgeModel) {
+			c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("judge failed, falling back to merge: %v", err)).withTodoID(todoID))
 		}
-		c.reconcileTaskStatusProjection()
-		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-		return judged, nil
+		output = c.mergeAgentResults(allResults)
 	}
-	if !errors.Is(err, errNoJudgeModel) {
-		c.report(c.newEvent("step").withAgent(agentName).withMessage(fmt.Sprintf("judge failed, falling back to merge: %v", err)).withTodoID(todoID))
+	if slots != nil {
+		if err := c.sealFanoutSettlement(parentCtx, item, slots, output); err != nil {
+			return "", c.settleNormalizedRecoveryRead(item, task, rejectNormalizationRecoveryRead(err))
+		}
 	}
-	merged := c.mergeAgentResults(allResults)
-	if statusErr := c.commitTaskTransitionFromCurrent(parentCtx, todoID, TaskDone, utils.TruncateRunes(merged, summaryMaxRunes), merged, nil); statusErr != nil {
-		return "", fmt.Errorf("mark fanout task done: %w", statusErr)
+	return c.commitFanoutOutput(parentCtx, item, output)
+}
+
+func (c *Coordinator) settleFanoutLeafFailures(agentName, taskDesc, todoID string, resumingCollection bool, results []*agentResult) error {
+	item := c.todoItemByID(todoID)
+	var leafErrors []string
+	var resumable error
+	var stopped error
+	collectionFailed := resumingCollection
+	allRecoverable := true
+	for _, leaf := range results {
+		if leaf == nil || leaf.err == nil {
+			continue
+		}
+		leafErrors = append(leafErrors, fmt.Sprintf("%s: %v", leaf.model, leaf.err))
+		if _, ok := errors.AsType[*resultCollectionFailure](leaf.err); ok {
+			collectionFailed = true
+			if stopped == nil && localResultRejectionReason(leaf.err) != RepairFailureCommit {
+				stopped = leaf.err
+			}
+		}
+		if returnedCollectionCanResume(item, leaf.err) {
+			resumable = leaf.err
+		} else {
+			allRecoverable = false
+		}
 	}
-	c.reconcileTaskStatusProjection()
-	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-	return merged, nil
+	if len(leafErrors) == 0 {
+		return nil
+	}
+	err := fmt.Errorf("fanout leaf execution failed: %s", strings.Join(leafErrors, "; "))
+	if allRecoverable && resumable != nil {
+		return fmt.Errorf("%s: %w", err, resumable)
+	}
+	if stopped != nil {
+		err = fmt.Errorf("%s: %w", err, stopped)
+	}
+	if collectionFailed {
+		c.PersistFailureWithClassAndStatusAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), NeedsHuman, FailureProtocol, TaskBlocked, "")
+	} else {
+		c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), RetryNone, FailureExecution)
+	}
+	return err
 }
 
 // executionTopologySelectors preserves backend qualification after a durable
@@ -313,6 +375,7 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	todoID string,
 	slot string,
 	topologyIndex int,
+	recovery *fanoutResumeLeaf,
 ) (string, error) {
 	task.Agent = agentDef.Name
 	task.Model = agentDef.Generation.Model
@@ -329,8 +392,9 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	if err != nil {
 		return "", err
 	}
-	if item := c.todoItemByID(todoID); item != nil {
-		admitted, err := admittedExecutionTargetAt(taskDefFromTodoItem(item), topologyIndex)
+	parentItem := c.todoItemByID(todoID)
+	if parentItem != nil {
+		admitted, err := admittedExecutionTargetAt(taskDefFromTodoItem(parentItem), topologyIndex)
 		if err != nil {
 			return "", err
 		}
@@ -344,22 +408,28 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	if err := c.ensureExecutionPolicySnapshot(); err != nil {
 		return "", err
 	}
-
-	resumeCheckpoint, resumeWork, err := c.fanoutCollectionResume(parentCtx, todoID, topologyIndex, leafTarget)
+	sealLeaf, err := c.fanoutLeafNeedsCompletion(agentDef, task, leafTarget)
 	if err != nil {
 		return "", err
 	}
 
-	// Create isolated workspace for this model to prevent concurrent file conflicts.
-	// Use unique token (timestamp + agentName) to prevent collision when multiple
-	// agents use the same model simultaneously.
-	token := fmt.Sprintf("%d-%d-%s", time.Now().UnixNano(), extraWSSeq.Add(1), sanitizeModel(agentName))
-	subWS := filepath.Join(c.session.Workspace, "extra-models", sanitizeModel(agentDef.Generation.Model)+"-"+token)
+	var resumeCheckpoint *ResultCollectionCheckpoint
+	var resumeWork *resultCollectionWork
+	if recovery != nil {
+		if completion := recovery.completion; completion != nil {
+			return completion.Output, c.setAttemptReceipt(todoID, &completion.Receipt)
+		}
+		resumeCheckpoint, resumeWork = recovery.checkpoint, recovery.work
+	}
+
+	var subWS string
 	if resumeWork != nil {
 		subWS = resumeWork.Workspace
-	}
-	if err := os.MkdirAll(subWS, 0o755); err != nil {
-		return "", fmt.Errorf("failed to create isolated workspace: %w", err)
+	} else {
+		subWS, err = c.createFanoutWorkspace(agentName, agentDef.Generation.Model)
+		if err != nil {
+			return "", err
+		}
 	}
 	keepCollectionWorkspace := resumeWork != nil
 	defer func() {
@@ -370,15 +440,6 @@ func (c *Coordinator) executeSingleAgentWithModel(
 			log.Printf("warning: failed to remove isolated workspace %s: %v", subWS, rmErr)
 		}
 	}()
-
-	// Copy shared/ directory from main workspace
-	sharedSrc := filepath.Join(c.session.Workspace, "shared")
-	sharedDst := filepath.Join(subWS, "shared")
-	if _, err := os.Stat(sharedSrc); err == nil {
-		if err := copyDir(sharedSrc, sharedDst); err != nil {
-			log.Printf("warning: failed to copy shared dir to isolated workspace: %v", err)
-		}
-	}
 
 	// Clone Coordinator with isolated session to prevent data race on c.session.Workspace.
 	// Direct mutation of c.session.Workspace is unsafe because multiple goroutines
@@ -391,12 +452,14 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	// while keeping the shared journal for admission; the parent owns the one
 	// durable task_created/status/decision lineage. Execution events and the
 	// leaf receipt are still produced and merged into the parent below.
-	if parentItem := c.todoItemByID(todoID); parentItem != nil {
+	if parentItem != nil {
 		leafItem := cloneTodoItem(parentItem)
 		leafItem.Status = TaskPending
 		leafItem.Detail = ""
 		leafItem.Output = ""
 		leafItem.TypedResult = nil
+		leafItem.ProviderBinding = nil
+		leafItem.BackendBinding = nil
 		leafItem.ExecutionReceipt = nil
 		leafItem.ExecutionReceipts = nil
 		if resumeCheckpoint != nil {
@@ -410,7 +473,7 @@ func (c *Coordinator) executeSingleAgentWithModel(
 		leafTracker.TodoList().SetRunID(c.contextRunID())
 		leafTracker.TodoList().AddReserved([]*TodoItem{leafItem})
 		isolatedCoord.taskTracker = leafTracker
-		isolatedCoord.modelFanout = &modelFanoutBinding{parent: c, taskID: todoID, index: topologyIndex, target: leafTarget}
+		isolatedCoord.modelFanout = &modelFanoutBinding{parent: c, taskID: todoID, index: topologyIndex, target: leafTarget, sealExternalResult: sealLeaf}
 	}
 	task.executionModelOverride = strings.TrimSpace(agentDef.Generation.Model)
 	// Every isolated leaf is explicitly singleton. The parent Todo retains the
@@ -418,7 +481,7 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	task.ModelTopology = []string{task.Model}
 	task.ExecutionTopology = []execution.ExecutionTarget{leafTarget}
 	parentRetries := 0
-	if parentItem := c.todoItemByID(todoID); parentItem != nil {
+	if parentItem != nil {
 		parentRetries = parentItem.Retries
 	}
 	isolatedCoord.modelExecutionID = modelFanoutExecutionID(c.contextRunID(), todoID, agentName, agentDef.Generation.Model, slot, parentRetries)
@@ -429,20 +492,11 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	leafCtx := context.WithValue(parentCtx, leafExecutionKey{}, true)
 	result, err := isolatedCoord.executeTask(leafCtx, task, todoID)
 	if leafItem := isolatedCoord.todoItemByID(todoID); leafItem != nil && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
-		if currentResultCollection(leafItem) != nil {
+		if currentResultCollection(leafItem) != nil || returnedCollectionCanResume(leafItem, err) {
 			keepCollectionWorkspace = true
 		}
-		for i := range leafItem.ExecutionReceipts {
-			receipt := leafItem.ExecutionReceipts[i]
-			if err == nil && leafItem.Status == TaskDone && leafItem.ExecutionReceipt != nil &&
-				receipt.ModelExecutionID == isolatedCoord.modelExecutionID && receipt.Attempt == leafItem.ExecutionReceipt.Attempt {
-				receipt.AcceptedResult = cloneTaskResult(isolatedCoord.GetTaskResult(todoID))
-			}
-			if mergeErr := c.setAttemptReceipt(todoID, &receipt); mergeErr != nil {
-				if err == nil {
-					err = fmt.Errorf("merge %s leaf receipt: %w", slot, mergeErr)
-				}
-			}
+		if mergeErr := c.mergeFanoutLeafReceipts(parentCtx, isolatedCoord, leafItem, topologyIndex, result, sealLeaf, err == nil); err == nil {
+			err = mergeErr
 		}
 	}
 
@@ -477,6 +531,61 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	c.skillUsageMu.Unlock()
 
 	return result, err
+}
+
+func (c *Coordinator) mergeFanoutLeafReceipts(ctx context.Context, leaf *Coordinator, leafItem *TodoItem, index int, output string, seal, terminal bool) error {
+	var mergeError error
+	var completed bool
+	for i := range leafItem.ExecutionReceipts {
+		receipt := leafItem.ExecutionReceipts[i]
+		completedAttempt := terminal && leafItem.Status == TaskDone && leafItem.ExecutionReceipt != nil &&
+			receipt.ModelExecutionID == leaf.modelExecutionID && receipt.Attempt == leafItem.ExecutionReceipt.Attempt
+		if completedAttempt {
+			receipt.AcceptedResult = cloneTaskResult(leaf.GetTaskResult(leafItem.ID))
+			if cp := receipt.ResultCollection; cp != nil && cp.FanoutLeaf && cp.State == ResultCollectionCommitted {
+				seal = true
+				receipt.VerifyResult = cloneVerificationResult(leafItem.VerifyResult)
+			}
+			completed = true
+		}
+		if err := c.setAttemptReceipt(leafItem.ID, &receipt); err != nil {
+			if mergeError == nil {
+				mergeError = fmt.Errorf("merge %s leaf receipt: %w", fanoutSlotName(index), err)
+			}
+			continue
+		}
+		if completedAttempt && seal {
+			parent := c.todoItemByID(leafItem.ID)
+			projected := slices.IndexFunc(parent.ExecutionReceipts, func(candidate ExecutionReceipt) bool {
+				return sameExecutionReceiptProjection(candidate, receipt)
+			})
+			if projected < 0 {
+				return &resultCollectionFailure{Reason: RepairFailureSource, Cause: errResultCollectionStale}
+			}
+			if err := c.sealFanoutLeafCompletion(ctx, parent, index, output, parent.ExecutionReceipts[projected]); err != nil {
+				return &resultCollectionFailure{Reason: localResultRejectionReason(err), Cause: err}
+			}
+		}
+	}
+	if seal && terminal && !completed {
+		return &resultCollectionFailure{Reason: RepairFailureSource, Cause: errResultCollectionStale}
+	}
+	return mergeError
+}
+
+func (c *Coordinator) createFanoutWorkspace(agentName, model string) (string, error) {
+	token := fmt.Sprintf("%d-%d-%s", time.Now().UnixNano(), extraWSSeq.Add(1), sanitizeModel(agentName))
+	workspace := filepath.Join(c.session.Workspace, "extra-models", sanitizeModel(model)+"-"+token)
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create isolated workspace: %w", err)
+	}
+	shared := filepath.Join(c.session.Workspace, "shared")
+	if _, err := os.Stat(shared); err == nil {
+		if err := copyDir(shared, filepath.Join(workspace, "shared")); err != nil {
+			log.Printf("warning: failed to copy shared dir to isolated workspace: %v", err)
+		}
+	}
+	return workspace, nil
 }
 
 // cloneCoordinator creates a Coordinator copy sharing all references except session.

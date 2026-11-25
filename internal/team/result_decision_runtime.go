@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -74,42 +75,51 @@ func resultDecisionRequestContext(binding resultDecisionBinding, raw []byte) (ma
 
 // Scans the verified active lineage once. A started slot without settlement is
 // intentionally not replayable: the provider may have received the request.
-func findBoundDecision(events []RunEvent, slot string) (*decisionPrimitivePayload, string, bool, error) {
-	var started, settled *decisionPrimitivePayload
-	eventID := ""
+func findBoundDecision(events []RunEvent, slot string) (settled *decisionPrimitivePayload, eventID string, started *decisionPrimitivePayload, err error) {
 	for _, event := range events {
 		if event.Type != string(EventDecisionPrimitiveStarted) && event.Type != string(EventDecisionPrimitiveSettled) {
 			continue
 		}
 		if err := validateDecisionPrimitiveEvent(event); err != nil {
-			return nil, "", false, err
+			return nil, "", nil, err
 		}
 		var p decisionPrimitivePayload
 		if err := json.Unmarshal(event.Payload, &p); err != nil {
-			return nil, "", false, err
+			return nil, "", nil, err
 		}
 		if p.Binding == nil || p.Binding.Slot != slot {
 			continue
 		}
 		if event.Type == string(EventDecisionPrimitiveStarted) {
 			if started != nil {
-				return nil, "", false, fmt.Errorf("decision_slot_conflict")
+				return nil, "", nil, fmt.Errorf("decision_slot_conflict")
 			}
 			copyPayload := p
 			started = &copyPayload
 		} else {
 			if settled != nil || started == nil || p.RequestDigest != started.RequestDigest || p.Scope != started.Scope || p.CatalogHash != started.CatalogHash || !reflect.DeepEqual(p.Binding, started.Binding) {
-				return nil, "", false, fmt.Errorf("decision_slot_conflict")
+				return nil, "", nil, fmt.Errorf("decision_slot_conflict")
 			}
 			copyPayload := p
 			settled = &copyPayload
 			eventID = event.ID
 		}
 	}
-	return settled, eventID, started != nil, nil
+	return settled, eventID, started, nil
 }
 
-func (c *Coordinator) validateBoundDecision(ctx context.Context, expected resultDecisionBinding, group resultDecisionGroup, payload decisionPrimitivePayload) error {
+// A recorded failure is considered only after authenticating its binding and request.
+type boundDecisionFailure string
+
+func (e boundDecisionFailure) Error() string { return string(e) }
+
+// Missing, abstained, or recorded unsuccessful decisions are valid evidence
+// of unfinished work, distinct from unreadable or unauthenticated evidence.
+type unsettledResultDecision string
+
+func (e unsettledResultDecision) Error() string { return string(e) }
+
+func (c *Coordinator) validateBoundDecisionRequest(ctx context.Context, expected resultDecisionBinding, group resultDecisionGroup, payload decisionPrimitivePayload) error {
 	if payload.Binding == nil || !sameResultDecisionBinding(expected, *payload.Binding) || payload.Name != group.CatalogEntry || payload.CatalogHash != c.decisionPrimitives.Hash() {
 		return fmt.Errorf("decision_binding_drift")
 	}
@@ -138,13 +148,20 @@ func (c *Coordinator) validateBoundDecision(ctx context.Context, expected result
 	if digest != payload.RequestDigest {
 		return fmt.Errorf("decision_request_drift")
 	}
+	return nil
+}
+
+func (c *Coordinator) validateBoundDecision(ctx context.Context, expected resultDecisionBinding, group resultDecisionGroup, payload decisionPrimitivePayload) error {
+	if err := c.validateBoundDecisionRequest(ctx, expected, group, payload); err != nil {
+		return err
+	}
 	if payload.ErrorCode != "" {
-		return fmt.Errorf("%s", payload.ErrorCode)
+		return boundDecisionFailure(payload.ErrorCode)
 	}
 	if payload.Result == nil || payload.Receipt == nil {
 		return fmt.Errorf("decision_settlement_invalid")
 	}
-	return c.decisionPrimitives.ValidatePublication(payload.Name, digest, *payload.Result, *payload.Receipt)
+	return c.decisionPrimitives.ValidatePublication(payload.Name, payload.RequestDigest, *payload.Result, *payload.Receipt)
 }
 
 func (c *Coordinator) runBoundDecision(ctx context.Context, metadata InvocationMetadata, collection, key, groupID, callID string) (fantasy.ToolResponse, error) {
@@ -165,7 +182,7 @@ func (c *Coordinator) runBoundDecision(ctx context.Context, metadata InvocationM
 		return reject(err)
 	}
 	results := c.dependencyResultsForBinding(metadata.TaskID)
-	if err := c.validateDependencyPayloads(results); err != nil {
+	if err := c.validateDependencyPayloads(ctx, metadata.TaskID, results); err != nil {
 		return reject(err)
 	}
 	plans, err := c.fixedCollectionPlans(metadata.TaskID)
@@ -207,7 +224,10 @@ func (c *Coordinator) runBoundDecision(ctx context.Context, metadata InvocationM
 		}
 		return boundDecisionResponse(*previous)
 	}
-	if started {
+	if started != nil {
+		if err := c.validateBoundDecisionRequest(ctx, binding, *group, *started); err != nil {
+			return reject(err)
+		}
 		return reject(fmt.Errorf("decision_interrupted"))
 	}
 	if decisionInferenceRepair(ctx) {
@@ -317,10 +337,10 @@ func boundDecisionResponse(p decisionPrimitivePayload) (fantasy.ToolResponse, er
 }
 
 func (c *Coordinator) resolveDecisionCollectionPlans(ctx context.Context, todoID string, plans []resultFixedCollectionPlan) ([]resultFixedCollectionPlan, error) {
-	return c.resolveDecisionPlans(ctx, todoID, plans, nil)
+	return c.resolveDecisionPlans(ctx, todoID, plans, nil, false)
 }
 
-func (c *Coordinator) resolveDecisionPlans(ctx context.Context, todoID string, plans []resultFixedCollectionPlan, accepted []ResultCollectionBinding) ([]resultFixedCollectionPlan, error) {
+func (c *Coordinator) resolveDecisionPlans(ctx context.Context, todoID string, plans []resultFixedCollectionPlan, accepted []ResultCollectionBinding, allowUnsettled bool) ([]resultFixedCollectionPlan, error) {
 	_, compiled, err := c.boundResultContract(todoID)
 	if err != nil {
 		return nil, err
@@ -340,6 +360,7 @@ func (c *Coordinator) resolveDecisionPlans(ctx context.Context, todoID string, p
 		return nil, err
 	}
 	scope := decisionPrimitiveScope(events, c.activeBranchID(), InvocationMetadata{TaskID: todoID, AgentName: item.Agent})
+	var unsettled error
 	for i := range plans {
 		plan := &plans[i]
 		for j := range plan.rows {
@@ -361,18 +382,21 @@ func (c *Coordinator) resolveDecisionPlans(ctx context.Context, todoID string, p
 				if accepted != nil && validContractRevalidation(item, item.ExecutionReceipt) {
 					expected.SchemaHash = item.ContractRevalidation.Original.SchemaSHA256
 				}
-				payload, eventID, _, err := findBoundDecision(events, expected.Slot)
+				payload, eventID, started, err := findBoundDecision(events, expected.Slot)
 				if err != nil {
 					return nil, err
 				}
-				if payload == nil {
-					return nil, fmt.Errorf("decision_missing: %s/%s", row.Key, group.ID)
+				settled, err := c.checkDecisionSettlement(ctx, expected, group, payload, started, allowUnsettled)
+				if err != nil {
+					if _, incomplete := errors.AsType[unsettledResultDecision](err); !incomplete {
+						return nil, err
+					}
+					if unsettled == nil {
+						unsettled = err
+					}
 				}
-				if err := c.validateBoundDecision(ctx, expected, group, *payload); err != nil {
-					return nil, err
-				}
-				if payload.Result.Status != decisionrt.StatusDecided {
-					return nil, fmt.Errorf("decision_abstained")
+				if !settled {
+					continue
 				}
 				values, ok := group.ValueMap[payload.Result.Value.Choice]
 				if !ok {
@@ -389,7 +413,40 @@ func (c *Coordinator) resolveDecisionPlans(ctx context.Context, todoID string, p
 			}
 		}
 	}
-	return plans, nil
+	return plans, unsettled
+}
+
+func (c *Coordinator) checkDecisionSettlement(ctx context.Context, expected resultDecisionBinding, group resultDecisionGroup, payload, started *decisionPrimitivePayload, allowUnsettled bool) (bool, error) {
+	if payload == nil {
+		if started != nil {
+			if err := c.validateBoundDecisionRequest(ctx, expected, group, *started); err != nil {
+				return false, err
+			}
+			if !allowUnsettled {
+				return false, unsettledResultDecision("decision_interrupted")
+			}
+		}
+		if allowUnsettled {
+			return false, nil
+		}
+		return false, unsettledResultDecision(fmt.Sprintf("decision_missing: %s/%s", expected.RowKey, group.ID))
+	}
+	if err := c.validateBoundDecision(ctx, expected, group, *payload); err != nil {
+		if _, recordedFailure := errors.AsType[boundDecisionFailure](err); recordedFailure {
+			if allowUnsettled {
+				return false, nil
+			}
+			return false, unsettledResultDecision(err.Error())
+		}
+		return false, err
+	}
+	if payload.Result.Status != decisionrt.StatusDecided {
+		if allowUnsettled {
+			return false, nil
+		}
+		return false, unsettledResultDecision("decision_abstained")
+	}
+	return true, nil
 }
 
 // Accepted ancestor results retain their original branch scope. A new

@@ -41,6 +41,7 @@ const (
 	RepairFailureSource   RepairFailureReason = "source_invalid"
 	RepairFailureContract RepairFailureReason = "contract_rejected"
 	RepairFailureCommit   RepairFailureReason = "commit_failed"
+	RepairFailureAction   RepairFailureReason = "action_failed"
 )
 
 // ReclassifiesAsExecution reports whether the reason turns the protocol
@@ -66,13 +67,14 @@ type RepairAttemptProvenance struct {
 	// InvocationRunID identifies the public invocation that performed this
 	// repair. Receipt.RunID intentionally remains the original task occurrence
 	// identity, which may belong to an earlier run during resume.
-	InvocationRunID string                     `json:"invocation_run_id,omitempty"`
-	Model           string                     `json:"model,omitempty"`
-	Success         bool                       `json:"success"`
-	Prompt          string                     `json:"prompt,omitempty"`
-	SubmittedResult *TaskResult                `json:"submitted_result,omitempty"`
-	FailureReason   RepairFailureReason        `json:"failure_reason,omitempty"`
-	Generation      RepairGenerationDiagnostic `json:"generation,omitzero"`
+	InvocationRunID                string                      `json:"invocation_run_id,omitempty"`
+	Model                          string                      `json:"model,omitempty"`
+	Success                        bool                        `json:"success"`
+	Prompt                         string                      `json:"prompt,omitempty"`
+	SubmittedResult                *TaskResult                 `json:"submitted_result,omitempty"`
+	FailureReason                  RepairFailureReason         `json:"failure_reason,omitempty"`
+	Generation                     RepairGenerationDiagnostic  `json:"generation,omitzero"`
+	InterruptedResultNormalization ResultNormalizationEvidence `json:"interrupted_result_normalization,omitzero"`
 	// Error preserves the bounded validation/preparation diagnostic that
 	// caused this repair turn to fail. Schema-only retries consume this exact
 	// runtime-owned message instead of asking the model to guess which field
@@ -83,16 +85,19 @@ type RepairAttemptProvenance struct {
 // RepairProvenance records details of protocol repair attempts.
 type RepairProvenance struct {
 	// Local completion of persisted bytes does not consume another model turn.
-	PreparedCandidateSHA256 string                    `json:"prepared_candidate_sha256,omitempty"`
-	Attempted               bool                      `json:"attempted"`
-	Success                 bool                      `json:"success"`
-	Prompt                  string                    `json:"prompt,omitempty"`
-	SubmittedResult         *TaskResult               `json:"submitted_result,omitempty"`
-	Error                   string                    `json:"error,omitempty"`
-	FailureReason           RepairFailureReason       `json:"failure_reason,omitempty"`
-	RepairAttempts          int                       `json:"repair_attempts,omitempty"`
-	History                 []RepairAttemptProvenance `json:"history,omitempty"`
-	OperatorGrants          []ResultRepairGrant       `json:"operator_grants,omitempty"`
+	PreparedCandidateSHA256   string                    `json:"prepared_candidate_sha256,omitempty"`
+	Attempted                 bool                      `json:"attempted"`
+	Success                   bool                      `json:"success"`
+	Prompt                    string                    `json:"prompt,omitempty"`
+	SubmittedResult           *TaskResult               `json:"submitted_result,omitempty"`
+	Error                     string                    `json:"error,omitempty"`
+	FailureReason             RepairFailureReason       `json:"failure_reason,omitempty"`
+	RepairAttempts            int                       `json:"repair_attempts,omitempty"`
+	ProviderWorkTurnID        string                    `json:"provider_work_turn_id,omitempty"`
+	ProviderWorkTranscriptRef string                    `json:"provider_work_transcript_ref,omitempty"`
+	ProviderCorrectionTurnID  string                    `json:"provider_correction_turn_id,omitempty"`
+	History                   []RepairAttemptProvenance `json:"history,omitempty"`
+	OperatorGrants            []ResultRepairGrant       `json:"operator_grants,omitempty"`
 }
 
 // StepBudgetUsage records how much of an attempt's step budget was consumed and
@@ -207,12 +212,17 @@ type ExecutionReceipt struct {
 	// ResultContract* record the attempt's result contract outcome. They
 	// are metadata for projections; the payload value itself is part of the
 	// typed result.
-	ResultContractID         string                `json:"result_contract_id,omitempty"`
-	ResultContractSHA256     string                `json:"result_contract_sha256,omitempty"`
-	ResultPayloadSHA256      string                `json:"result_payload_sha256,omitempty"`
-	ResultRawPayloadSHA256   string                `json:"result_raw_payload_sha256,omitempty"`
-	ResultValidation         ResultValidationState `json:"result_validation,omitempty"`
-	ResultValidationFailures int                   `json:"result_validation_failures,omitempty"`
+	ResultContractID                 string                      `json:"result_contract_id,omitempty"`
+	ResultContractSHA256             string                      `json:"result_contract_sha256,omitempty"`
+	ResultPayloadSHA256              string                      `json:"result_payload_sha256,omitempty"`
+	ResultNormalizerOutputSHA256     string                      `json:"result_normalizer_output_sha256,omitempty"`
+	ResultNormalizerOccurrenceSHA256 string                      `json:"result_normalizer_occurrence_sha256,omitempty"`
+	ResultWorkDispatchID             string                      `json:"result_work_dispatch_id,omitempty"`
+	ResultWorkOccurrenceRevision     int                         `json:"result_work_occurrence_revision,omitempty"`
+	InterruptedResultNormalization   ResultNormalizationEvidence `json:"interrupted_result_normalization,omitzero"`
+	ResultRawPayloadSHA256           string                      `json:"result_raw_payload_sha256,omitempty"`
+	ResultValidation                 ResultValidationState       `json:"result_validation,omitempty"`
+	ResultValidationFailures         int                         `json:"result_validation_failures,omitempty"`
 	// CandidateIndex is the execution-route candidate this attempt ran on,
 	// for a route-bound occurrence. FallbackFrom and FallbackFailureClass
 	// name the target and provider failure this attempt fell back from.
@@ -276,11 +286,12 @@ type ExecutionReceipt struct {
 	// ToolSequence is the order of the tool calls this attempt executed, by
 	// name only. Nil means hufu did not run the attempt's tools itself (an
 	// external agent provider), so the sequence is unknown, not empty.
-	ToolSequence    *ToolSequenceRecord        `json:"tool_sequence,omitempty"`
-	HandoffState    ResultHandoffState         `json:"handoff_state,omitempty"`
-	Semantic        *SemanticRetrievalIdentity `json:"semantic_retrieval,omitempty"`
-	MemoryManifest  *MemoryInjectionManifest   `json:"memory_manifest,omitempty"`
-	ContextManifest *ContextInjectionManifest  `json:"context_manifest,omitempty"`
+	ToolSequence          *ToolSequenceRecord        `json:"tool_sequence,omitempty"`
+	HandoffState          ResultHandoffState         `json:"handoff_state,omitempty"`
+	WorkSubmissionFailure RepairFailureReason        `json:"work_submission_failure,omitempty"`
+	Semantic              *SemanticRetrievalIdentity `json:"semantic_retrieval,omitempty"`
+	MemoryManifest        *MemoryInjectionManifest   `json:"memory_manifest,omitempty"`
+	ContextManifest       *ContextInjectionManifest  `json:"context_manifest,omitempty"`
 }
 
 // Succeeded reports whether the runtime recorded an explicit successful

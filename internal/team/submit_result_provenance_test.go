@@ -266,7 +266,7 @@ func TestSubmittedArtifactFanOutReceiptChildRead(t *testing.T) {
 		t.Fatal("submitted workset manifest was not materialized")
 	}
 
-	expanded, err := c.expandFanOutTasks([]TaskDef{{ID: "consumer", Agent: "reviewer", FanOut: &FanOutSpec{
+	expanded, err := c.expandFanOutTasks(t.Context(), []TaskDef{{ID: "consumer", Agent: "reviewer", FanOut: &FanOutSpec{
 		SourceArtifact: FactRef{TaskID: producer.ID, Artifact: manifestRef.ID}, GoalTemplate: "process {name}",
 	}}})
 	if err != nil || len(expanded) != 1 || expanded[0].WorksetBinding == nil {

@@ -13,6 +13,7 @@ import (
 // Capture the actual fake app-server input, without an OpenAI proxy or a
 // diagnostic instruction in the model prompt.
 func TestContextDeliveryAgentBackendReceivesCompiledRequiredFragments(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	for _, mode := range []string{"legacy", "active"} {
 		t.Run(mode, func(t *testing.T) { testContextDeliveryAgentBackend(t, mode) })
 	}

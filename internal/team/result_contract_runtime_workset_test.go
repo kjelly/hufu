@@ -2,7 +2,9 @@ package team
 
 import (
 	"bytes"
+	"context"
 	"encoding/json/v2"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -11,19 +13,24 @@ const runtimeWorksetInputSchema = `{"type":"object","required":["record"],"prope
 
 func runtimeWorksetInputFixture(t *testing.T, paths ...string) (*Coordinator, *TodoItem, *TodoItem, *CompiledResultContract) {
 	t.Helper()
-	compiled, err := CompileResultContractDocument("assigned.json", []byte(runtimeWorksetInputSchema))
+	return runtimeWorksetInputFixtureWithSchema(t, runtimeWorksetInputSchema, map[string]string{"identity": "frozen-value"}, paths...)
+}
+
+func runtimeWorksetInputFixtureWithSchema(t *testing.T, schema string, bindings map[string]string, paths ...string) (*Coordinator, *TodoItem, *TodoItem, *CompiledResultContract) {
+	t.Helper()
+	compiled, err := CompileResultContractDocument("assigned.json", []byte(schema))
 	if err != nil {
 		t.Fatal(err)
 	}
 	c := newTestCoordinator(t)
 	c.taskTracker.TodoList().SetRunID(c.executionRunID)
 	c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
-	body, err := json.Marshal(WorksetManifest{SchemaVersion: WorksetSchemaVersion, Items: []WorksetItem{{Key: "assigned-child", Bindings: map[string]string{"identity": "frozen-value"}, TouchedPaths: paths}}})
+	body, err := json.Marshal(WorksetManifest{SchemaVersion: WorksetSchemaVersion, Items: []WorksetItem{{Key: "assigned-child", Bindings: bindings, TouchedPaths: paths}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	producer, manifest := runtimeWorksetProducerFixture(t, c, body)
-	expanded, err := c.expandFanOutTasks([]TaskDef{{ID: "consume", Agent: "worker", FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "seed", Artifact: manifest.ID}, GoalTemplate: "Evaluate {identity}"}}})
+	expanded, err := c.expandFanOutTasks(t.Context(), []TaskDef{{ID: "consume", Agent: "worker", FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "seed", Artifact: manifest.ID}, GoalTemplate: "Evaluate {identity}"}}})
 	if err != nil || len(expanded) != 1 {
 		t.Fatalf("expand: %v", err)
 	}
@@ -36,6 +43,103 @@ func runtimeWorksetInputFixture(t *testing.T, paths ...string) (*Coordinator, *T
 	child.WorksetReceipt = receipts[child.WorksetBinding.WorksetID]
 	c.taskTracker.TodoList().UpdateStatus(child.ID, TaskInProgress, "evaluate")
 	return c, producer, child, compiled
+}
+
+func TestExternalStandaloneWorksetInputsRequireVerifiedOccurrence(t *testing.T) {
+	t.Parallel()
+	const schema = `{"type":"object","properties":{"checks":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"}}}}},"x-hufu-workset-inputs":{"items_pointer":"/checks","item_id_pointer":"/id","binding":"assigned"}}`
+	c, _, child, compiled := runtimeWorksetInputFixtureWithSchema(t, schema, map[string]string{"identity": "name", "assigned": `["first"]`})
+	request := scopedAttemptRequest("codex", child.ID)
+	request.Task = taskDefFromTodoItem(child)
+	request.Task.ResultContract = new(compiled.ref(false))
+	request.resultContractSchema = compiled
+	request.resultWorksetInputIDs = func() ([]string, error) {
+		return c.verifiedResultWorksetInputIDs(t.Context(), child.ID, compiled.worksetInputs)
+	}
+	root := t.TempDir()
+	check := func(t *testing.T, valid bool) {
+		t.Helper()
+		for _, raw := range []*string{nil, new(`{"checks":[{"id":"first"}]}`)} {
+			proposal := &WorkerResultProposal{Status: TaskResultStatusSuccess, Summary: "reviewed", StructuredPayloadJSON: raw}
+			result, err := NewExternalResultCanonicalizer().Canonicalize(t.Context(), request, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
+			if valid && (err != nil || result == nil || (result.StructuredPayload != nil) != (raw != nil)) ||
+				!valid && (result != nil || localResultRejectionReason(err) != RepairFailureSource) {
+				t.Fatalf("workset admission valid=%t: result=%+v err=%v", valid, result, err)
+			}
+		}
+		err := authenticateRejectedExternalResult(t.Context(), request, `{"status":"success","summary":"",`, WorkspaceDelta{}, root)
+		if valid && err != nil || !valid && localResultRejectionReason(err) != RepairFailureSource {
+			t.Fatalf("workset source validation before format repair valid=%t: %v", valid, err)
+		}
+	}
+	check(t, true)
+	child.WorksetReceipt.Children[child.WorksetBinding.ItemKey] = "different-child"
+	check(t, false)
+}
+
+func TestWorksetSubmissionSharesReadBudgetThroughOccurrenceCommit(t *testing.T) {
+	t.Parallel()
+	const schema = `{"type":"object","properties":{"checks":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"}}}}},"x-hufu-workset-inputs":{"items_pointer":"/checks","item_id_pointer":"/id","binding":"assigned"}}`
+	for _, name := range []string{"assembly", "commit budget", "commit cancelled", "accepted"} {
+		t.Run(name, func(t *testing.T) {
+			c, _, child, _ := runtimeWorksetInputFixtureWithSchema(t, schema, map[string]string{"identity": "name", "assigned": `["first"]`})
+			c.setCurrentTaskAttempt(child.ID, 1)
+			identity, ok := c.activeTaskResultOccurrence(child.ID)
+			if !ok {
+				t.Fatal("missing active occurrence")
+			}
+			raw := []byte(`{"checks":[{"id":"first"}]}`)
+			const limit = 1 << 20
+			probeCtx, probeBudget := WithArtifactReadBudget(t.Context(), limit)
+			if _, err, _ := c.validateStructuredPayloadClaims(probeCtx, child.ID, raw, false); err != nil {
+				t.Fatal(err)
+			}
+			assemblyBytes := limit - probeBudget.remaining
+			if assemblyBytes <= 1 {
+				t.Fatal("assembly did not charge the frozen workset reads")
+			}
+			budgetBytes := int64(limit)
+			switch name {
+			case "assembly":
+				budgetBytes = 1
+			case "commit budget":
+				budgetBytes = assemblyBytes
+			}
+			ctx, budget := WithArtifactReadBudget(t.Context(), budgetBytes)
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			payload, err, repairable := c.validateStructuredPayloadClaims(ctx, child.ID, raw, false)
+			if name == "assembly" {
+				if payload != nil || repairable || !errors.Is(err, ErrReadLimit) || !errors.Is(budget.Err(), ErrReadLimit) {
+					t.Fatalf("assembly failure: payload=%+v repairable=%t error=%v budget=%v", payload, repairable, err, budget.Err())
+				}
+				return
+			}
+			if err != nil || payload == nil {
+				t.Fatalf("valid assembly: %v", err)
+			}
+			tx, err := c.beginTaskResultSubmission(identity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = tx.rollback() }()
+			var want error
+			switch name {
+			case "commit budget":
+				want = ErrReadLimit
+			case "commit cancelled":
+				cancel()
+				want = context.Canceled
+			}
+			result := &TaskResult{Status: TaskResultStatusSuccess, Summary: "reviewed", StructuredPayload: payload}
+			if err := tx.commit(ctx, result); !errors.Is(err, want) {
+				t.Fatalf("commit error=%v, want %v", err, want)
+			}
+			if (c.GetTaskResult(child.ID) != nil) != (want == nil) {
+				t.Fatal("result publication did not follow commit outcome")
+			}
+		})
+	}
 }
 
 func runtimeWorksetProducerFixture(t *testing.T, c *Coordinator, content []byte, sharedInputs ...PutArtifactRequest) (*TodoItem, ArtifactRef) {
@@ -90,7 +194,9 @@ func TestRuntimeResultInputsBindManifestValuesForSubmissionRoutes(t *testing.T) 
 					return c.structuredPayloadForSubmission(child.ID, []byte(raw))
 				}
 				request := AttemptRequest{Task: taskDefFromTodoItem(child), resultContractSchema: compiled,
-					resultRuntimeInputs: func() (map[string]any, error) { return c.resultRuntimeInputValues(compiled, child.ID) }}
+					resultRuntimeInputs: func(spec *CompiledResultContract) (map[string]any, error) {
+						return c.resultRuntimeInputValues(spec, child.ID)
+					}}
 				payload, err := canonicalExternalStructuredPayload(request, &WorkerResultProposal{StructuredPayloadJSON: new(raw)}, nil)
 				if err != nil {
 					return nil, err.Error()
@@ -120,7 +226,7 @@ func TestRuntimeResultInputsBindManifestValuesForSubmissionRoutes(t *testing.T) 
 				t.Fatal(err)
 			}
 			var restored ResultPayload
-			if err := json.Unmarshal(data, &restored); err != nil || !bytes.Equal(payload.Value, restored.Value) || c.validateAcceptedEvidenceInputs(child.ID, &restored) != nil {
+			if err := json.Unmarshal(data, &restored); err != nil || !bytes.Equal(payload.Value, restored.Value) || c.validateAcceptedEvidenceInputs(t.Context(), child.ID, &restored) != nil {
 				t.Fatal("canonical binding did not survive serialization/revalidation")
 			}
 			workspace := t.TempDir()
@@ -161,11 +267,11 @@ func TestRuntimeResultInputsBindManifestValuesForSubmissionRoutes(t *testing.T) 
 			replayed := newTestCoordinator(t, withCoordinatorWorkspace(c.session.Workspace))
 			replayed.session.ResultContracts = c.session.ResultContracts
 			replayed.SetSessionData(&SessionData{Tasks: checkpoint})
-			if err := replayed.validateAcceptedEvidenceInputs(child.ID, saved.TypedResult.StructuredPayload); err != nil {
+			if err := replayed.validateAcceptedEvidenceInputs(t.Context(), child.ID, saved.TypedResult.StructuredPayload); err != nil {
 				t.Fatalf("reopened coordinator lost the frozen binding: %v", err)
 			}
 			child.WorksetBinding.Bindings["identity"] = "newer-value"
-			if c.validateAcceptedEvidenceInputs(child.ID, &restored) == nil {
+			if c.validateAcceptedEvidenceInputs(t.Context(), child.ID, &restored) == nil {
 				t.Fatal("replay accepted a substituted binding")
 			}
 		})

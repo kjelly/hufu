@@ -85,7 +85,7 @@ func (a *localResultAdmission) bindObservedFilesRead(ctx context.Context, compil
 	}
 	reads, err := a.coordinator.observedResultFilesRead(ctx, a.todoID, compiled, result.StructuredPayload)
 	if err != nil {
-		return rejectLocalResult(RepairFailureSource, err)
+		return rejectResultSourceRead(err)
 	}
 	result.FilesRead = reads
 	return contract.validateWorkerClaims(result)

@@ -160,13 +160,15 @@ const (
 // VerificationResult is the durable evidence produced by a task's objective
 // verification command. Output is intentionally bounded by the verifier.
 type VerificationResult struct {
-	Command              string                      `json:"command,omitempty"`
-	WorkDir              string                      `json:"work_dir,omitempty"`
-	ExitCode             int                         `json:"exit_code"`
-	Stdout               string                      `json:"stdout,omitempty"`
-	Stderr               string                      `json:"stderr,omitempty"`
-	Duration             time.Duration               `json:"duration,omitempty"`
-	TimedOut             bool                        `json:"timed_out,omitempty"`
+	Command  string        `json:"command,omitempty"`
+	WorkDir  string        `json:"work_dir,omitempty"`
+	ExitCode int           `json:"exit_code"`
+	Stdout   string        `json:"stdout,omitempty"`
+	Stderr   string        `json:"stderr,omitempty"`
+	Duration time.Duration `json:"duration,omitempty"`
+	TimedOut bool          `json:"timed_out,omitempty"`
+	// A missing value identifies older evidence that requires text inference.
+	EnvironmentFailure   *bool                       `json:"environment_failure,omitempty"`
 	WeakWarning          bool                        `json:"weak_warning,omitempty"`
 	WeakReason           string                      `json:"weak_reason,omitempty"`
 	Overturned           bool                        `json:"overturned,omitempty"`

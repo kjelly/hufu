@@ -56,6 +56,9 @@ func TestReducersReconstructState(t *testing.T) {
 	events = append(events, RunEvent{Type: "task_completed", TaskID: "1", Payload: p5})
 
 	session := ReduceToSessionData(events)
+	if session.CreatedAt != events[0].Timestamp || session.UpdatedAt != events[1].Timestamp {
+		t.Fatalf("session timestamps did not come from its event lineage: created=%q updated=%q", session.CreatedAt, session.UpdatedAt)
+	}
 	if len(session.Entries) != 2 {
 		t.Fatalf("expected 2 session entries, got %d", len(session.Entries))
 	}

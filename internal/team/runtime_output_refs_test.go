@@ -62,7 +62,7 @@ func runtimeOutputRefFixture(t *testing.T) (*Coordinator, *TodoItem) {
 func TestRuntimeOutputRefsAreReceiptVerifiedAndPreserveLiteralTokens(t *testing.T) {
 	t.Parallel()
 	c, item := runtimeOutputRefFixture(t)
-	resolved, err := c.resolveFactRefs([]TaskDef{{
+	resolved, err := c.resolveFactRefs(t.Context(), []TaskDef{{
 		Goal: "Inspect {observation}", Constraints: "{suffix}", FactRefs: []FactRef{
 			{Name: "observation", TaskID: "prepare-outputs", RuntimeOutput: "observation"},
 			{Name: "suffix", TaskID: item.ID, Fact: "suffix"},
@@ -103,7 +103,7 @@ func TestRuntimeOutputRefsFailClosedForUnavailableOrUntrustedSources(t *testing.
 				ref.Fact = "suffix"
 			}
 			c.taskTracker.TodoList().Restore(items)
-			if _, err := c.resolveFactRefs([]TaskDef{{Goal: "{observation}", FactRefs: []FactRef{ref}}}); err == nil {
+			if _, err := c.resolveFactRefs(t.Context(), []TaskDef{{Goal: "{observation}", FactRefs: []FactRef{ref}}}); err == nil {
 				t.Fatalf("authorized %s source", scenario)
 			}
 		})
@@ -122,7 +122,7 @@ func TestStaticRuntimeContextSurvivesResolutionAndRebinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := c.resolveFactRefs(bound)
+	resolved, err := c.resolveFactRefs(t.Context(), bound)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestInitialStaticRuntimeContextSurvivesResolutionAndRebinding(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := c.resolveFactRefs(bound)
+	resolved, err := c.resolveFactRefs(t.Context(), bound)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestHufuCodeReviewSynthesisReceivesCompactPrepareStatusWithoutCoordinatorCo
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := c.resolveFactRefs(bound)
+	resolved, err := c.resolveFactRefs(t.Context(), bound)
 	if err != nil {
 		t.Fatal(err)
 	}

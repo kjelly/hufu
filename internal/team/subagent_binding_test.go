@@ -82,6 +82,7 @@ subagent-providers:
 }
 
 func TestMergeCodexBackendConfigPreservesRuntimeBounds(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	t.Parallel()
 	base := agent.SubagentProviderConfig{
 		Type: codexAppServerProviderType, MaxEventBytes: 16 << 20,

@@ -51,24 +51,25 @@ func cloneResultCandidate(c *ResultCandidate) *ResultCandidate {
 	return &copy
 }
 
-func (c *Coordinator) resultCandidateEvidenceHash(item *TodoItem) (string, error) {
-	sources, err := c.resultCandidateEvidenceSources(item)
+func (c *Coordinator) resultCandidateEvidenceHash(ctx context.Context, item *TodoItem) (string, error) {
+	sources, err := c.resultCandidateEvidenceSources(ctx, item)
 	if err != nil {
 		return "", err
 	}
 	return collectionDigest(sources)
 }
 
-func (c *Coordinator) resultCandidateEvidenceSources(item *TodoItem) ([]*TodoItem, error) {
+func (c *Coordinator) resultCandidateEvidenceSources(ctx context.Context, item *TodoItem) ([]*TodoItem, error) {
 	// Hash the actual accepted results, including bindings/receipts, rather
 	// than accepting a model-supplied list of source hashes.
+	owner := c.dependencyViewOwner(item.ID)
 	var sources []*TodoItem
 	for _, id := range resultDependencyIDs(item) {
-		source := c.todoItemByID(id)
+		source := owner.todoItemByID(id)
 		if source == nil || source.Status != TaskDone || source.TypedResult == nil {
 			return nil, fmt.Errorf("candidate source %s is unavailable", id)
 		}
-		if err := c.validateAcceptedDependencyPayload(source); err != nil {
+		if err := owner.validateAcceptedDependencyPayloadWithContext(ctx, source); err != nil {
 			return nil, err
 		}
 		sources = append(sources, source)
@@ -111,7 +112,7 @@ func (c *Coordinator) saveResultCandidate(ctx context.Context, taskID, raw strin
 	if _, err := decodeUniqueJSON(redacted); err != nil {
 		return nil, err
 	}
-	evidenceHash, err := c.resultCandidateEvidenceHash(item)
+	evidenceHash, err := c.resultCandidateEvidenceHash(ctx, item)
 	if err != nil {
 		return nil, fmt.Errorf("candidate evidence unavailable: %w", errors.Join(err, errTaskResultStale))
 	}
@@ -168,7 +169,7 @@ func (c *Coordinator) loadResultCandidateAtBranch(ctx context.Context, item *Tod
 	if item == nil || candidate == nil {
 		return nil, errTaskResultStale
 	}
-	evidenceHash, err := c.resultCandidateEvidenceHash(item)
+	evidenceHash, err := c.resultCandidateEvidenceHash(ctx, item)
 	if err != nil || evidenceHash != candidate.EvidenceHash {
 		return nil, fmt.Errorf("candidate evidence changed: %w", errors.Join(err, errTaskResultStale))
 	}

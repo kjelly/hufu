@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestReviewGateRequiresHonestTestOutcomeCoverage(t *testing.T) {
 	for _, test := range []struct {
@@ -52,6 +55,38 @@ func TestReviewGateRequiresHonestTestOutcomeCoverage(t *testing.T) {
 			_, _, err := fixtureVerify(fixture, "run-1")
 			if (err == nil) != test.valid {
 				t.Fatalf("valid=%v error=%v", test.valid, err)
+			}
+		})
+	}
+}
+
+func TestReviewGateChecksSealedTimeoutAndEmptyScopeGaps(t *testing.T) {
+	schema, _ := contractSchema(t, "report-v3.json")
+	for _, tc := range []struct {
+		name, wire string
+		valid      bool
+	}{
+		{"package deadline", `{"completed":false,"passed":false,"exit_code":1,"timed_out":true,"timeout_kind":"test","gap":"test_timeout_gap","command":["go","test"],"packages":["./target"],"diagnostic":"package deadline reached"}`, true},
+		{"command deadline", `{"completed":false,"passed":false,"exit_code":-1,"timed_out":true,"timeout_kind":"command","gap":"test_timeout_gap","command":["go","test"],"packages":["./target"],"diagnostic":"command deadline reached"}`, true},
+		{"preflight deadline", `{"completed":false,"passed":false,"exit_code":-1,"timed_out":true,"timeout_kind":"preflight","gap":"test_timeout_gap","command":[],"packages":["./target"],"diagnostic":"preflight deadline reached"}`, true},
+		{"preflight cannot claim executed command", `{"completed":false,"passed":false,"exit_code":-1,"timed_out":true,"timeout_kind":"preflight","gap":"test_timeout_gap","command":["go","test"],"packages":["./target"],"diagnostic":"preflight deadline reached"}`, false},
+		{"canceled caller", `{"completed":false,"passed":false,"exit_code":-1,"timed_out":true,"timeout_kind":"caller_deadline","gap":"test_timeout_gap","command":["go","test"],"packages":["./target"],"diagnostic":"caller canceled"}`, false},
+		{"external dependency", `{"completed":false,"passed":false,"exit_code":-1,"timed_out":false,"timeout_kind":"none","gap":"test_dependency_outside_snapshot","command":[],"packages":["./target"],"diagnostic":"local dependency outside snapshot"}`, true},
+		{"empty workset", `{"completed":false,"passed":false,"exit_code":-1,"timed_out":false,"timeout_kind":"none","gap":"test_scope_empty","command":[],"packages":[],"diagnostic":"no Go packages"}`, true},
+		{"unclassified skip", `{"completed":false,"passed":false,"exit_code":-1,"timed_out":false,"timeout_kind":"none","command":[],"packages":[],"diagnostic":"no Go packages"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gap, err := verifyTestEvidence([]byte(tc.wire))
+			if tc.valid != (gap && err == nil) {
+				t.Fatalf("gap = %v, %v", gap, err)
+			}
+			_, _, report := schemaFixture()
+			value := report["test_verification"].(map[string]any)
+			if err := json.Unmarshal([]byte(tc.wire), &value); err != nil {
+				t.Fatal(err)
+			}
+			if err := schema.Properties["test_verification"].Validate(value); (err == nil) != tc.valid {
+				t.Fatalf("report schema disagrees with the review gate: %v", err)
 			}
 		})
 	}

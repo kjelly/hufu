@@ -11,6 +11,7 @@ import (
 )
 
 func TestCodexImageCopyBudgetIncludesRetainedDuplicates(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	for _, scenario := range []string{"fits", "blob limit", "byte limit", "current retained", "writable stale"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, ctx, request, hash := codexImageProjectionFixture(t)

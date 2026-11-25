@@ -12,18 +12,20 @@ import (
 // branch: the persistent root binding, the mode floor, the diagnostic
 // "materialized" projection, and the recovery / deferred-checkpoint markers.
 type SubjectState struct {
-	SubjectKey              string
-	SubjectRoot             string
-	ModeFloor               Mode
-	MaterializedWorkspaceID string
-	MaterializedBranchID    string
-	MaterializedSnapshotID  SnapshotID
-	RecoveryRequired        bool
-	RecoveryCode            string
-	RecoveryDetail          string
-	CheckpointDeferred      bool
-	Generation              int64
-	UpdatedAt               time.Time
+	SubjectKey               string
+	SubjectRoot              string
+	ModeFloor                Mode
+	MaterializedWorkspaceID  string
+	MaterializedBranchID     string
+	MaterializedSnapshotID   SnapshotID
+	RecoveryRequired         bool
+	RecoveryCode             string
+	RecoveryDetail           string
+	CheckpointDeferred       bool
+	Generation               int64
+	UpdatedAt                time.Time
+	providerRecoveryID       string
+	legacyRecoveryGeneration int64
 }
 
 const subjectColumns = `subject_key, subject_root, mode_floor, materialized_workspace_id, materialized_branch_id,
@@ -50,8 +52,26 @@ func scanSubjectState(row rowScanner) (SubjectState, error) {
 	return state, nil
 }
 
-// GetSubjectState returns the row for canonicalRoot, if it exists.
+// GetSubjectState returns the subject's persistently recorded state,
+// including a provider recovery guard written independently of SQLite.
 func (s *Store) GetSubjectState(ctx context.Context, canonicalRoot string) (SubjectState, bool, error) {
+	state, found, err := s.getSQLSubjectState(ctx, canonicalRoot)
+	if err != nil {
+		return state, found, err
+	}
+	if !found {
+		state = SubjectState{SubjectKey: SubjectKey(canonicalRoot), SubjectRoot: canonicalRoot, ModeFloor: ModeOff}
+	}
+	if err := s.readProviderRecovery(&state); err != nil {
+		return SubjectState{}, false, err
+	}
+	if !found && !state.RecoveryRequired {
+		return SubjectState{}, false, nil
+	}
+	return state, true, nil
+}
+
+func (s *Store) getSQLSubjectState(ctx context.Context, canonicalRoot string) (SubjectState, bool, error) {
 	state, err := scanSubjectState(s.db.QueryRowContext(ctx, "SELECT "+subjectColumns+" FROM subject_state WHERE subject_key=?", SubjectKey(canonicalRoot)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return SubjectState{}, false, nil
@@ -75,7 +95,7 @@ func (s *Store) EnsureSubjectState(ctx context.Context, canonicalRoot string, mo
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	state, ok, err := s.GetSubjectState(ctx, canonicalRoot)
+	state, ok, err := s.getSQLSubjectState(ctx, canonicalRoot)
 	if err != nil {
 		return SubjectState{}, err
 	}
@@ -96,23 +116,34 @@ VALUES(?,?,?,1,?)`, SubjectKey(canonicalRoot), canonicalRoot, string(mode), now)
 		if err = s.updateSubjectLocked(ctx, canonicalRoot, func(next *SubjectState) { next.ModeFloor = mode }); err != nil {
 			return SubjectState{}, err
 		}
-		state, _, err = s.GetSubjectState(ctx, canonicalRoot)
+		state, _, err = s.getSQLSubjectState(ctx, canonicalRoot)
 	}
-	return state, err
+	if err != nil {
+		return SubjectState{}, err
+	}
+	if err = s.readProviderRecovery(&state); err != nil {
+		return SubjectState{}, err
+	}
+	return state, nil
 }
 
 // UpdateSubjectState applies mutate with optimistic generation control.
-func (s *Store) UpdateSubjectState(ctx context.Context, canonicalRoot string, mutate func(*SubjectState)) error {
+func (s *Store) UpdateSubjectState(ctx context.Context, canonicalRoot string, mutate func(*SubjectState)) (err error) {
 	if err := s.requireWritable(); err != nil {
 		return err
 	}
+	lock, err := lockProviderRecovery(ctx, providerRecoveryPath(s.layout.root, canonicalRoot))
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, lock.Close()) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.updateSubjectLocked(ctx, canonicalRoot, mutate)
 }
 
 func (s *Store) updateSubjectLocked(ctx context.Context, canonicalRoot string, mutate func(*SubjectState)) error {
-	state, ok, err := s.GetSubjectState(ctx, canonicalRoot)
+	state, ok, err := s.getSQLSubjectState(ctx, canonicalRoot)
 	if err != nil {
 		return err
 	}

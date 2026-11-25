@@ -46,7 +46,7 @@ func TestDependencyResultViewWorkerDispatchAndCompletion(t *testing.T) {
 	if worker.Calls() != 1 || got.Status != TaskDone || got.TypedResult == nil || got.ExecutionReceipt == nil {
 		t.Fatalf("dispatch did not finish with a canonical result and receipt: calls=%d, task=%+v", worker.Calls(), got)
 	}
-	if err := c.validateSelectedDependencyDelivery(got.ID, got.TypedResult.Attempt); err != nil {
+	if err := c.validateSelectedDependencyDelivery(t.Context(), got.ID, got.TypedResult.Attempt); err != nil {
 		t.Fatal(err)
 	}
 	after, err := json.Marshal(c.todoItemByID(source.ID).TypedResult, json.Deterministic(true))
@@ -88,7 +88,7 @@ func TestDependencyResultViewFailedDispatchRecordIsNotDelivery(t *testing.T) {
 	if _, err := markDependencyViewModelCall(c.bindDependencyViewCall(t.Context(), &manifest)); err == nil {
 		t.Fatal("failed manifest persistence allowed dispatch")
 	}
-	if manifest.ModelCalled || c.validateSelectedDependencyDelivery(consumer.ID, 1, manifest.RunID) == nil {
+	if manifest.ModelCalled || c.validateSelectedDependencyDelivery(t.Context(), consumer.ID, 1, manifest.RunID) == nil {
 		t.Fatal("failed dispatch record was retained as delivery proof")
 	}
 }
@@ -129,7 +129,7 @@ func TestDependencyResultViewCheckpointCannotForgeDispatch(t *testing.T) {
 	if err := c.taskTracker.TodoList().SetContextManifest(consumer.ID, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.validateSelectedDependencyDelivery(consumer.ID, 1, manifest.RunID); err == nil {
+	if err := c.validateSelectedDependencyDelivery(t.Context(), consumer.ID, 1, manifest.RunID); err == nil {
 		t.Fatal("rewritten checkpoint manufactured a canonical dispatch")
 	}
 	if err := c.validateSelectedRepairContext(t.Context(), c.todoItemByID(consumer.ID), &manifest); err == nil {
@@ -186,9 +186,9 @@ func TestDependencyResultViewFanoutLeafDelivery(t *testing.T) {
 			leaf.modelExecutionID = first.ModelExecutionID
 			validate := func(owner *Coordinator) error {
 				if historical {
-					return owner.validateHistoricalResultDelivery(consumer.ID, 1, first.RunID)
+					return owner.validateHistoricalResultDelivery(t.Context(), consumer.ID, 1, first.RunID)
 				}
-				return owner.validateSelectedDependencyDelivery(consumer.ID, 1, first.RunID)
+				return owner.validateSelectedDependencyDelivery(t.Context(), consumer.ID, 1, first.RunID)
 			}
 			if err := validate(leaf); err != nil {
 				t.Fatalf("a sibling's unpublished dispatch rejected this leaf: %v", err)

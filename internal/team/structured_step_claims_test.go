@@ -13,11 +13,11 @@ func TestDurableReceiptClaimsRejectUnscopedMemoryEvidence(t *testing.T) {
 	if err := c.executionStepReceiptRegistry().Record(ExecutionStepReceipt{ID: "unscoped", TaskID: id, Attempt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.validateTaskResultReceiptClaims(id, &TaskResult{Attempt: 1, ReceiptIDs: []string{"unscoped"}}); err != nil {
+	if err := c.validateTaskResultReceiptClaims(t.Context(), id, &TaskResult{Attempt: 1, ReceiptIDs: []string{"unscoped"}}); err != nil {
 		t.Fatalf("standalone compatibility: %v", err)
 	}
 	c.initEventStore()
-	if err := c.validateTaskResultReceiptClaims(id, &TaskResult{Attempt: 1, ReceiptIDs: []string{"unscoped"}}); err == nil {
+	if err := c.validateTaskResultReceiptClaims(t.Context(), id, &TaskResult{Attempt: 1, ReceiptIDs: []string{"unscoped"}}); err == nil {
 		t.Fatal("durable run borrowed unscoped memory evidence")
 	}
 }

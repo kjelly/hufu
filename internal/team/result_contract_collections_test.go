@@ -153,7 +153,7 @@ func TestFixedCollectionSubmissionRejectsInventedMembershipAndAllowsCorrection(t
 					if len(rows) != 51 || len(payload.CollectionBindings) != 1 || fmt.Sprint(rows[50].(map[string]any)["position"]) != "1" {
 						t.Fatalf("runtime did not assemble exactly the original 51 rows: %s", payload.Value)
 					}
-					if err := c.validateSubmittedEvidenceInputs(item.ID, payload); err != nil {
+					if err := c.validateSubmittedEvidenceInputs(t.Context(), item.ID, payload); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -180,7 +180,7 @@ func TestFixedCollectionKeysBindSourceIdentityAndContent(t *testing.T) {
 	if _, rejection := c.structuredPayloadForSubmission(item.ID, []byte(raw)); rejection == "" {
 		t.Fatal("old decision key was reinterpreted against new evidence")
 	}
-	if err := c.validateSubmittedEvidenceInputs(item.ID, payload); err == nil {
+	if err := c.validateSubmittedEvidenceInputs(t.Context(), item.ID, payload); err == nil {
 		t.Fatal("persisted result with stale provenance was accepted")
 	}
 }
@@ -316,7 +316,7 @@ func TestFixedCollectionProvenanceSurvivesSQLiteReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.session.ResultContracts["decisions.json"].finalReport = template.Must(template.New("fixed").Parse("{{len .decisions}} rows"))
-	if report, selected, err := c.renderedContractFinalReport(); err != nil || !selected || !strings.Contains(report, "2 rows") {
+	if report, selected, err := c.renderedContractFinalReport(t.Context()); err != nil || !selected || !strings.Contains(report, "2 rows") {
 		t.Fatalf("replayed report failed: %q selected=%v err=%v", report, selected, err)
 	}
 	source := c.todoItemByID(sources[0].ID)
@@ -330,7 +330,7 @@ func TestFixedCollectionProvenanceSurvivesSQLiteReplay(t *testing.T) {
 	if err := c.validateCompletedEvidenceDeliveries(t.Context()); err == nil {
 		t.Fatal("replayed completion accepted changed source content")
 	}
-	if _, _, err := c.renderedContractFinalReport(); err == nil {
+	if _, _, err := c.renderedContractFinalReport(t.Context()); err == nil {
 		t.Fatal("final rendering accepted decisions for changed sources")
 	}
 }
@@ -348,6 +348,53 @@ func TestFixedCollectionRejectsDuplicateKeysBeforeNormalization(t *testing.T) {
 	if _, err := canonicalExternalStructuredPayload(request, &WorkerResultProposal{StructuredPayloadJSON: &raw}, nil); err == nil {
 		t.Fatal("external duplicate keys were accepted")
 	}
+}
+
+func TestFixedCollectionRejectsRuntimeOwnedDraftBeforeAction(t *testing.T) {
+	const envelope = `{"status":"success","summary":"reviewed","structured_payload":{"decisions":{"row":{"asset":"runtime-owned","state":"accept","reason":"decision"}}}}`
+	action := &mockNormalizerProvider{fn: func(context.Context, []byte) ([]byte, error) {
+		t.Error("a normalizer received a runtime-owned field")
+		return []byte(`{"decisions":{}}`), nil
+	}}
+	t.Run("direct", func(t *testing.T) {
+		c, _, item, _ := fixedCollectionFixture(t, 0)
+		bindTestNormalizer(t, c, item, action)
+		tool := &submitResultTool{coordinator: c, todoID: item.ID}
+		resp, err := tool.Run(occurrenceTestContext(c, item.ID, 1), fantasy.ToolCall{Input: envelope})
+		reason, _ := classifyRepairFailure(failureResponseSteps(resp), nil)
+		if err != nil || !resp.IsError || reason != RepairFailureInvalidSchema || !strings.Contains(resp.Content, "runtime-owned field asset") {
+			t.Fatalf("direct ownership rejection = %s, %v, %s", reason, err, resp.Content)
+		}
+	})
+	t.Run("collector", func(t *testing.T) {
+		source, assets, _, _ := fixedCollectionFixture(t, 0)
+		compiled := source.session.ResultContracts["decisions.json"]
+		ref := compiled.ref(true)
+		c, item, ctx, receipt := resultCollectionTaskFixture(t, "", true, func(spec *TodoSpec) {
+			spec.ResultContract = &ref
+			spec.EvidenceFrom = []string{assets[0].ID}
+		}, func(c *Coordinator) {
+			ref.Normalizer, ref.NormalizerSHA256 = registerTestNormalizer(t, c, action)
+			c.session.ResultContracts = source.session.ResultContracts
+			c.taskTracker.TodoList().Restore(assets)
+		})
+		cp, err := c.beginResultCollection(ctx, item.ID, receipt, "reviewed")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cp, err = c.reserveResultCollection(ctx, cp, "collector", []byte(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cp, err = c.recordCollectionResponse(ctx, cp, []byte(envelope))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = c.prepareCollectionClaims(ctx, cp)
+		if localResultRejectionReason(err) != RepairFailureInvalidSchema || !strings.Contains(err.Error(), "runtime-owned field asset") {
+			t.Fatalf("collector ownership rejection = %v", err)
+		}
+	})
 }
 
 func TestFixedCollectionCommitRejectsForgedCanonicalRows(t *testing.T) {

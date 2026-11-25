@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"os"
@@ -443,41 +445,52 @@ func (t *codexTranscript) record(format string, args ...any) {
 	t.bytes += int64(len(line))
 }
 
-func (t *codexTranscript) persist(workspace, provider, runID, taskID string, attempt int) (string, error) {
+func (t *codexTranscript) content() string {
 	t.mu.Lock()
 	content := strings.Join(t.lines, "\n") + "\n"
 	t.mu.Unlock()
+	return boundCodexTranscriptContent(content, t.maxBytes)
+}
 
+func (t *codexTranscript) persist(workspace, provider, runID, taskID string, attempt int) (string, error) {
 	if strings.TrimSpace(workspace) == "" || strings.TrimSpace(provider) == "" ||
 		strings.TrimSpace(runID) == "" || strings.TrimSpace(taskID) == "" || attempt <= 0 {
 		return "", fmt.Errorf("codex transcript: complete run, provider, task, and attempt identity is required")
 	}
-	content = boundCodexTranscriptContent(content, t.maxBytes)
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
 		return "", fmt.Errorf("codex transcript: open artifact store: %w", err)
 	}
+	content := t.content()
 	id := codexTranscriptArtifactID(provider, runID, taskID, attempt, content)
-	putResult, err := store.Put(context.Background(), PutArtifactRequest{
+	if err := putCodexTranscript(context.Background(), store, id, provider, runID, taskID, attempt, []byte(content), time.Time{}); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func putCodexTranscript(ctx context.Context, store *FileArtifactStore, id, provider, runID, taskID string, attempt int, content []byte, completedAt time.Time) error {
+	putResult, err := store.Put(ctx, PutArtifactRequest{
 		ID:          id,
 		Kind:        codexProviderTranscriptKind,
 		Role:        codexProviderTranscriptRole,
 		Path:        "provider-transcripts/" + id + ".log",
 		Description: "Bounded redacted Codex provider transcript",
 		MediaType:   "text/plain",
-		Content:     []byte(content),
+		Content:     content,
 		RunID:       runID,
 		TaskID:      taskID,
 		Attempt:     attempt,
 		Provider:    provider,
+		CreatedAt:   completedAt,
 	})
 	if err != nil {
-		return "", fmt.Errorf("codex transcript: persist artifact: %w", err)
+		return fmt.Errorf("codex transcript: persist artifact: %w", err)
 	}
-	if _, err := verifyCodexTranscriptArtifact(context.Background(), store, putResult.ID, provider, runID, taskID, attempt); err != nil {
-		return "", fmt.Errorf("codex transcript: verify artifact: %w", err)
+	if _, err := verifyCodexTranscriptArtifact(ctx, store, putResult.ID, provider, runID, taskID, attempt); err != nil {
+		return fmt.Errorf("codex transcript: verify artifact: %w", err)
 	}
-	return putResult.ID, nil
+	return nil
 }
 
 const (
@@ -495,6 +508,17 @@ func codexTranscriptArtifactID(provider, runID, taskID string, attempt int, cont
 // metadata must prove the exact provider/run/task/attempt occurrence before
 // the ID can cross that boundary.
 func verifyCodexTranscriptArtifact(ctx context.Context, store *FileArtifactStore, id, provider, runID, taskID string, attempt int) (ArtifactRef, error) {
+	ref, err := codexTranscriptArtifactRef(ctx, store, id, provider, runID, taskID, attempt)
+	if err != nil {
+		return ArtifactRef{}, err
+	}
+	if err := store.Verify(ctx, ref); err != nil {
+		return ArtifactRef{}, err
+	}
+	return ref, nil
+}
+
+func codexTranscriptArtifactRef(ctx context.Context, store *FileArtifactStore, id, provider, runID, taskID string, attempt int) (ArtifactRef, error) {
 	if store == nil || !validArtifactID(id) {
 		return ArtifactRef{}, fmt.Errorf("provider transcript reference %q is invalid", id)
 	}
@@ -506,9 +530,6 @@ func verifyCodexTranscriptArtifact(ctx context.Context, store *FileArtifactStore
 		ref.Provider != provider || ref.RunID != runID || ref.TaskID != taskID || ref.Attempt != attempt ||
 		ref.SHA256 == "" || ref.Bytes < 0 || ref.ByteSize != ref.Bytes {
 		return ArtifactRef{}, fmt.Errorf("provider transcript %q has mismatched immutable scope metadata", id)
-	}
-	if _, err := store.Resolve(ctx, ref); err != nil {
-		return ArtifactRef{}, err
 	}
 	return ref, nil
 }
@@ -530,14 +551,28 @@ func boundCodexTranscriptContent(content string, maxBytes int64) string {
 	return content[:cut] + marker
 }
 
-// finishCodexAttempt seals the provider transcript before any attempt result
-// crosses the provider boundary. A successful result without a verified
-// transcript is not auditable, so all trusted and untrusted result fields are
-// cleared when sealing fails.
+// finishCodexAttempt seals the provider transcript before returning. A mixed
+// fanout success keeps it in the recovery stage until the verified receipt is
+// ready to publish. Ordinary attempts publish the transcript at this boundary.
 func (p *CodexSubagentProvider) finishCodexAttempt(
 	transcript *codexTranscript, artifactWorkspace string, request AttemptRequest,
 	res AttemptResult, err error,
 ) (AttemptResult, error) {
+	if rejection, ok := errors.AsType[*localResultAdmissionError](err); ok {
+		err = &externalResultAdmissionError{reason: rejection.reason, cause: err}
+	}
+	if request.sealFanoutResult && err == nil && res.CanonicalResult != nil && taskResultStatusIsSuccessful(res.CanonicalResult.Status) {
+		ref, stageErr := stageCodexFanoutTranscript(artifactWorkspace, p.name, request, transcript.content())
+		if stageErr != nil {
+			if res.repairProvenance != nil {
+				res.CanonicalResult, res.invariantClaims, res.Output = nil, nil, ""
+				return res, &externalResultRepairError{cause: stageErr}
+			}
+			return AttemptResult{}, stageErr
+		}
+		res.TranscriptRef = ref
+		return res, nil
+	}
 	ref, persistErr := transcript.persist(artifactWorkspace, p.name, request.RunID, request.TaskID, request.Attempt)
 	if persistErr == nil {
 		res.TranscriptRef = ref
@@ -557,6 +592,9 @@ func (p *CodexSubagentProvider) finishCodexAttempt(
 	} else {
 		err = transcriptErr
 	}
+	if res.repairProvenance != nil {
+		err = &externalResultRepairError{cause: err}
+	}
 	return res, err
 }
 
@@ -566,6 +604,26 @@ func (p *CodexSubagentProvider) finishCodexAttempt(
 // turn depends on it), run exactly one turn, canonicalize the untrusted
 // proposal against the actually-observed workspace delta, and always tear
 // the process down — on every exit path, success or failure.
+func (p *CodexSubagentProvider) newAttemptTranscript(sealFanoutResult bool) *codexTranscript {
+	limit := p.config.MaxTranscriptBytes
+	if sealFanoutResult && limit > codexDefaultMaxTranscript {
+		limit = codexDefaultMaxTranscript
+	}
+	return newCodexTranscript(limit)
+}
+
+func prepareCodexExecutionWorld(ctx context.Context, world *LocalExecutionWorld, spec ExecutionWorldSpec, session *TeamSession) (*PreparedExecutionWorld, error) {
+	if session != nil {
+		spec.ControlWorkspace = session.Workspace
+		version := session.WorkspaceVersion
+		spec.RootIdentity = version.SubjectIdentity
+		if spec.RootIdentity != nil && version.SubjectRoot != spec.Root {
+			return nil, errWorkspaceSnapshotRootChanged
+		}
+	}
+	return world.Prepare(ctx, spec)
+}
+
 func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptRequest) (result AttemptResult, resultErr error) {
 	if err := p.validateAttemptEntry(ctx, request); err != nil {
 		return AttemptResult{}, err
@@ -604,7 +662,7 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 		return AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("resolve durable Codex session: %w", err))
 	}
 
-	transcript := newCodexTranscript(p.config.MaxTranscriptBytes)
+	transcript := p.newAttemptTranscript(request.sealFanoutResult)
 	workspace, networkDisabled, worldPolicyErr := p.coordinator.codexExecutionWorld(p.name, request.Agent)
 	if worldPolicyErr != nil {
 		return AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("resolve frozen Codex execution world: %w", worldPolicyErr))
@@ -636,21 +694,27 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	defer imageInput.Close()
 
 	startupTimeout, interruptGrace, shutdownGrace := p.durations()
-	controlWorkspace := ""
-	if p.coordinator != nil && p.coordinator.session != nil {
-		controlWorkspace = p.coordinator.session.Workspace
-	}
-	prepared, err := world.Prepare(ctx, ExecutionWorldSpec{
+	session := p.coordinator.session
+	prepared, err := prepareCodexExecutionWorld(ctx, world, ExecutionWorldSpec{
 		RunID: request.RunID, TaskID: request.TaskID, Attempt: request.Attempt,
-		Root: workspace, CWD: workspace, ControlWorkspace: controlWorkspace, SideEffect: request.Task.SideEffect,
+		Root: workspace, CWD: workspace, SideEffect: request.Task.SideEffect,
 		NetworkAllowed: !networkDisabled, EnvironmentAllowlist: p.config.InheritEnv,
 		Environment: childEnvironment,
-	})
+	}, session)
 	if err != nil {
+		// A failed managed prepare has not authorized any write through the
+		// subject path, including a transcript when artifacts default there.
+		if session != nil && session.WorkspaceVersion.SubjectIdentity != nil {
+			return AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("prepare execution world: %w", err))
+		}
 		transcript.record("execution world prepare failed: %v", err)
 		return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("prepare execution world: %w", err)))
 	}
 	defer func() { _ = world.Release(context.Background(), prepared) }()
+	providerDir, err := prepared.providerDir()
+	if err != nil {
+		return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{}, codexFail(CodexFailureUnavailable, err))
+	}
 
 	sandbox := codexSandboxReadOnly
 	if len(prepared.WritableRoots) > 0 {
@@ -668,24 +732,42 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 			return AttemptResult{}, err
 		}
 	}
-	proc, err := StartCodexAppServer(startCtx, NewProcessSupervisor(), CodexProcessConfig{
-		Argv: p.config.Command, Dir: workspace, Env: prepared.Environment,
+	sup := NewProcessSupervisor()
+	proc, err := p.startCodexAttemptProcess(startCtx, sup, request, CodexProcessConfig{
+		Argv: p.config.Command, Dir: prepared.processDir(), Env: prepared.Environment,
 		MaxFrameBytes: int(p.config.MaxEventBytes), StartupTimeout: startupTimeout,
 	})
 	if err != nil {
 		transcript.record("start app-server failed: %v", err)
-		return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("start codex app-server: %w", err)))
+		res := AttemptResult{}
+		failure := p.classifyThreadStartup(err)
+		if init, ok := errors.AsType[*codexInitializationFailure](err); ok && init.settled {
+			res, failure = p.settleFailedCodexWorkspace(context.WithoutCancel(ctx), request, world, prepared, res, failure, init.secrets)
+		}
+		return p.finishCodexAttempt(transcript, artifactWorkspace, request, res, failure)
 	}
-	sup := NewProcessSupervisor()
-	processStopped := make(chan struct{})
-	var stopOnce codexStopOnce
-	stopProcess := func() {
-		stopOnce.do(func() {
-			p.stopCodexProcess(sup, proc, interruptGrace, shutdownGrace, transcript)
-			close(processStopped)
-		})
+	durable := context.WithoutCancel(ctx)
+	stopProcess := sync.OnceValue(func() error {
+		err := p.stopCodexProcess(proc, interruptGrace, shutdownGrace, transcript)
+		if err != nil {
+			p.coordinator.markWorkspaceProviderUnsettled(request)
+		}
+		return err
+	})
+	proc.Client.finishProcess = stopProcess
+	defer func() { _ = stopProcess() }()
+	finishFailure := func(res AttemptResult, failure error, secrets *utils.SecretRedactionScope) (AttemptResult, error) {
+		if secrets == nil {
+			secrets = proc.Client.newDiagnostics(nil).secrets
+		}
+		if err := stopProcess(); err != nil {
+			failure = err
+		} else {
+			res, failure = p.settleFailedCodexWorkspace(durable, request, world, prepared, res, failure, secrets)
+		}
+		recordCodexFailureEvidence(transcript, "provider turn output", res.Output)
+		return p.finishCodexAttempt(transcript, artifactWorkspace, request, res, failure)
 	}
-	defer stopProcess()
 
 	if request.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -694,7 +776,7 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	}
 
 	threadCfg := CodexThreadConfig{
-		CWD: prepared.CWD, Model: request.ModelID, Sandbox: sandbox,
+		CWD: providerDir, Model: request.ModelID, Sandbox: sandbox,
 		NetworkDisabled:       networkDisabled,
 		DeveloperInstructions: codexWorkerDeveloperInstructions,
 	}
@@ -702,21 +784,19 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 		transcript.record("session bound thread_id=%s", state.ThreadID)
 		return p.coordinator.persistProviderSessionBinding(context.Background(), request.TaskID, request.Attempt, ProviderBinding{
 			Provider: p.name, Protocol: p.config.Protocol, SessionID: state.ThreadID,
-			ExecutionWorldID: prepared.ID, CWD: state.CWD, EffectiveModel: state.Model, SandboxMode: state.Sandbox,
+			ExecutionWorldID: prepared.ID, CWD: prepared.CWD, EffectiveModel: state.Model, SandboxMode: state.Sandbox,
 			ResumeSupported: true,
 		})
 	})
 	if err != nil {
 		transcript.record("thread start/resume failed: %v", err)
-		return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{ProviderSessionID: existingThreadID}, p.classifyThreadError(ctx, err))
+		if !proc.Client.providerIdentitySafe(existingThreadID) {
+			existingThreadID = ""
+		}
+		return finishFailure(AttemptResult{ProviderSessionID: existingThreadID}, p.classifyThreadError(ctx, err), nil)
 	}
 	result.ProviderSessionID = effective.ThreadID
 
-	// turnIDCh carries turn/start's synchronous ack (the real turn id,
-	// required by turn/interrupt — the protocol has no "interrupt whatever
-	// is active" shorthand) from the turn goroutine to the cancellation
-	// branch below, which runs concurrently with it.
-	turnIDCh := make(chan string, 1)
 	reportCodexActivity := func(activity codexTurnActivity) {
 		transcript.record("turn activity method=%s message=%s elapsed=%s heartbeat=%t", activity.Method, activity.Message, activity.Elapsed.Round(time.Millisecond), activity.Heartbeat)
 		if p.coordinator == nil {
@@ -739,213 +819,249 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 			},
 		})
 	}
-	onTurnStarted := func(id string) {
-		select {
-		case turnIDCh <- id:
-		default:
-		}
+	onTurnStarted := func(string) error {
 		message := "Codex turn accepted"
 		if request.ReasoningEffort != "" {
 			message += " (reasoning effort: " + request.ReasoningEffort + ")"
 		}
 		reportCodexActivity(codexTurnActivity{Method: codexMethodTurnStart, Message: message})
+		return nil
 	}
 	if err := p.admitImageTurn(ctx, request, imageInput); err != nil {
-		return AttemptResult{}, err
+		return finishFailure(result, err, nil)
 	}
 	var nativeInput []codexUserInput
 	if imageInput != nil {
 		nativeInput = imageInput.projection.Inputs(request.Prompt)
 	}
-	turnDone := make(chan struct{})
-	var turnResult CodexTurnResult
-	var turnErr error
-	go func() {
-		defer close(turnDone)
-		turnResult, turnErr = codexRunTurn(ctx, proc.Client, effective.ThreadID, request.Prompt, codexTurnOptions{
-			Input:             nativeInput,
-			ResultProjection:  projectionForContract(request.resultContractSchema),
-			RuntimeCompletion: hasRuntimeCompletion(request.resultContractSchema),
-			ReasoningEffort:   request.ReasoningEffort,
-			DetailedOutput:    p.coordinator.verbose,
-			OnTurnStarted:     onTurnStarted,
-			OnActivity:        reportCodexActivity,
-		})
-	}()
+	turnResult, turnErr := runManagedCodexTurn(ctx, proc.Client, effective.ThreadID, request.Prompt, codexTurnOptions{
+		CWD:               providerDir,
+		Input:             nativeInput,
+		ResultProjection:  projectionForContract(request.resultContractSchema),
+		RuntimeCompletion: hasRuntimeCompletion(request.resultContractSchema),
+		ReasoningEffort:   request.ReasoningEffort,
+		DetailedOutput:    p.coordinator.verbose,
+		OnTurnStarted:     onTurnStarted,
+		OnActivity:        reportCodexActivity,
+	}, interruptGrace, transcript)
 
-	select {
-	case <-turnDone:
-	case <-ctx.Done():
-		transcript.record("attempt context done while turn in flight: %v", ctx.Err())
-		class := CodexFailureCancelled
-		if request.Timeout > 0 && ctx.Err() == context.DeadlineExceeded {
-			class = CodexFailureTimeout
-		}
-		// Bounded by interruptGrace, not context.Background(): turn/interrupt
-		// is a best-effort courtesy to the app-server, and an app-server that
-		// never acks it (or a fake-server fixture with no scripted response)
-		// must never block the cancellation path itself — stopProcess's own
-		// interrupt-grace/terminate/kill escalation is what actually
-		// guarantees forward progress. The same budget also covers the rare
-		// race where cancellation arrives before turn/start's own ack: if no
-		// turn id shows up in time, skip the (now impossible, since the real
-		// protocol requires turnId) interrupt call and fall straight through
-		// to process-tree escalation.
-		interruptCtx, interruptCancel := context.WithTimeout(context.Background(), interruptGrace)
-		var turnID string
-		select {
-		case turnID = <-turnIDCh:
-		case <-interruptCtx.Done():
-		}
-		if turnID != "" {
-			_ = codexTurnInterrupt(interruptCtx, proc.Client, effective.ThreadID, turnID)
-		}
-		interruptCancel()
-		stopProcess()
-		<-turnDone // codexRunTurn observes the same ctx and returns once the process/context closes
-		delta := p.snapshotDeltaBestEffort(context.Background(), world, prepared)
-		return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: delta}, codexFail(class, ctx.Err()))
+	// Use the diagnostic sealed by the turn before recording any errors.
+	result.Output = turnResult.diagnosticOutput()
+	result.ProviderTurnID = turnResult.TurnID
+	if failure := codexAttemptContextFailure(ctx, request.Timeout, proc.Client.completedBeforeCancellation()); failure != nil {
+		return finishFailure(result, failure, turnResult.diagnosticSecrets)
 	}
-
 	if turnErr != nil {
 		transcript.record("turn failed: %v", turnErr)
-		var protoErr *CodexProtocolIncompleteError
-		if !errors.As(turnErr, &protoErr) {
-			delta := p.snapshotDeltaBestEffort(context.Background(), world, prepared)
-			output := boundedCodexFailureEvidence(turnResult.RawFinalOutput)
-			recordCodexFailureEvidence(transcript, "provider turn output", output)
-			return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: delta, Output: output}, p.classifyTurnError(turnErr))
+		if _, incomplete := errors.AsType[*CodexProtocolIncompleteError](turnErr); !incomplete {
+			return finishFailure(result, p.classifyTurnError(turnErr), turnResult.diagnosticSecrets)
 		}
-
-		// §23: an invalid/missing proposal MUST NOT immediately rerun the
-		// full coding task. Freeze whatever the workspace already shows
-		// before attempting exactly one read-only, schema-only repair — a
-		// repair proposal can never retroactively change what Hufu already
-		// observed here.
-		originalEvidence := boundedCodexFailureEvidence(turnResult.RawFinalOutput)
-		stopProcess()
-		frozen, snapErr := world.Snapshot(context.Background(), prepared)
-		if snapErr != nil {
-			transcript.record("repair: freeze snapshot failed: %v", snapErr)
-			recordCodexFailureEvidence(transcript, "original provider turn output", originalEvidence)
-			return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{ProviderSessionID: effective.ThreadID, Output: originalEvidence}, codexFail(CodexFailureWorkspaceViolation, fmt.Errorf("freeze workspace snapshot: %w", snapErr)))
-		}
-		frozenDelta, diffErr := NewWorkspaceSnapshotter().Diff(context.Background(), prepared.Baseline, frozen)
-		if diffErr != nil {
-			transcript.record("repair: freeze diff failed: %v", diffErr)
-			recordCodexFailureEvidence(transcript, "original provider turn output", originalEvidence)
-			return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{ProviderSessionID: effective.ThreadID, Output: originalEvidence}, codexFail(CodexFailureWorkspaceViolation, fmt.Errorf("freeze workspace diff: %w", diffErr)))
-		}
-		if err := ValidateExecutionWorldDelta(prepared, frozenDelta); err != nil {
-			p.coordinator.markWorkspaceUnauthorizedMutation(context.Background(), request, frozenDelta, err)
-			transcript.record("repair: workspace violation before repair: %v", err)
-			recordCodexFailureEvidence(transcript, "original provider turn output", originalEvidence)
-			return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{ProviderSessionID: effective.ThreadID, WorkspaceDelta: frozenDelta, Output: originalEvidence}, codexFail(CodexFailureWorkspaceViolation, err))
-		}
-
-		canonical, claims, repairOutput, repairTurnID, repairErr := p.attemptResultRepair(ctx, sup, request, effective.ThreadID, prepared, frozenDelta, transcript, reportCodexActivity, startupTimeout, interruptGrace, shutdownGrace)
-		if repairErr != nil {
-			transcript.record("repair failed: %v", repairErr)
-			failureOutput := combineCodexFailureEvidence(originalEvidence, repairOutput)
-			recordCodexFailureEvidence(transcript, "original provider turn output", originalEvidence)
-			recordCodexFailureEvidence(transcript, "repair provider turn output", repairOutput)
-			return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{
-				ProviderSessionID: effective.ThreadID, WorkspaceDelta: frozenDelta,
-				ProviderTurnID: repairTurnID, Output: failureOutput,
-			}, repairErr)
-		}
-		return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{
-			ProviderSessionID: effective.ThreadID, WorkspaceDelta: frozenDelta, ProviderTurnID: repairTurnID,
-			CanonicalResult: canonical, invariantClaims: claims, Output: canonical.Summary,
-		}, nil)
 	}
+
 	transcript.record("turn completed turn_id=%s status=%s", turnResult.TurnID, proposalStatusForLog(turnResult.Proposal))
-	result.ProviderTurnID = turnResult.TurnID
-	// Keep only bounded/redacted provider text in a failed AttemptResult. The
-	// decoded proposal is still used locally for canonicalization, but it is
-	// never returned as a durable diagnostic object: proposal fields are
-	// untrusted and DecodeWorkerResultProposal intentionally does not impose
-	// every canonical storage bound.
-	result.Output = boundedCodexFailureEvidence(turnResult.RawFinalOutput)
-
-	stopProcess()
-	onViolation := func(delta WorkspaceDelta, violation error) {
-		p.coordinator.markWorkspaceUnauthorizedMutation(context.Background(), request, delta, violation)
+	if err := stopProcess(); err != nil {
+		return p.finishCodexAttempt(transcript, artifactWorkspace, request, result, err)
 	}
-	result, err = finalizeCodexTurn(context.Background(), request, world, prepared, turnResult, result, transcript, onViolation)
+	settleCtx := ctx
+	if proc.Client.completedBeforeCancellation() {
+		settleCtx = durable
+	}
+	result, err = p.finalizeCodexTurn(settleCtx, &request, world, prepared, turnResult, turnErr, result, transcript)
+	if localResultRejectionReason(err) == RepairFailureInvalidSchema {
+		result, err = p.repairCodexResult(ctx, sup, request, world, prepared, result, err, transcript, artifactWorkspace, reportCodexActivity, turnResult.diagnosticSecrets)
+	}
 	return p.finishCodexAttempt(transcript, artifactWorkspace, request, result, err)
 }
 
-func finalizeCodexTurn(
-	ctx context.Context, request AttemptRequest, world ExecutionWorld, prepared *PreparedExecutionWorld,
-	turnResult CodexTurnResult, result AttemptResult, transcript *codexTranscript, onViolation func(WorkspaceDelta, error),
-) (AttemptResult, error) {
-	final, snapErr := world.Snapshot(ctx, prepared)
-	if snapErr != nil {
-		transcript.record("final snapshot failed: %v", snapErr)
-		recordCodexFailureEvidence(transcript, "provider turn output", result.Output)
-		return result, codexFail(CodexFailureWorkspaceViolation, fmt.Errorf("final workspace snapshot: %w", snapErr))
-	}
-	wdelta, diffErr := NewWorkspaceSnapshotter().Diff(ctx, prepared.Baseline, final)
-	if diffErr != nil {
-		transcript.record("workspace diff failed: %v", diffErr)
-		recordCodexFailureEvidence(transcript, "provider turn output", result.Output)
-		return result, codexFail(CodexFailureWorkspaceViolation, fmt.Errorf("workspace diff: %w", diffErr))
-	}
-	result.WorkspaceDelta = wdelta
-	if err := ValidateExecutionWorldDelta(prepared, wdelta); err != nil {
-		onViolation(wdelta, err)
-		transcript.record("workspace violation: %v", err)
-		recordCodexFailureEvidence(transcript, "provider turn output", result.Output)
-		return result, codexFail(CodexFailureWorkspaceViolation, err)
-	}
+func runManagedCodexTurn(ctx context.Context, client *CodexRPCClient, threadID, prompt string, options codexTurnOptions, interruptGrace time.Duration, transcript *codexTranscript) (result CodexTurnResult, turnErr error) {
+	turnDone := make(chan struct{})
+	monitorDone := make(chan struct{})
+	go func() {
+		defer close(monitorDone)
+		select {
+		case <-turnDone:
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil && !client.completedBeforeCancellation() {
+			transcript.record("attempt context done while turn in flight: %v", ctx.Err())
+			interruptCodexTurn(client, threadID, interruptGrace)
+			_ = client.finishProcess()
+		}
+	}()
+	defer func() {
+		close(turnDone)
+		<-monitorDone
+		if result.TurnID == "" {
+			result.TurnID = client.acknowledgedTurnID()
+		}
+	}()
+	return codexRunTurn(ctx, client, threadID, prompt, options)
+}
 
-	canonical, err := NewExternalResultCanonicalizer().Canonicalize(ctx, request, AttemptResult{ResultProposal: turnResult.Proposal}, wdelta, prepared.Root)
+// A canceled response waiter leaves its sent start pending through this
+// bounded wait for a wire-authenticated ACK.
+func interruptCodexTurn(client *CodexRPCClient, threadID string, grace time.Duration) {
+	if client.observedTurnTerminal() != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	if turnID := client.awaitAcknowledgedTurn(ctx); turnID != "" && client.observedTurnTerminal() == nil {
+		_ = codexTurnInterrupt(ctx, client, threadID, turnID)
+	}
+}
+
+func (p *CodexSubagentProvider) repairCodexResult(ctx context.Context, sup ProcessSupervisor, request AttemptRequest, world ExecutionWorld, prepared *PreparedExecutionWorld, result AttemptResult, rejection error, transcript *codexTranscript, workspace string, onActivity func(codexTurnActivity), secrets *utils.SecretRedactionScope) (AttemptResult, error) {
+	recordCodexFailureEvidence(transcript, "original provider turn output", result.Output)
+	ref, err := transcript.persist(workspace, p.name, request.RunID, request.TaskID, request.Attempt)
+	if err != nil {
+		return result, rejectLocalResultPersistence(err)
+	}
+	durable := context.WithoutCancel(ctx)
+	key, proof, err := p.coordinator.reserveExternalResultCorrection(durable, request, result, ref, prepared, rejection)
+	if err != nil {
+		return result, err
+	}
+	result.repairProvenance = proof
+	startup, interrupt, shutdown := p.durations()
+	acknowledgementHandled := false
+	canonical, claims, repairOutput, repairTurnID, err := p.attemptResultRepair(ctx, sup, request, world, result.ProviderSessionID, prepared, result.WorkspaceDelta, rejection, transcript, onActivity, func(turnID string) error {
+		acknowledgementHandled = true
+		if err := p.coordinator.recordExternalCorrectionTurn(durable, key, proof, turnID); err != nil {
+			return err
+		}
+		onActivity(codexTurnActivity{Method: codexMethodTurnStart, Message: "Codex result correction accepted"})
+		return nil
+	}, startup, interrupt, shutdown, secrets)
+	if !acknowledgementHandled && repairTurnID != "" {
+		if recordErr := p.coordinator.recordExternalCorrectionTurn(durable, key, proof, repairTurnID); recordErr != nil {
+			err = errors.Join(err, recordErr)
+		}
+	}
+	if proof.ProviderCorrectionTurnID != "" {
+		result.ProviderTurnID = proof.ProviderCorrectionTurnID
+	}
+	if err == nil {
+		if proof.ProviderCorrectionTurnID != repairTurnID {
+			err = rejectResultSourceRead(errTaskResultStale)
+		} else {
+			var response *externalResultCorrectionResponse
+			response, err = p.coordinator.checkpointExternalCorrectionResponse(durable, key, repairTurnID, canonical)
+			if err == nil {
+				canonical = response.Result
+				proof.PreparedCandidateSHA256 = response.ResultSHA256
+			}
+		}
+	}
+	if err != nil {
+		transcript.record("repair failed: %v", err)
+		result.Output = combineCodexFailureEvidence(result.Output, repairOutput)
+		recordCodexFailureEvidence(transcript, "repair provider turn output", repairOutput)
+		return result, &externalResultRepairError{cause: err}
+	}
+	onActivity(codexTurnActivity{Method: codexNotificationTurnCompleted, Message: "Codex result correction recorded"})
+	proof.Success, proof.SubmittedResult, proof.Error = true, cloneTaskResult(canonical), ""
+	result.CanonicalResult, result.invariantClaims, result.Output = canonical, claims, canonical.Summary
+	return result, nil
+}
+
+func (p *CodexSubagentProvider) finalizeCodexTurn(
+	ctx context.Context, request *AttemptRequest, world ExecutionWorld, prepared *PreparedExecutionWorld,
+	turnResult CodexTurnResult, turnErr error, result AttemptResult, transcript *codexTranscript,
+) (AttemptResult, error) {
+	final, wdelta, err := p.observeCodexWorkspaceEffects(context.WithoutCancel(ctx), *request, world, prepared, prepared.Baseline, turnResult.diagnosticSecrets)
+	result.WorkspaceDelta = wdelta
+	if err != nil {
+		transcript.record("workspace settlement failed: %v", err)
+		recordCodexFailureEvidence(transcript, "provider turn output", result.Output)
+		return result, err
+	}
+	request.resultWorkspaceBaseline, request.resultWorkspaceSnapshot = &prepared.Baseline, &final
+
+	if turnErr != nil {
+		return result, classifyRejectedCodexResult(ctx, *request, turnResult, wdelta, prepared.Root, turnErr)
+	}
+	canonical, claims, err := turnResult.canonicalize(ctx, *request, wdelta, prepared.Root)
 	if err != nil {
 		transcript.record("canonicalize failed: %v", err)
 		recordCodexFailureEvidence(transcript, "rejected provider turn output", result.Output)
 		return result, fmt.Errorf("canonicalize codex result: %w", err)
 	}
 	result.CanonicalResult = canonical
-	result.invariantClaims = cloneInvariantAssessmentClaims(turnResult.Proposal.InvariantAssessments)
+	result.invariantClaims = claims
 	result.Output = canonical.Summary
 	return result, nil
+}
+
+func classifyRejectedCodexResult(ctx context.Context, request AttemptRequest, result CodexTurnResult, delta WorkspaceDelta, root string, err error) error {
+	if _, incomplete := errors.AsType[*CodexProtocolIncompleteError](err); !incomplete {
+		return err
+	}
+	if sourceErr := authenticateRejectedExternalResult(ctx, request, result.RawFinalOutput, delta, root); sourceErr != nil {
+		return redactCodexError(sourceErr, result.diagnosticSecrets)
+	}
+	if result.diagnosticsUnsafe {
+		return rejectIncompleteCodexDiagnostics()
+	}
+	return rejectLocalResult(RepairFailureInvalidSchema, err)
 }
 
 // attemptResultRepair implements §23's repair flow: start a fresh app-server
 // process (the original one is already stopped by the caller before this
 // runs), resume the same thread while forcing a read-only sandbox, and send
 // exactly one schema-only turn asking only for a structured account of the
-// work already done. It never re-observes the workspace itself —
-// canonicalization always uses frozenDelta, the delta the caller captured
-// before calling this — so a repair turn cannot retroactively change
-// observed workspace history even if the app-server disobeys the read-only
-// instruction. Returns the canonical result, bounded/redacted repair output,
+// work already done. The correction's workspace is checked independently
+// after stopping it, and canonicalization uses the frozen original delta.
+// Returns the canonical result, bounded/redacted repair output,
 // the repair turn's ID (diagnostic only, may be empty on failure), and an
 // error. The untrusted decoded proposal remains local to this function and
 // is never returned on a failed attempt.
 func (p *CodexSubagentProvider) attemptResultRepair(
-	ctx context.Context, sup ProcessSupervisor, request AttemptRequest,
-	threadID string, prepared *PreparedExecutionWorld, frozenDelta WorkspaceDelta,
-	transcript *codexTranscript, onActivity func(codexTurnActivity), startupTimeout, interruptGrace, shutdownGrace time.Duration,
+	ctx context.Context, sup ProcessSupervisor, request AttemptRequest, world ExecutionWorld,
+	threadID string, prepared *PreparedExecutionWorld, frozenDelta WorkspaceDelta, rejection error,
+	transcript *codexTranscript, onActivity func(codexTurnActivity), onTurnStarted func(string) error,
+	startupTimeout, interruptGrace, shutdownGrace time.Duration, secrets *utils.SecretRedactionScope,
 ) (canonical *TaskResult, claims *[]InvariantAssessmentClaim, output, turnID string, resultErr error) {
+	providerDir, err := prepared.providerDir()
+	if err != nil {
+		return nil, nil, "", "", classifyCodexRepairFailure(ctx, codexFail(CodexFailureUnavailable, err))
+	}
 	transcript.record("attempting result-only repair thread_id=%s", threadID)
 
-	startCtx := ctx
-	var startCancel context.CancelFunc
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		startCtx, startCancel = context.WithTimeout(ctx, startupTimeout)
-		defer startCancel()
-	}
-	repairProc, err := StartCodexAppServer(startCtx, sup, CodexProcessConfig{
-		Argv: p.config.Command, Dir: prepared.CWD, Env: prepared.Environment,
+	var stopRepair func() error
+	var startupFailure error
+	verifyReadonly := sync.OnceValue(func() error {
+		if isUnsettledCodexInitialization(startupFailure) {
+			return p.classifyThreadStartup(startupFailure)
+		}
+		if stopRepair != nil {
+			if err := stopRepair(); err != nil {
+				p.coordinator.markWorkspaceProviderUnsettled(request)
+				return err
+			}
+		}
+		return p.validateCodexRepairWorkspace(context.WithoutCancel(ctx), request, world, prepared, secrets)
+	})
+	defer func() {
+		if err := verifyReadonly(); err != nil {
+			canonical, claims, resultErr = nil, nil, err
+		}
+	}()
+	repairProc, err := p.startCodexAttemptProcess(ctx, sup, request, CodexProcessConfig{
+		Argv: p.config.Command, Dir: prepared.processDir(), Env: prepared.Environment,
 		MaxFrameBytes: int(p.config.MaxEventBytes), StartupTimeout: startupTimeout,
 	})
 	if err != nil {
-		transcript.record("repair: start app-server failed: %v", err)
-		return nil, nil, "", "", codexFail(CodexFailureUnavailable, fmt.Errorf("start codex app-server for repair: %w", err))
+		startupFailure = redactCodexError(err, secrets)
+		if init, ok := errors.AsType[*codexInitializationFailure](err); ok {
+			secrets = init.secrets
+		}
+		transcript.record("repair: start app-server failed: %v", startupFailure)
+		return nil, nil, "", "", classifyCodexRepairFailure(ctx, p.classifyThreadStartup(startupFailure))
 	}
-	defer p.stopCodexProcess(sup, repairProc, interruptGrace, shutdownGrace, transcript)
+	secrets = repairProc.Client.newDiagnostics(secrets).secrets
+	stopRepair = sync.OnceValue(func() error { return p.stopCodexProcess(repairProc, interruptGrace, shutdownGrace, transcript) })
+	repairProc.Client.finishProcess = stopRepair
 
 	// Sandbox is forced to read-only here regardless of the original task's
 	// side-effect-derived sandbox: the repair turn MUST NOT have
@@ -953,46 +1069,250 @@ func (p *CodexSubagentProvider) attemptResultRepair(
 	// scoped in the real protocol, so the read-only repair instruction is
 	// bound to this resumed thread, not passed per-turn.
 	threadCfg := CodexThreadConfig{
-		CWD: prepared.CWD, Model: request.ModelID, Sandbox: codexSandboxReadOnly,
+		CWD: providerDir, Model: request.ModelID, Sandbox: codexSandboxReadOnly,
 		NetworkDisabled:       !prepared.NetworkAllowed,
 		DeveloperInstructions: codexResultRepairInstruction,
 	}
 	effective, err := codexStartOrResumeThread(ctx, repairProc.Client, threadID, threadCfg, nil)
 	if err != nil {
+		err = redactCodexError(err, secrets)
 		transcript.record("repair: thread/resume failed: %v", err)
 		// The repair runs after a turn changed the workspace, so it keeps the
 		// protocol disposition that preserves the partial result, even when
 		// the cause is a session resume mismatch.
-		return nil, nil, "", "", codexFail(CodexFailureProtocolError, withFailureClassOverride(fmt.Errorf("codex repair resume: %w", err), FailureProtocol))
+		return nil, nil, "", "", classifyCodexRepairFailure(ctx, codexFail(CodexFailureProtocolError, withFailureClassOverride(fmt.Errorf("codex repair resume: %w", err), FailureProtocol)))
 	}
 
 	repairPrompt := codexResultRepairPrompt + request.invariantRepairInstructions
-	turnResult, turnErr := codexRunTurn(ctx, repairProc.Client, effective.ThreadID, repairPrompt, codexTurnOptions{
+	if localResultRejectionReason(rejection) == RepairFailureInvalidSchema {
+		diagnostic := utils.TruncateRunes(utils.RedactSecrets(rejection.Error()), codexFailureEvidenceMaxRunes)
+		repairPrompt += "\n\nCorrect the following result fields only:\n" + diagnostic
+	}
+	turnResult, turnErr := runManagedCodexTurn(ctx, repairProc.Client, effective.ThreadID, repairPrompt, codexTurnOptions{
+		CWD:               providerDir,
 		ResultProjection:  projectionForContract(request.resultContractSchema),
 		RuntimeCompletion: hasRuntimeCompletion(request.resultContractSchema),
 		ReasoningEffort:   request.ReasoningEffort,
 		DetailedOutput:    p.coordinator.verbose,
+		OnTurnStarted:     onTurnStarted,
 		OnActivity:        onActivity,
-	})
+		diagnosticSecrets: secrets,
+	}, interruptGrace, transcript)
+	output = turnResult.diagnosticOutput()
+	if turnResult.diagnosticSecrets != nil {
+		secrets = turnResult.diagnosticSecrets
+	}
+	if err := verifyReadonly(); err != nil {
+		return nil, nil, output, turnResult.TurnID, err
+	}
+	settleCtx := ctx
+	if repairProc.Client.completedBeforeCancellation() {
+		settleCtx = context.WithoutCancel(ctx)
+	}
+	if err := classifyCodexRepairFailure(settleCtx, nil); err != nil {
+		return nil, nil, output, turnResult.TurnID, err
+	}
 	if turnErr != nil {
 		transcript.record("repair: turn failed: %v", turnErr)
-		return nil, nil, boundedCodexFailureEvidence(turnResult.RawFinalOutput), turnResult.TurnID, p.classifyTurnError(turnErr)
+		classified := classifyRejectedCodexResult(settleCtx, request, turnResult, frozenDelta, prepared.Root, p.classifyTurnError(turnErr))
+		return nil, nil, output, turnResult.TurnID, classifyCodexRepairFailure(settleCtx, classified)
 	}
 	transcript.record("repair: turn completed turn_id=%s status=%s", turnResult.TurnID, proposalStatusForLog(turnResult.Proposal))
 
-	canonical, err = NewExternalResultCanonicalizer().Canonicalize(context.Background(), request, AttemptResult{ResultProposal: turnResult.Proposal}, frozenDelta, prepared.Root)
+	canonical, claims, err = turnResult.canonicalize(settleCtx, request, frozenDelta, prepared.Root)
 	if err != nil {
 		transcript.record("repair: canonicalize failed: %v", err)
-		return nil, nil, boundedCodexFailureEvidence(turnResult.RawFinalOutput), turnResult.TurnID, fmt.Errorf("canonicalize codex repair result: %w", err)
+		return nil, nil, output, turnResult.TurnID, fmt.Errorf("canonicalize codex repair result: %w", err)
 	}
-	return canonical, cloneInvariantAssessmentClaims(turnResult.Proposal.InvariantAssessments), "", turnResult.TurnID, nil
+	return canonical, claims, "", turnResult.TurnID, nil
+}
+
+func (p *CodexSubagentProvider) validateCodexRepairWorkspace(ctx context.Context, request AttemptRequest, world ExecutionWorld, prepared *PreparedExecutionWorld, secrets *utils.SecretRedactionScope) error {
+	baseline := request.resultWorkspaceSnapshot
+	if baseline == nil {
+		err := errors.New("codex repair has no verified original workspace snapshot")
+		p.coordinator.markWorkspaceProviderEffectsUnverified(request, err, secrets)
+		return codexFail(CodexFailureWorkspaceViolation, err)
+	}
+	readonly := *prepared
+	readonly.WritableRoots = nil
+	_, _, err := p.observeCodexWorkspaceEffects(ctx, request, world, &readonly, *baseline, secrets)
+	return err
+}
+
+func classifyCodexRepairFailure(ctx context.Context, err error) error {
+	cause := ctx.Err()
+	if cause == nil {
+		cause = err
+	}
+	switch {
+	case errors.Is(cause, context.Canceled):
+		return codexFail(CodexFailureCancelled, cause)
+	case errors.Is(cause, context.DeadlineExceeded):
+		return codexFail(CodexFailureTimeout, withFailureClassOverride(cause, FailureTimeout))
+	default:
+		return err
+	}
 }
 
 // boundedCodexFailureEvidence preserves only diagnostic provider output. It
 // is intentionally separate from canonical result summaries: a response that
 // fails Hufu validation must never be promoted to trusted task output.
 func boundedCodexFailureEvidence(raw string) string {
-	return utils.TruncateRunes(utils.RedactSecrets(raw), codexFailureEvidenceMaxRunes)
+	return utils.TruncateRunes(redactCodexProviderText(raw, nil), codexFailureEvidenceMaxRunes)
+}
+
+func redactCodexProviderText(raw string, secrets *utils.SecretRedactionScope) string {
+	if secrets == nil {
+		diagnostics := newCodexTurnDiagnostics(nil)
+		diagnostics.learn(raw)
+		if diagnostics.unsafe {
+			return "[invalid provider JSON]"
+		}
+		secrets = diagnostics.secrets
+	}
+	body, structured := codexDiagnosticJSON(raw)
+	if !structured {
+		return secrets.RedactText(raw)
+	}
+	if redacted, err := redactCodexFailureJSON([]byte(body), secrets); err == nil {
+		return orderedCodexFailureEvidence(body, redacted)
+	}
+	return "[invalid provider JSON]"
+}
+
+// Learn from every readable frame before emitting any part of the response.
+// A frame discarded by the diagnostic formatter can define a secret that is
+// repeated in the retained envelope or a protocol decoding error.
+func learnCodexDiagnosticSecrets(raw string, secrets *utils.SecretRedactionScope) error {
+	learnFrame := func(frame string) error {
+		return inspectReadablePayloadViews(jsontext.Value(frame), func(view []byte) error {
+			return secrets.DiscoverJSON(view)
+		})
+	}
+	_, err := inspectProviderResultJSONFrames(raw, resultCollectionResponseMaxBytes, func(frame string) error {
+		if err := learnFrame(frame); err != nil {
+			return err
+		}
+		var nestedErr error
+		err := inspectProviderResultEnvelopeObjects(frame, 0, func(fields []submissionSourceField) {
+			for _, field := range fields {
+				if nestedErr != nil || !sourceMemberMatches(field.name, "structured_payload_json", true) || field.raw.Kind() != '"' {
+					continue
+				}
+				var encoded string
+				if nestedErr = json.Unmarshal(field.raw, &encoded); nestedErr == nil {
+					_, nestedErr = inspectProviderResultJSONFrames(encoded, resultPayloadMaxBytes, learnFrame)
+				}
+			}
+		})
+		if err != nil {
+			return err
+		}
+		return nestedErr
+	})
+	return err
+}
+
+// Complete readable values can be safely processed as JSON even when the
+// provider stopped mid-response. Unreadable tails never enter a text sink.
+func codexDiagnosticJSON(raw string) (string, bool) {
+	body := strings.TrimSpace(collectionSourceInspectionJSON(raw))
+	start := strings.IndexAny(body, "{[")
+	if start < 0 {
+		return "", false
+	}
+	body = body[start:]
+	// Provider result diagnostics carry one object. An array wrapper can
+	// conceal a wire-encoded payload that text redaction cannot inspect.
+	if body[0] != '{' {
+		return "", true
+	}
+	if len(body) > resultCollectionResponseMaxBytes {
+		body = body[:resultCollectionResponseMaxBytes]
+	}
+	if jsontext.Value(body).IsValid() {
+		return body, true
+	}
+	prefix, consumed := readableSourceContainerPrefix(body)
+	if strings.ContainsAny(body[consumed:], "{[") || !jsontext.Value(prefix).IsValid() {
+		return "", true
+	}
+	return prefix, true
+}
+
+// The wire DTO also carries structured JSON inside a string. Apply the same
+// JSON redaction there so escaped credential keys are handled before the
+// outer envelope is reduced to diagnostic text.
+func redactCodexFailureJSON(body []byte, secrets *utils.SecretRedactionScope) ([]byte, error) {
+	if jsontext.Value(body).Kind() == '{' {
+		var members map[string]jsontext.Value
+		if err := json.Unmarshal(body, &members); err != nil {
+			return nil, err
+		}
+		changed := false
+		for name, raw := range members {
+			if !sourceMemberMatches(name, "structured_payload_json", true) || raw.Kind() != '"' {
+				continue
+			}
+			var encoded string
+			if err := json.Unmarshal(raw, &encoded); err != nil {
+				continue
+			}
+			inner, structured := codexDiagnosticJSON(encoded)
+			if !structured {
+				continue
+			}
+			redacted, err := secrets.RedactJSONCompact([]byte(inner))
+			if err != nil {
+				redacted = []byte("[invalid structured payload JSON]")
+			}
+			members[name], err = json.Marshal(string(redacted))
+			if err != nil {
+				return nil, err
+			}
+			changed = true
+		}
+		if changed {
+			var err error
+			body, err = json.Marshal(members)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return secrets.RedactJSONCompact(body)
+}
+
+// Keep the provider's top-level field order when applying the diagnostic
+// bound, so long details cannot displace earlier path or status evidence.
+func orderedCodexFailureEvidence(original string, redacted []byte) string {
+	var members map[string]jsontext.Value
+	if err := json.Unmarshal(redacted, &members); err != nil || members == nil {
+		return string(redacted)
+	}
+	var ordered strings.Builder
+	encoder := jsontext.NewEncoder(&ordered)
+	if err := encoder.WriteToken(jsontext.BeginObject); err != nil {
+		return string(redacted)
+	}
+	for _, field := range readableSourceMembers(original) {
+		value, present := members[field.name]
+		if !present {
+			continue
+		}
+		if err := encoder.WriteToken(jsontext.String(field.name)); err != nil {
+			return string(redacted)
+		}
+		if err := encoder.WriteValue(value); err != nil {
+			return string(redacted)
+		}
+		delete(members, field.name)
+	}
+	if err := encoder.WriteToken(jsontext.EndObject); err != nil || len(members) != 0 {
+		return string(redacted)
+	}
+	return strings.TrimSpace(ordered.String())
 }
 
 // combineCodexFailureEvidence keeps both sides of a protocol repair failure
@@ -1020,7 +1340,7 @@ func combineCodexFailureEvidence(original, repair string) string {
 		if i > 0 {
 			b.WriteString("\n\n")
 		}
-		fmt.Fprintf(&b, "%s:\n%s", part.label, utils.TruncateRunes(boundedCodexFailureEvidence(part.text), partBudget))
+		fmt.Fprintf(&b, "%s:\n%s", part.label, utils.TruncateRunes(part.text, partBudget))
 	}
 	return utils.TruncateRunes(b.String(), codexFailureEvidenceMaxRunes)
 }
@@ -1039,56 +1359,88 @@ func proposalStatusForLog(p *WorkerResultProposal) string {
 	return p.Status
 }
 
-// snapshotDeltaBestEffort captures whatever workspace delta is observable
-// after a cancellation/crash, without letting a snapshot failure mask the
-// original error (§16.3: "Hufu SHALL attempt to preserve ... post-cancel
-// workspace snapshot").
-func (p *CodexSubagentProvider) snapshotDeltaBestEffort(ctx context.Context, world ExecutionWorld, prepared *PreparedExecutionWorld) WorkspaceDelta {
-	final, err := world.Snapshot(ctx, prepared)
+// Only settled provider effects are eligible for workspace evidence.
+func (p *CodexSubagentProvider) settleFailedCodexWorkspace(ctx context.Context, request AttemptRequest, world ExecutionWorld, prepared *PreparedExecutionWorld, result AttemptResult, failure error, secrets *utils.SecretRedactionScope) (AttemptResult, error) {
+	_, delta, err := p.observeCodexWorkspaceEffects(ctx, request, world, prepared, prepared.Baseline, secrets)
+	result.WorkspaceDelta = delta
 	if err != nil {
-		return WorkspaceDelta{}
+		return result, err
 	}
-	delta, err := NewWorkspaceSnapshotter().Diff(ctx, prepared.Baseline, final)
-	if err != nil {
-		return WorkspaceDelta{}
-	}
-	return delta
+	return result, failure
 }
 
-// stopCodexProcess implements §16.1's required cancellation flow: (protocol
-// turn/interrupt already happened, if applicable, before this is called);
-// wait interrupt-grace; terminate the process tree; wait shutdown-grace;
-// force-kill — reaching every descendant at each escalation, never just the
-// direct child.
-//
-// The client is closed first, before waiting for the process to exit. Its
-// stdin is bridged to the child through an io.Pipe, and os/exec's Wait
-// cannot return until the goroutine copying into that pipe sees EOF — which
-// only happens once the pipe's write end (owned by the client) closes.
-// Waiting for process exit before closing the client deadlocks: the process
-// exiting does not, by itself, unblock a Go-level io.Pipe read.
-func (p *CodexSubagentProvider) stopCodexProcess(sup ProcessSupervisor, proc *CodexAppServerProcess, interruptGrace, shutdownGrace time.Duration, transcript *codexTranscript) {
+func (p *CodexSubagentProvider) observeCodexWorkspaceEffects(ctx context.Context, request AttemptRequest, world ExecutionWorld, prepared *PreparedExecutionWorld, baseline WorkspaceSnapshot, secrets *utils.SecretRedactionScope) (WorkspaceSnapshot, WorkspaceDelta, error) {
+	final, err := world.Snapshot(ctx, prepared)
+	if err != nil {
+		err = fmt.Errorf("final workspace snapshot: %w", err)
+		p.coordinator.markWorkspaceProviderEffectsUnverified(request, err, secrets)
+		return WorkspaceSnapshot{}, WorkspaceDelta{}, codexFail(CodexFailureWorkspaceViolation, redactCodexError(err, secrets))
+	}
+	delta, err := NewWorkspaceSnapshotter().Diff(ctx, baseline, final)
+	if err != nil {
+		err = fmt.Errorf("workspace diff: %w", err)
+		p.coordinator.markWorkspaceProviderEffectsUnverified(request, err, secrets)
+		return WorkspaceSnapshot{}, WorkspaceDelta{}, codexFail(CodexFailureWorkspaceViolation, redactCodexError(err, secrets))
+	}
+	if err := ValidateExecutionWorldDelta(prepared, delta); err != nil {
+		p.coordinator.markWorkspaceUnauthorizedMutation(request, delta, err, secrets)
+		return final, delta, codexFail(CodexFailureWorkspaceViolation, redactCodexError(err, secrets))
+	}
+	return final, delta, nil
+}
+
+func (p *CodexSubagentProvider) startCodexAttemptProcess(ctx context.Context, sup ProcessSupervisor, request AttemptRequest, config CodexProcessConfig) (*CodexAppServerProcess, error) {
+	proc, err := StartCodexAppServer(ctx, sup, config)
+	if isUnsettledCodexInitialization(err) {
+		p.coordinator.markWorkspaceProviderUnsettled(request)
+	}
+	return proc, err
+}
+
+func isUnsettledCodexInitialization(err error) bool {
+	startup, ok := errors.AsType[*codexInitializationFailure](err)
+	return ok && !startup.settled
+}
+
+func (p *CodexSubagentProvider) classifyThreadStartup(err error) error {
+	if isUnsettledCodexInitialization(err) {
+		return codexFail(CodexFailureWorkspaceViolation, withFailureClassOverride(err, FailureEnvironment))
+	}
+	return codexFail(CodexFailureUnavailable, withFailureClassOverride(fmt.Errorf("start codex app-server: %w", err), FailureEnvironment))
+}
+
+// Close stdin for a graceful exit before escalating to the managed group.
+// A direct leader exit does not establish that the workspace is settled.
+func (p *CodexSubagentProvider) stopCodexProcess(proc *CodexAppServerProcess, interruptGrace, shutdownGrace time.Duration, transcript *codexTranscript) error {
+	defer proc.stderr.finish()
 	_ = proc.Client.Close()
-	done := make(chan struct{})
-	go func() {
-		_ = proc.Wait() // memoized: safe alongside StartCodexAppServer's own crash-monitor Wait
-		close(done)
-	}()
-	select {
-	case <-done:
-		return
-	case <-time.After(interruptGrace):
+	if proc.waitForTreeExit(interruptGrace) {
+		return nil
 	}
-	transcript.record("process still active after interrupt grace, terminating")
-	_ = sup.TerminateTree(context.Background(), proc.Handle())
-	select {
-	case <-done:
-		return
-	case <-time.After(shutdownGrace):
+	transcript.record("process group still active after interrupt grace, terminating")
+	_ = proc.sup.TerminateTree(context.Background(), proc.Handle())
+	if proc.waitForTreeExit(shutdownGrace) {
+		return nil
 	}
-	transcript.record("process still active after shutdown grace, force-killing")
-	_ = sup.KillTree(context.Background(), proc.Handle())
-	<-done
+	transcript.record("process group still active after shutdown grace, force-killing")
+	if err := proc.forceStop(defaultCodexProcessReapTimeout); err != nil {
+		transcript.record("could not confirm process group exit")
+		return codexFail(CodexFailureWorkspaceViolation, withFailureClassOverride(
+			errors.New("could not confirm that the Codex process group stopped"), FailureEnvironment))
+	}
+	return nil
+}
+
+func codexAttemptContextFailure(ctx context.Context, timeout time.Duration, completed bool) error {
+	cause := ctx.Err()
+	if cause == nil || completed {
+		return nil
+	}
+	class := CodexFailureCancelled
+	if timeout > 0 && errors.Is(cause, context.DeadlineExceeded) {
+		class = CodexFailureTimeout
+	}
+	return codexFail(class, cause)
 }
 
 func (p *CodexSubagentProvider) classifyThreadError(ctx context.Context, err error) error {
@@ -1099,23 +1451,17 @@ func (p *CodexSubagentProvider) classifyThreadError(ctx context.Context, err err
 }
 
 func (p *CodexSubagentProvider) classifyTurnError(err error) error {
+	if _, classified := errors.AsType[*CodexProviderError](err); classified {
+		return err
+	}
+	if _, rejected := errors.AsType[*localResultAdmissionError](err); rejected {
+		return err
+	}
 	var protoErr *CodexProtocolIncompleteError
 	if errors.As(err, &protoErr) {
 		return err
 	}
 	return codexFail(CodexFailureProcessCrash, err)
-}
-
-// codexStopOnce avoids double-stopping the same process from both a defer
-// and an explicit mid-function call.
-type codexStopOnce struct{ done bool }
-
-func (o *codexStopOnce) do(f func()) {
-	if o.done {
-		return
-	}
-	o.done = true
-	f()
 }
 
 var _ SubagentProvider = (*CodexSubagentProvider)(nil)

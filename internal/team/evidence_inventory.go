@@ -1,6 +1,7 @@
 package team
 
 import (
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"slices"
@@ -78,13 +79,13 @@ type acceptedInventory struct {
 	origins map[string]string
 }
 
-func (c *Coordinator) loadAcceptedInventory(spec *EvidenceInventorySpec) (acceptedInventory, error) {
+func (c *Coordinator) loadAcceptedInventory(ctx context.Context, spec *EvidenceInventorySpec) (acceptedInventory, error) {
 	var inventory acceptedInventory
 	if spec == nil {
 		return inventory, fmt.Errorf("missing frozen evidence inventory declaration")
 	}
 	ref := FactRef{Name: "evidence inventory", TaskID: spec.TaskID, RuntimeOutput: spec.Output}
-	value, source, receipt, err := c.resolveVerifiedRuntimeOutput(ref, spec.Output)
+	value, source, receipt, err := c.resolveVerifiedRuntimeOutput(ctx, ref, spec.Output)
 	if err != nil {
 		return inventory, err
 	}
@@ -128,7 +129,7 @@ func (c *Coordinator) loadAcceptedInventory(spec *EvidenceInventorySpec) (accept
 		}
 		inventory.hashes[entry.TaskID] = entry.Hash
 	}
-	inventory.origins, err = c.recoveredTaskOutputOrigins(c.taskTracker.TodoList().Items())
+	inventory.origins, err = c.recoveredTaskOutputOrigins(ctx, c.taskTracker.TodoList().Items())
 	if err != nil {
 		return inventory, err
 	}
@@ -144,7 +145,7 @@ func (c *Coordinator) loadAcceptedInventory(spec *EvidenceInventorySpec) (accept
 		if err := c.validateInventoryResultReceipt(item, inventory.origins); err != nil {
 			return inventory, fmt.Errorf("inventory source %q: %w", id, err)
 		}
-		if err := c.validateAcceptedDependencyPayload(item); err != nil {
+		if err := c.validateAcceptedDependencyPayloadWithContext(ctx, item); err != nil {
 			return inventory, fmt.Errorf("inventory source %q: %w", id, err)
 		}
 	}
@@ -161,7 +162,7 @@ func (c *Coordinator) validateInventoryResultReceipt(item *TodoItem, origins map
 		return fmt.Errorf("no accepted receipt from this run and frozen inputs")
 	}
 	payload := item.TypedResult.StructuredPayload
-	if payload == nil || receipt.ResultPayloadSHA256 != payload.SHA256 || receipt.ResultValidation != ResultValidationValid {
+	if payload == nil || !receiptMatchesResultPayload(receipt, payload) || receipt.ResultValidation != ResultValidationValid {
 		return fmt.Errorf("accepted receipt payload hash or validation mismatch")
 	}
 	return nil
@@ -193,8 +194,8 @@ func (c *Coordinator) inventoryChildren(contractID string, inventory acceptedInv
 	return children, nil
 }
 
-func (c *Coordinator) expandEvidenceInventory(task TaskDef) ([]TaskDef, error) {
-	inventory, err := c.loadAcceptedInventory(task.EvidenceInventory)
+func (c *Coordinator) expandEvidenceInventory(ctx context.Context, task TaskDef) ([]TaskDef, error) {
+	inventory, err := c.loadAcceptedInventory(ctx, task.EvidenceInventory)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +220,7 @@ func (c *Coordinator) expandEvidenceInventory(task TaskDef) ([]TaskDef, error) {
 			if err := c.validateInventoryResultReceipt(child, inventory.origins); err != nil {
 				return nil, fmt.Errorf("inventory child %q: %w", child.ID, err)
 			}
-			if err := c.validateAcceptedDependencyPayload(child); err != nil {
+			if err := c.validateAcceptedDependencyPayloadWithContext(ctx, child); err != nil {
 				return nil, fmt.Errorf("inventory child %q: %w", child.ID, err)
 			}
 			continue
@@ -236,7 +237,7 @@ func (c *Coordinator) expandEvidenceInventory(task TaskDef) ([]TaskDef, error) {
 	return rows, nil
 }
 
-func (c *Coordinator) bindInventoryEvidence(tasks []TaskDef) ([]TaskDef, error) {
+func (c *Coordinator) bindInventoryEvidence(ctx context.Context, tasks []TaskDef) ([]TaskDef, error) {
 	for i := range tasks {
 		task := &tasks[i]
 		spec := task.EvidenceInventory
@@ -246,7 +247,7 @@ func (c *Coordinator) bindInventoryEvidence(tasks []TaskDef) ([]TaskDef, error) 
 		if len(task.EvidenceFrom) > 0 {
 			return nil, fmt.Errorf("contract %q owns evidence_from; omit it", task.ContractID)
 		}
-		ids, binding, err := c.inventoryFanIn(spec)
+		ids, binding, err := c.inventoryFanIn(ctx, spec)
 		if err != nil {
 			return nil, err
 		}
@@ -255,13 +256,13 @@ func (c *Coordinator) bindInventoryEvidence(tasks []TaskDef) ([]TaskDef, error) 
 	return tasks, nil
 }
 
-func (c *Coordinator) inventoryFanIn(spec *EvidenceInventorySpec) ([]string, *EvidenceInventoryBinding, error) {
-	inventory, err := c.loadAcceptedInventory(spec)
+func (c *Coordinator) inventoryFanIn(ctx context.Context, spec *EvidenceInventorySpec) ([]string, *EvidenceInventoryBinding, error) {
+	inventory, err := c.loadAcceptedInventory(ctx, spec)
 	if err != nil {
 		return nil, nil, err
 	}
 	childContract := c.inventoryContract(spec.FromFanOut)
-	required, err := c.loadAcceptedInventory(childContract.EvidenceInventory)
+	required, err := c.loadAcceptedInventory(ctx, childContract.EvidenceInventory)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -281,7 +282,7 @@ func (c *Coordinator) inventoryFanIn(spec *EvidenceInventorySpec) ([]string, *Ev
 		if err := c.validateInventoryResultReceipt(child, inventory.origins); err != nil {
 			return nil, nil, fmt.Errorf("inventory child %q: %w", child.ID, err)
 		}
-		if err := c.validateAcceptedDependencyPayload(child); err != nil {
+		if err := c.validateAcceptedDependencyPayloadWithContext(ctx, child); err != nil {
 			return nil, nil, fmt.Errorf("inventory child %q: %w", child.ID, err)
 		}
 		ids = append(ids, child.ID)
@@ -298,20 +299,20 @@ func (c *Coordinator) inventoryContract(id string) TaskDef {
 	return TaskDef{}
 }
 
-func (c *Coordinator) validateInventoryOccurrences(items []*TodoItem) error {
+func (c *Coordinator) validateInventoryOccurrences(ctx context.Context, items []*TodoItem) error {
 	validatedExpansions := make(map[string]bool)
 	for _, item := range items {
 		if item == nil || IsPrimaryOccurrence(item) {
 			continue
 		}
-		if err := c.validateInventoryOccurrence(item, validatedExpansions); err != nil {
+		if err := c.validateInventoryOccurrence(ctx, item, validatedExpansions); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (c *Coordinator) validateInventoryOccurrence(item *TodoItem, validatedExpansions map[string]bool) error {
+func (c *Coordinator) validateInventoryOccurrence(ctx context.Context, item *TodoItem, validatedExpansions map[string]bool) error {
 	binding := item.EvidenceInventoryBinding
 	contract := c.inventoryContract(item.ContractID)
 	spec := contract.EvidenceInventory
@@ -325,7 +326,7 @@ func (c *Coordinator) validateInventoryOccurrence(item *TodoItem, validatedExpan
 		if validatedExpansions[contract.ID] {
 			return nil
 		}
-		inventory, err := c.loadAcceptedInventory(spec)
+		inventory, err := c.loadAcceptedInventory(ctx, spec)
 		if err != nil {
 			return err
 		}
@@ -340,7 +341,7 @@ func (c *Coordinator) validateInventoryOccurrence(item *TodoItem, validatedExpan
 		validatedExpansions[contract.ID] = true
 		return nil
 	}
-	ids, expected, err := c.inventoryFanIn(spec)
+	ids, expected, err := c.inventoryFanIn(ctx, spec)
 	if err != nil {
 		return err
 	}

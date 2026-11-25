@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -35,6 +37,96 @@ func TestResultWorksetPathsCompile(t *testing.T) {
 			_, err := CompileResultContractDocument("paths.json", []byte(tc.document))
 			if (err == nil) != tc.valid {
 				t.Fatalf("compile valid=%t: %v", tc.valid, err)
+			}
+		})
+	}
+}
+
+func TestResultWorksetPathsAuthenticateAssignmentBeforeEnvelopeRepair(t *testing.T) {
+	c, _, child, _ := runtimeWorksetInputFixture(t, "dir/source.go")
+	compiled := compileFixtureJSONSchema(t, "assigned-path-result", worksetPathResultSchema)
+	c.session.ResultContracts[compiled.ID] = compiled
+	child.ResultContract = new(compiled.ref(true))
+	receipt := child.WorksetReceipt
+	for _, tc := range []struct {
+		name, summary, location string
+	}{
+		{"duplicate summary", `"draft","summary":"result"`, `"dir/source.go:7"`},
+		{"numeric location", `"result"`, "7"},
+		{"null location", `"result"`, "null"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			child.WorksetReceipt = receipt
+			wire := `{"status":"success","summary":` + tc.summary + `,"structured_payload":{"findings":[{"location":` + tc.location + `,"summary":"finding"}]}}`
+			_, err := c.resolveResultEvidenceKeys(t.Context(), child.ID, wire)
+			if !isResultEvidenceFormatError(err) {
+				t.Fatalf("malformed claims did not produce a format rejection: %v", err)
+			}
+			rejection := c.resultEvidenceRejection(t.Context(), child.ID, c.session.Workspace, wire, nil, err)
+			if got := localResultRejectionReason(rejection); got != RepairFailureInvalidSchema {
+				t.Fatalf("verified assignment produced %q: %v", got, rejection)
+			}
+			child.WorksetReceipt = nil
+			rejection = c.resultEvidenceRejection(t.Context(), child.ID, c.session.Workspace, wire, nil, err)
+			if got := localResultRejectionReason(rejection); got != RepairFailureSource {
+				t.Fatalf("missing receipt produced %q: %v", got, rejection)
+			}
+		})
+	}
+}
+
+func TestResultCollectionRecoveryAuthenticatesWorksetBeforeRepairingPathType(t *testing.T) {
+	wire := strings.Replace(researchCollectionResponse(t, 2), `"structured_payload":{`, `"structured_payload":{"locations":[null,"dir/source.go:7"],`, 1)
+	corrected := strings.Replace(wire, "[null,", `["dir/source.go:3",`, 1)
+	for _, tc := range []struct {
+		name string
+		want ResultCollectionRecoveryDisposition
+	}{
+		{"original manifest", RecoveryRepairClaims},
+		{"corrupt manifest", RecoveryBlocked},
+		{"missing manifest", RecoveryBlocked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			endpoint, calls := collectionEvidenceFeedbackServer(t, func(int32) string { return corrected })
+			c, _, id := contractCollectionFixture(t, wire, SideEffectNone, contractCollectionFixtureOptions{
+				Endpoint: endpoint, PreserveContract: true, FrozenPaths: []string{"dir/source.go"}, FrozenLineSpans: worksetLineInventory,
+			})
+			item := c.todoItemByID(id)
+			data := filepath.Join(c.session.Workspace, logsDir, "artifacts", "data", item.WorksetBinding.SourceArtifact.ID)
+			var err error
+			switch tc.name {
+			case "corrupt manifest":
+				err = os.WriteFile(data, []byte("corrupt"), 0o600)
+			case "missing manifest":
+				err = os.Remove(data)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := currentResultCollection(item)
+			c = reopenRecoveryCoordinator(t, c)
+			before := mustReadEvents(t, c.eventStore)
+			a, err := c.AssessResultCollectionRecovery(t.Context(), id)
+			if err != nil || a.Disposition != tc.want || a.AdditionalTurns != 0 || calls.Load() != 0 ||
+				!sameCanonicalEvidence(before, mustReadEvents(t, c.eventStore)) {
+				t.Fatalf("read-only workset assessment = %+v, calls=%d, err=%v", a, calls.Load(), err)
+			}
+			err = c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), id))
+			if tc.want == RecoveryBlocked {
+				if err == nil || calls.Load() != 0 {
+					t.Fatalf("invalid manifest granted repair, calls=%d err=%v", calls.Load(), err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker := scriptWorker(failTurn(os.ErrInvalid))
+			c.workerAgentOverride = worker
+			_, err = c.executeTask(WithSessionResume(t.Context()), taskDefFromTodoItem(c.todoItemByID(id)), id)
+			cp := currentResultCollection(c.todoItemByID(id))
+			if err != nil || worker.Calls() != 0 || calls.Load() != 1 || cp == nil || cp.Work != original.Work || cp.TurnsUsed != original.TurnsUsed+1 {
+				t.Fatalf("bounded repair of typed path: calls=%d work=%d checkpoint=%+v err=%v", calls.Load(), worker.Calls(), cp, err)
 			}
 		})
 	}
@@ -108,7 +200,7 @@ func TestResultWorksetPathsResolveWithinFrozenAssignment(t *testing.T) {
 				if err != nil || admitted == nil || !strings.Contains(string(admitted.Value), `"location":"dir/source.go:7"`) {
 					t.Fatalf("admission external=%t: %v", external, err)
 				}
-				if err := c.validateSubmittedEvidenceInputs(child.ID, admitted); err != nil {
+				if err := c.validateSubmittedEvidenceInputs(t.Context(), child.ID, admitted); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -140,7 +232,7 @@ func TestResultWorksetPathsCheckFrozenSourceSpansOnEverySubmissionRoute(t *testi
 	}
 	c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
 	_, manifest := runtimeWorksetProducerFixture(t, c, []byte(`{"schema_version":1,"items":[{"key":"sample","touched_paths":["dir/source.go","dir/short.go"]}]}`), PutArtifactRequest{Kind: "source", Path: "line-inventory.json", Content: []byte(worksetLineInventory)})
-	expansion, err := c.expandFanOutTasks([]TaskDef{{ID: "inspect", Agent: "worker", FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "seed", Artifact: manifest.ID}, GoalTemplate: "Inspect frozen sources"}}})
+	expansion, err := c.expandFanOutTasks(t.Context(), []TaskDef{{ID: "inspect", Agent: "worker", FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "seed", Artifact: manifest.ID}, GoalTemplate: "Inspect frozen sources"}}})
 	if err != nil || len(expansion) != 1 {
 		t.Fatalf("expand: %v", err)
 	}
@@ -177,7 +269,7 @@ func TestResultWorksetPathsCheckFrozenSourceSpansOnEverySubmissionRoute(t *testi
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := c.validateAcceptedEvidenceInputs(child.ID, result); (err == nil) != test.valid {
+			if err := c.validateAcceptedEvidenceInputs(t.Context(), child.ID, result); (err == nil) != test.valid {
 				t.Fatalf("stored result valid=%t: %v", test.valid, err)
 			}
 		})

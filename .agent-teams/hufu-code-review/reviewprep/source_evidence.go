@@ -7,9 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -17,12 +21,15 @@ import (
 )
 
 type evidenceSpan struct {
-	Start       int64 `json:"start"`
-	End         int64 `json:"end"`
-	BundleStart int64 `json:"bundle_start"`
-	BundleEnd   int64 `json:"bundle_end"`
-	StartLine   int   `json:"start_line"`
-	EndLine     int   `json:"end_line"`
+	Start         int64 `json:"start"`
+	End           int64 `json:"end"`
+	BundleStart   int64 `json:"bundle_start"`
+	BundleEnd     int64 `json:"bundle_end"`
+	StartLine     int   `json:"start_line"`
+	EndLine       int   `json:"end_line"`
+	GoSyntaxLines []int `json:"go_syntax_lines,omitempty"`
+	FirstFullLine int   `json:"first_full_line,omitempty"`
+	LastFullLine  int   `json:"last_full_line,omitempty"`
 }
 
 type sourceEvidence struct {
@@ -77,13 +84,10 @@ func (s *reviewSourceSnapshot) bundleDataWithPrimary(partition string, primaryPa
 	if s.identity != nil {
 		inventory.SnapshotID, inventory.ContentSHA256 = s.identity.ID, s.identity.ContentSHA256
 		fmt.Fprintf(&bundle, "review_mode: repository_snapshot\nsnapshot_id: %s\ncontent_sha256: %s\n", s.identity.ID, s.identity.ContentSHA256)
-		// The complete repository inventory already seals every candidate's
-		// tracked identity. Keep the highest-ranked context in the workset so
-		// repeated metadata cannot crowd out its primary source.
-		if count := len(related); count > maxSnapshotRelatedPaths {
-			fmt.Fprintf(&bundle, "related_candidates_outside_workset: %d (see repository snapshot inventory for tracked paths and identities)\n", count-maxSnapshotRelatedPaths)
-			related = related[:maxSnapshotRelatedPaths]
-		}
+	}
+	if count := len(related); count > maxSnapshotRelatedPaths {
+		fmt.Fprintf(&bundle, "related_candidates_outside_workset: %d (coverage limited to the highest-ranked candidates)\n", count-maxSnapshotRelatedPaths)
+		related = related[:maxSnapshotRelatedPaths]
 	}
 	bundle.WriteString("dependency_selection: same-package and snapshot import-dependent identifier candidates; symbol matches precede weaker method-name-only candidates, including candidate tests; unknown module ownership retains conservative name matching. This is not a type-checked call graph: interface injection, reflection and dynamic calls may require supplemental evidence.\nRelated paths without embedded content remain fully identified in the evidence inventory; their metadata is not duplicated here.\n")
 	bundle.WriteString("Read this artifact as the source/caller/test authority for the assigned workset. Do not substitute the live checkout.\ncoverage_scope: workset_only\nUnlisted or unavailable paths are not evidence of repository absence. Source byte ranges are half-open; source line coordinates retain their original numbering.\n")
@@ -104,11 +108,8 @@ func (s *reviewSourceSnapshot) bundleDataWithPrimary(partition string, primaryPa
 		*primary = inventory.Sources
 	}
 	remaining := relatedBudget
-	for index, current := range related {
+	for _, current := range related {
 		limit := remaining
-		if index >= maxSnapshotRelatedPaths {
-			limit = 0
-		}
 		section := &bundle
 		if limit == 0 {
 			section = new(strings.Builder)
@@ -189,6 +190,11 @@ func (s *reviewSourceSnapshot) writeEvidenceSection(bundle *strings.Builder, rep
 	row.SHA256 = sha256Hex(data)
 	row.ByteSize = int64(len(data))
 	fmt.Fprintf(bundle, "status: present\nbytes: %d\nsha256: %s\n", len(data), row.SHA256)
+	used, err := writeEvidenceSpans(bundle, &row, data, requested, limit)
+	return row, used, err
+}
+
+func writeEvidenceSpans(bundle *strings.Builder, row *sourceEvidence, data []byte, requested []tools.ArtifactByteRange, limit int) (int, error) {
 	if requested == nil {
 		requested = []tools.ArtifactByteRange{}
 		if len(data) > 0 {
@@ -197,21 +203,25 @@ func (s *reviewSourceSnapshot) writeEvidenceSection(bundle *strings.Builder, rep
 	}
 	for index, span := range requested {
 		if span.Start < 0 || span.End <= span.Start || span.End > int64(len(data)) || index > 0 && span.Start < requested[index-1].End {
-			return row, 0, fmt.Errorf("invalid frozen source byte range for %q: %+v", repositoryPath, span)
+			return 0, fmt.Errorf("invalid frozen source byte range for %q: %+v", row.Path, span)
 		}
 	}
 	row.RequiredScopes = append(row.RequiredScopes, requested...)
 	if bytes.IndexByte(data, 0) >= 0 || !utf8.Valid(data) {
 		row.Omitted, row.OmittedBytes = true, row.ByteSize
 		bundle.WriteString("content: binary_omitted\n")
-		return row, 0, nil
+		return 0, nil
 	}
 	for _, span := range requested {
 		if !utf8.Valid(data[span.Start:span.End]) {
-			return row, 0, fmt.Errorf("source range for %q is not UTF-8 aligned", repositoryPath)
+			return 0, fmt.Errorf("source range for %q is not UTF-8 aligned", row.Path)
 		}
 	}
 	used := 0
+	var syntax []int
+	if row.Role == "primary" && filepath.Ext(row.Path) == ".go" {
+		syntax = goSyntaxLines(row.Path, data)
+	}
 	for _, span := range requested {
 		end := span.End
 		if limit >= 0 && end-span.Start > int64(limit-used) {
@@ -223,15 +233,11 @@ func (s *reviewSourceSnapshot) writeEvidenceSection(bundle *strings.Builder, rep
 		if end <= span.Start {
 			continue
 		}
-		startLine := bytes.Count(data[:span.Start], []byte("\n")) + 1
-		endLine := startLine + bytes.Count(data[span.Start:end], []byte("\n"))
-		if data[end-1] == '\n' {
-			endLine--
+		evidence := writeEvidenceSpan(bundle, data, span.Start, end, syntax)
+		if row.Role != "primary" || filepath.Ext(row.Path) != ".go" {
+			evidence.FirstFullLine, evidence.LastFullLine = 0, 0
 		}
-		fmt.Fprintf(bundle, "source_byte_range: [%d,%d)\nsource_lines: %d-%d\n```text\n", span.Start, end, startLine, endLine)
-		bundleStart := bundle.Len()
-		bundle.Write(data[span.Start:end])
-		row.AvailableSpans = append(row.AvailableSpans, evidenceSpan{Start: span.Start, End: end, BundleStart: int64(bundleStart), BundleEnd: int64(bundle.Len()), StartLine: startLine, EndLine: endLine})
+		row.AvailableSpans = append(row.AvailableSpans, evidence)
 		if data[end-1] != '\n' {
 			bundle.WriteByte('\n')
 		}
@@ -251,7 +257,59 @@ func (s *reviewSourceSnapshot) writeEvidenceSection(bundle *strings.Builder, rep
 	if len(data) == 0 {
 		bundle.WriteString("content: empty\n```text\n```\n")
 	}
-	return row, used, nil
+	return used, nil
+}
+
+func writeEvidenceSpan(bundle *strings.Builder, data []byte, start, end int64, syntax []int) evidenceSpan {
+	startLine := bytes.Count(data[:start], []byte("\n")) + 1
+	endLine := startLine + bytes.Count(data[start:end], []byte("\n"))
+	if data[end-1] == '\n' {
+		endLine--
+	}
+	firstFullLine, lastFullLine := startLine, endLine
+	if start > 0 && data[start-1] != '\n' {
+		firstFullLine++
+	}
+	if end < int64(len(data)) && data[end-1] != '\n' && data[end] != '\n' {
+		lastFullLine--
+	}
+	var anchors []int
+	if firstFullLine <= lastFullLine {
+		anchors = syntax[sort.SearchInts(syntax, firstFullLine):sort.SearchInts(syntax, lastFullLine+1)]
+	} else {
+		firstFullLine, lastFullLine = 0, 0
+	}
+	fmt.Fprintf(bundle, "source_byte_range: [%d,%d)\nsource_lines: %d-%d\n```text\n", start, end, startLine, endLine)
+	bundleStart := bundle.Len()
+	bundle.Write(data[start:end])
+	return evidenceSpan{Start: start, End: end, BundleStart: int64(bundleStart), BundleEnd: int64(bundle.Len()), StartLine: startLine, EndLine: endLine, GoSyntaxLines: anchors, FirstFullLine: firstFullLine, LastFullLine: lastFullLine}
+}
+
+// Compute positions in the complete frozen source before it is split into
+// evidence spans. A fragment can start or end inside a function or literal.
+func goSyntaxLines(name string, data []byte) []int {
+	fset := token.NewFileSet()
+	tree, _ := parser.ParseFile(fset, name, data, parser.SkipObjectResolution)
+	if tree == nil {
+		return nil
+	}
+	seen := make(map[int]bool)
+	ast.Inspect(tree, func(node ast.Node) bool {
+		switch node.(type) {
+		case *ast.AssignStmt, *ast.ExprStmt, *ast.ReturnStmt, *ast.CallExpr, *ast.IfStmt,
+			*ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.SelectStmt, *ast.CaseClause,
+			*ast.ValueSpec, *ast.TypeSpec, *ast.ImportSpec, *ast.FuncDecl, *ast.Field,
+			*ast.BranchStmt, *ast.GoStmt, *ast.DeferStmt, *ast.SendStmt, *ast.IncDecStmt, *ast.Ident, *ast.BasicLit:
+			seen[fset.PositionFor(node.Pos(), false).Line] = true
+		}
+		return true
+	})
+	lines := make([]int, 0, len(seen))
+	for line := range seen {
+		lines = append(lines, line)
+	}
+	sort.Ints(lines)
+	return lines
 }
 
 type frozenSourceManifest struct {

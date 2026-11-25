@@ -33,7 +33,9 @@ func testRuntimeMediaResultInputs(t *testing.T, c *Coordinator, source *TodoItem
 				return c.structuredPayloadForSubmission(consumer.ID, []byte(raw))
 			}
 			request := AttemptRequest{Task: taskDefFromTodoItem(consumer), resultContractSchema: compiled,
-				resultRuntimeInputs: func() (map[string]any, error) { return c.resultRuntimeInputValues(compiled, "") }}
+				resultRuntimeInputs: func(spec *CompiledResultContract) (map[string]any, error) {
+					return c.resultRuntimeInputValues(spec, "")
+				}}
 			payload, err := canonicalExternalStructuredPayload(request, &WorkerResultProposal{StructuredPayloadJSON: new(raw)}, nil)
 			if err != nil {
 				return nil, err.Error()
@@ -58,7 +60,7 @@ func testRuntimeMediaResultInputs(t *testing.T, c *Coordinator, source *TodoItem
 		} else if !bytes.Equal(local.Value, payload.Value) || local.SHA256 != payload.SHA256 {
 			t.Fatal("local and external runtime media bindings differ")
 		}
-		if err := c.validateSubmittedEvidenceInputs(consumer.ID, payload); err != nil {
+		if err := c.validateSubmittedEvidenceInputs(t.Context(), consumer.ID, payload); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -85,7 +87,7 @@ func testRuntimeMediaResultInputs(t *testing.T, c *Coordinator, source *TodoItem
 	}
 	if restored.TypedResult == nil || restored.TypedResult.StructuredPayload == nil ||
 		!bytes.Equal(local.Value, restored.TypedResult.StructuredPayload.Value) || local.SHA256 != restored.TypedResult.StructuredPayload.SHA256 ||
-		c.validateSubmittedEvidenceInputs(consumer.ID, restored.TypedResult.StructuredPayload) != nil {
+		c.validateSubmittedEvidenceInputs(t.Context(), consumer.ID, restored.TypedResult.StructuredPayload) != nil {
 		t.Fatal("runtime media binding changed during durable replay")
 	}
 	// Recheck the original binding, then reject both stale and substituted

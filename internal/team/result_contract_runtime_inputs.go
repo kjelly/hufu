@@ -151,6 +151,7 @@ func (c *Coordinator) resultRuntimeInputValuesWithContext(ctx context.Context, c
 		return nil, nil
 	}
 	values := make(map[string]any, len(compiled.runtimeInputs))
+	owner := c.dependencyViewOwner(taskID)
 	var worksetBindings map[string]string
 	for _, spec := range compiled.runtimeInputs {
 		var value any
@@ -174,9 +175,9 @@ func (c *Coordinator) resultRuntimeInputValuesWithContext(ctx context.Context, c
 				}
 			}
 		case "runtime_media":
-			value, err = c.resolveRuntimeMediaValue(spec.SourceTask)
+			value, err = owner.resolveRuntimeMediaValue(ctx, spec.SourceTask)
 		default:
-			value, err = c.resolveRuntimeOutputValue(FactRef{Name: spec.Target, TaskID: spec.SourceTask, RuntimeOutput: spec.Output}, spec.Output)
+			value, err = owner.resolveRuntimeOutputValue(ctx, FactRef{Name: spec.Target, TaskID: spec.SourceTask, RuntimeOutput: spec.Output}, spec.Output)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("runtime input %s: %w", spec.Target, err)
@@ -212,14 +213,14 @@ func assembleResultRuntimeInputs(raw []byte, specs []resultRuntimeInputSpec, val
 	}
 	for _, spec := range specs {
 		if _, err := resolveJSONPointer(value, spec.Target); err == nil {
-			return nil, fmt.Errorf("%s is runtime-owned; omit it and submit decisions only", spec.Target)
+			return nil, &resultBindingShapeError{fmt.Errorf("%s is runtime-owned; omit it and submit decisions only", spec.Target)}
 		}
 		source, exists := values[spec.Target]
 		if !exists {
 			return nil, fmt.Errorf("runtime input %s is unavailable", spec.Target)
 		}
 		if err := setRuntimeInputValue(value, spec.Target, source); err != nil {
-			return nil, err
+			return nil, &resultBindingShapeError{err}
 		}
 	}
 	encoded, err := json.Marshal(value)

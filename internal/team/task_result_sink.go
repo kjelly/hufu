@@ -57,7 +57,7 @@ func (s coordinatorTaskResultSink) Submit(ctx context.Context, taskID string, re
 			return rollback(err)
 		}
 	}
-	if err := tx.commit(&result); err != nil {
+	if err := tx.commit(ctx, &result); err != nil {
 		return rollback(err)
 	}
 	tx.finish()

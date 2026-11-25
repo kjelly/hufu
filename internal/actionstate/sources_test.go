@@ -149,6 +149,81 @@ func TestProjectSourcesRejectsAmbiguousIdentity(t *testing.T) {
 	}
 }
 
+func TestProjectSourcesBindsNormalizationOccurrence(t *testing.T) {
+	for _, mode := range []string{"valid", "substituted_receipt", "legacy_with_occurrence"} {
+		t.Run(mode, func(t *testing.T) {
+			item := sourceFixture(t, false)
+			receipt := item["execution_receipt"].(map[string]any)
+			result := item["typed_result"].(map[string]any)
+			payload := result["structured_payload"].(map[string]any)
+			origin := strings.Repeat("a", 64)
+			receipt["result_normalizer_occurrence_sha256"] = origin
+			if mode != "legacy_with_occurrence" {
+				output := []byte(payload["value"].(jsonv1.RawMessage))
+				sum := sha256.Sum256(output)
+				digest, provider := hex.EncodeToString(sum[:]), strings.Repeat("b", 64)
+				payload["raw_sha256"] = digest
+				payload["contract"] = map[string]any{"normalizer": "source-normalizer", "normalizer_sha256": provider}
+				payload["normalization"] = map[string]any{"provider_sha256": provider, "occurrence_sha256": origin, "raw": output, "output": output, "output_sha256": digest}
+				receipt["result_payload_sha256"] = payload["sha256"]
+				receipt["result_raw_payload_sha256"], receipt["result_normalizer_output_sha256"] = digest, digest
+			}
+			if mode == "substituted_receipt" {
+				receipt["result_normalizer_occurrence_sha256"] = strings.Repeat("c", 64)
+			}
+			data, err := ProjectSources(sourceCheckpointFixture(t, item), "run", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var view struct {
+				Tasks []sourceProjection `json:"tasks"`
+			}
+			if err := json.Unmarshal(data, &view); err != nil {
+				t.Fatal(err)
+			}
+			if got := view.Tasks[0].VerifiedResult; got != (mode == "valid") {
+				t.Fatalf("verified source = %t for %s", got, mode)
+			}
+		})
+	}
+}
+
+func TestProjectSourcesRetainsVerifiedHistoricalNormalization(t *testing.T) {
+	for _, mode := range []string{"historical receipt", "unbound raw hash", "current binding with stripped proof", "current dispatch with stripped proof"} {
+		t.Run(mode, func(t *testing.T) {
+			item := sourceFixture(t, false)
+			receipt := item["execution_receipt"].(map[string]any)
+			payload := item["typed_result"].(map[string]any)["structured_payload"].(map[string]any)
+			schemaHash, rawHash := strings.Repeat("a", 64), strings.Repeat("b", 64)
+			contract := map[string]any{"id": "review.schema.json", "schema_sha256": schemaHash, "require_structured": true, "normalizer": "normalize-result"}
+			item["result_contract"], payload["contract"], payload["raw_sha256"] = contract, contract, rawHash
+			receipt["result_contract_id"], receipt["result_contract_sha256"] = contract["id"], schemaHash
+			receipt["result_validation"], receipt["result_payload_sha256"], receipt["result_raw_payload_sha256"] = "valid", payload["sha256"], rawHash
+			switch mode {
+			case "unbound raw hash":
+				receipt["result_raw_payload_sha256"] = strings.Repeat("c", 64)
+			case "current binding with stripped proof":
+				contract["normalizer_sha256"] = strings.Repeat("d", 64)
+			case "current dispatch with stripped proof":
+				receipt["result_work_dispatch_id"] = "current-dispatch"
+			}
+			data, err := ProjectSources(sourceCheckpointFixture(t, item), "run", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var view struct {
+				Tasks []sourceProjection `json:"tasks"`
+			}
+			if err := json.Unmarshal(data, &view); err != nil {
+				t.Fatal(err)
+			}
+			if got := view.Tasks[0].VerifiedResult; got != (mode == "historical receipt") {
+				t.Fatalf("verified source = %t for %s: %s", got, mode, view.Tasks[0].ResultError)
+			}
+		})
+	}
+}
+
 func TestActionSourcesUsesRuntimeInvocationIdentity(t *testing.T) {
 	for _, mode := range []string{"valid", "recovered", "missing_grant", "forged_checkpoint_grant", "malformed_grant", "oversized_grant", "wrong_workspace", "wrong_task", "wrong_snapshot", "wrong_status", "canceled"} {
 		t.Run(mode, func(t *testing.T) {
@@ -210,13 +285,17 @@ func TestActionSourcesUsesRuntimeInvocationIdentity(t *testing.T) {
 			}
 			if !wantsError {
 				var view struct {
-					Tasks []sourceProjection `json:"tasks"`
+					Tasks                 []sourceProjection `json:"tasks"`
+					ArtifactDataDirectory string             `json:"artifact_data_directory"`
 				}
 				if err := json.Unmarshal(projected, &view); err != nil {
 					t.Fatal(err)
 				}
 				if view.Tasks[0].VerifiedResult != (mode == "valid" || mode == "recovered") {
 					t.Fatalf("unauthorized source projection: %s", projected)
+				}
+				if view.ArtifactDataDirectory != filepath.Join(runtimestore.ArtifactRoot(root), "data") {
+					t.Fatalf("source view has the wrong artifact store: %s", view.ArtifactDataDirectory)
 				}
 				after, err := SessionCheckpoint(root)
 				if err != nil || !bytes.Equal(data, after) {

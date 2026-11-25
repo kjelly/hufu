@@ -222,7 +222,7 @@ func (c *Coordinator) resolveContextQueryHints(ctx context.Context, request Cont
 		receipt := source.ExecutionReceipt
 		if source.Status != TaskDone || result == nil || !taskResultStatusIsSuccessful(result.Status) || result.TaskID != source.ID ||
 			receipt == nil || receipt.RunID != request.RunID || receipt.TaskID != source.ID || receipt.Attempt != result.Attempt ||
-			c.validateAcceptedDependencyPayload(source) != nil {
+			c.validateAcceptedDependencyPayloadWithContext(ctx, source) != nil {
 			hints.Unavailable = true
 			continue
 		}

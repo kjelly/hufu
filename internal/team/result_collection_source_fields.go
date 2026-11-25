@@ -33,7 +33,7 @@ func (c *Coordinator) constrainCollectionSourceFields(cp *ResultCollectionCheckp
 	delete(parameters, "receipt_ids")
 	manifest, err := c.collectionMemoryManifest(cp)
 	if err != nil {
-		return err
+		return rejectNormalizationRecoveryRead(err)
 	}
 	if manifest == nil || len(manifest.Items) == 0 || !memoryLearningEnabled(c.session.Config.MemoryLearning) {
 		delete(parameters, "memory_uses")
@@ -101,7 +101,7 @@ func (c *Coordinator) bindCollectionReceiptFields(ctx context.Context, cp *Resul
 	}
 	bound, err := c.collectionSourceFieldsBound(ctx, cp)
 	if err != nil {
-		return rejectLocalResult(RepairFailureSource, err)
+		return rejectResultSourceRead(err)
 	}
 	input.collectionSourcesBound = bound
 	if bound && input.receiptIDsSupplied {
@@ -115,7 +115,7 @@ func (c *Coordinator) bindCollectionReceiptFields(ctx context.Context, cp *Resul
 	}
 	registry, err := c.collectionStepReceipts(ctx, cp)
 	if err != nil {
-		return rejectLocalResult(RepairFailureSource, err)
+		return rejectResultSourceRead(err)
 	}
 	ids := registry.ReceiptIDs(cp.TaskID, cp.Attempt)
 	if taskResultStatusIsSuccessful(input.Status) {
@@ -137,7 +137,7 @@ func (c *Coordinator) validateCollectedMemoryInput(ctx context.Context, cp *Resu
 	if len(result.MemoryUses) == 0 {
 		manifest, err := c.collectionMemoryManifest(cp)
 		if err != nil {
-			return rejectLocalResult(RepairFailureSource, err)
+			return rejectResultSourceRead(err)
 		}
 		if manifest == nil || len(manifest.Items) == 0 || !memoryLearningEnabled(c.session.Config.MemoryLearning) {
 			return rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("omit memory_uses when the original work has no attributable memory"))
@@ -147,7 +147,7 @@ func (c *Coordinator) validateCollectedMemoryInput(ctx context.Context, cp *Resu
 		return rejectLocalResult(RepairFailureSource, fmt.Errorf("memory retrieval_id is runtime-owned; omit it"))
 	}
 	if err := c.validateCollectedMemoryUses(ctx, cp, result); err != nil {
-		return rejectLocalResult(RepairFailureSource, err)
+		return rejectResultSourceRead(err)
 	}
 	return nil
 }
@@ -191,7 +191,7 @@ func (c *Coordinator) collectionSourceFieldRepair(ctx context.Context, cp *Resul
 			fields = append(fields, "receipt_ids")
 		}
 	}
-	if len(input.MemoryUses) > 0 && !memoryLearningEnabled(c.session.Config.MemoryLearning) {
+	if len(input.MemoryUses) > 0 && !memoryLearningEnabled(c.session.Config.MemoryLearning) && recollectableMemoryClaims(raw) {
 		manifest, err := c.collectionMemoryManifest(cp)
 		if err != nil {
 			return raw, "", err
@@ -214,6 +214,16 @@ func (c *Coordinator) collectionSourceFieldRepair(ctx context.Context, cp *Resul
 	return string(probe), fmt.Sprintf("omit inapplicable source fields %v in the replacement; retain all findings, judgments and evidence", fields), err
 }
 
+func recollectableMemoryClaims(raw string) bool {
+	var fields map[string]jsontext.Value
+	if json.Unmarshal([]byte(raw), &fields) != nil {
+		return false
+	}
+	var uses []MemoryUseRef
+	return json.Unmarshal(fields["memory_uses"], &uses, json.RejectUnknownMembers(true)) == nil && len(uses) > 0 &&
+		!slices.ContainsFunc(uses, func(use MemoryUseRef) bool { return use.RetrievalID != "" })
+}
+
 func allCollectionReferencesObserved(ids []string, refs map[string]ArtifactRef) bool {
 	observed := make(map[string]bool, len(refs))
 	for _, ref := range refs {
@@ -225,7 +235,7 @@ func allCollectionReferencesObserved(ids []string, refs map[string]ArtifactRef) 
 func assessCollectionSourceFieldRecollection(a *ResultCollectionRecoveryAssessment, diagnostic string, check func(string, error) bool) {
 	check(collectionSourceFieldRepairCheck, nil)
 	check("canonical_claims", fmt.Errorf("%s", diagnostic))
-	a.Disposition, a.AdditionalTurns = RecoveryRepairClaims, 2
+	a.Disposition = RecoveryRepairClaims
 }
 
 func hasSourceFieldRecollectionGrant(receipt *ExecutionReceipt, cp *ResultCollectionCheckpoint) bool {

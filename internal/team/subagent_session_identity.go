@@ -72,6 +72,10 @@ func (c *Coordinator) resumableBackendSessionID(ctx context.Context, request Att
 // task's active branch lineage. It returns nil when no binding names a
 // session.
 func (c *Coordinator) durableBackendSessionBinding(ctx context.Context, taskID string) (*durableSessionBinding, error) {
+	if c.isModelFanoutLeaf(taskID) {
+		binding := c.modelFanout
+		return binding.parent.fanoutBackendSessionForDispatch(ctx, binding.parent.todoItemByID(taskID), binding.index)
+	}
 	events, err := c.readActiveLineageEvents(ctx)
 	if err != nil {
 		// A failed sync invalidates the store's cached state although the

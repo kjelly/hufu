@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -21,8 +22,9 @@ type WorkspaceVersionContext struct {
 	ProjectID   string
 	TeamName    string
 	// SubjectRoot and ControlRoot are canonical absolute paths.
-	SubjectRoot string
-	ControlRoot string
+	SubjectRoot     string
+	ControlRoot     string
+	SubjectIdentity os.FileInfo
 	// StateDir is Project.StateDir; the store lives below it.
 	StateDir string
 	// HoldsProjectLock reports that the command layer holds the project
@@ -87,10 +89,11 @@ func (c WorkspaceVersionContext) captureRequest(ctx context.Context, branchID st
 		WorkspaceID:       c.WorkspaceID,
 		BranchID:          branchID,
 		Root:              c.SubjectRoot,
+		SubjectIdentity:   c.SubjectIdentity,
 		ExcludeSubtrees:   subtrees,
 		Parent:            parent,
 		Reason:            reason,
 		Limits:            c.Limits,
-		RequireHufuignore: c.Required() && !versionstore.IsGitWorkTree(ctx, c.SubjectRoot),
+		RequireHufuignore: c.Required(),
 	}, nil
 }

@@ -122,7 +122,7 @@ func TestStructuredStepReceiptViewsSeparateReusedCallIDs(t *testing.T) {
 	if !ok || got.StepID != "current" {
 		t.Fatalf("current occurrence view=%+v", got)
 	}
-	if err := c.validateTaskResultReceiptClaims(id, &TaskResult{Attempt: 1, ReceiptIDs: []string{receipt.ID}}); err != nil {
+	if err := c.validateTaskResultReceiptClaims(t.Context(), id, &TaskResult{Attempt: 1, ReceiptIDs: []string{receipt.ID}}); err != nil {
 		t.Fatal(err)
 	}
 	conflict := receipt

@@ -38,7 +38,7 @@ func (c *Coordinator) prepareInvocationInputs(ctx context.Context, prompt string
 	if err := c.resolveRunInputsForInvocation(ctx, prompt); err != nil {
 		return err
 	}
-	if err := c.validateResumeSources(ctx); err != nil {
+	if err := c.admitResumeSources(ctx, true); err != nil {
 		return err
 	}
 	return c.startProviderExecutionBoundary(ctx)

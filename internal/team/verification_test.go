@@ -147,6 +147,40 @@ func TestVerification_JSONAssertRejectsTrailingJSONData(t *testing.T) {
 	}
 }
 
+func TestVerification_JSONAssertMasksComparedCredentials(t *testing.T) {
+	const secret = "fixture assertion credential"
+	t.Setenv("FIXTURE_API_TOKEN", secret)
+	result, err := executeJSONAssertVerification(t.Context(), "/bin/sh", t.TempDir(), VerificationSpec{
+		Command:    `printf '{"actual":"%s"}' "$FIXTURE_API_TOKEN"`,
+		Assertions: []JSONAssertion{{Path: "actual", Equals: "expected"}},
+	})
+	if err == nil || result.ExitCode != 1 {
+		t.Fatalf("credential-bearing comparison should fail: %+v, %v", result, err)
+	}
+	for _, detail := range []string{result.Stderr, err.Error()} {
+		if strings.Contains(detail, secret) || !strings.Contains(detail, "[REDACTED]") {
+			t.Fatal("assertion diagnostics did not mask the compared credential")
+		}
+	}
+}
+
+func TestVerification_JSONAssertBoundsPrivateMismatchEvidence(t *testing.T) {
+	t.Setenv("FIXTURE_ASSERT_PASSWORD", "q")
+	result, err := ExecuteVerificationSpec(t.Context(), "/bin/sh", t.TempDir(), VerificationSpec{
+		Type:       VerifyJSONAssert,
+		Command:    `printf '{"actual":"'; head -c 1048576 /dev/zero | tr '\000' "$FIXTURE_ASSERT_PASSWORD"; printf '"}'`,
+		Assertions: []JSONAssertion{{Path: "actual", Equals: "expected"}},
+	})
+	if err == nil || result == nil || result.ExitCode != 1 {
+		t.Fatalf("large private value did not produce an ordinary mismatch: %v", err)
+	}
+	for _, detail := range []string{result.Stderr, err.Error()} {
+		if len(detail) > 512 || strings.Contains(detail, "qq") || !strings.Contains(detail, "[REDACTED]") {
+			t.Fatal("mismatch diagnostic exposed or expanded a private value")
+		}
+	}
+}
+
 // Minimum Test Matrix Item 6: legacy shell verifier that prints failure but exits zero retains shell exit semantics and emits weak-verifier warning
 func TestVerification_CommandExit_WeakVerifierWarning(t *testing.T) {
 	t.Parallel()

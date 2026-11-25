@@ -156,7 +156,7 @@ func firstParentOrEmptyTree(ctx context.Context, repo, commit string) (string, e
 }
 
 func diffSelectedCommit(ctx context.Context, repo string, selected selectedCommitDiff, options ...string) (string, error) {
-	args := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0", selected.parent, selected.commit}
+	args := append(frozenPatchArgs(), selected.parent, selected.commit)
 	args = append(args, options...)
 	return git(ctx, repo, args...)
 }

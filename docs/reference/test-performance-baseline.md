@@ -126,11 +126,10 @@ package sets; the focused entries below are diagnostic entry points only.
 | Cross-process leases, locking and terminal custody | `internal/team/terminal_broker_test.go`, `internal/context/sqlite_txlock_test.go`, `internal/workspace/lifecycle_test.go` | `go test -count=1 ./internal/team ./internal/context ./internal/workspace` |
 | Data races | All core and diagnostic-pilot packages under `-race -short`, plus guarded cases under race without short | `--mode race --full` for equal-case measurements; [layered CI](test-layers.md) for required coverage |
 | Release constraint | All core and diagnostic-pilot packages with CGO disabled, without race | `--mode cgo-free --full` (actual tests, not compile-only) |
-| Live integration (explicit opt-in) | `internal/team/codex_smoke_test.go` | `HUFU_CODEX_SMOKE=1 go test -count=1 ./internal/team -run CodexSmoke` with an installed, authenticated Codex |
+| Codex App Server integration (paused) | `internal/team/codex_smoke_test.go` | Skipped while the integration is temporarily unsupported, including with `HUFU_CODEX_SMOKE=1` |
 
-Live smoke is separate evidence and is intentionally not enabled by the
-baseline workflow. Unix/PTY cases retain their platform build conditions;
-short-mode skips are recorded rather than counted as covered contracts.
+The baseline records skips separately from exercised contracts. Unix/PTY
+cases retain their platform build conditions.
 
 ## Reporting and follow-up
 

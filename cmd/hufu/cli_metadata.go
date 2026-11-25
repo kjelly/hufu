@@ -34,7 +34,7 @@ var canonicalExamples = []exampleMetadata{
 	{Section: "Quick start", Argv: "hufu team capabilities dev-team --output json"},
 	{Section: "Quick start", Argv: `hufu run --team dev-team -- "review this codebase"`},
 	{Section: "Quick start", Argv: `hufu run --profile coding -- "implement the feature"`},
-	{Section: "Model selection", Argv: `hufu run --team dev-team -m codex/gpt-6-luna --worker-model coder=codex/gpt-6-sol --worker-model reviewer=codex/gpt-6-sol -- "implement feature X"`},
+	{Section: "Model selection", Argv: `hufu run --team dev-team -m local/qwen3:8b --worker-model coder=ollama/qwen3.5:27b --worker-model reviewer=ollama/qwen3.5:27b -- "implement feature X"`},
 	{Section: "Model selection", Argv: `hufu run --team dev-team --profile coding-balanced -- "implement feature X"`},
 	{Section: "Progress and recovery", Argv: "hufu inspect overview --workspace ./workspace/dev-team"},
 	{Section: "Progress and recovery", Argv: "hufu inspect control-decisions --workspace ./workspace/dev-team"},

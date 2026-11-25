@@ -22,7 +22,7 @@ const codexProjectionConsumerProcessEnv = "HUFU_TEST_CODEX_PROJECTION_CONSUMER"
 func TestCodexProjectionConsumerProcess(t *testing.T) {
 	path := os.Getenv(codexProjectionConsumerProcessEnv)
 	if path == "" {
-		t.Skip("subprocess-only consumer fixture")
+		skipUnsupportedCodexIntegration(t)
 	}
 	root, err := os.OpenRoot(path)
 	if err != nil {
@@ -88,6 +88,7 @@ func startCodexProjectionConsumerProcess(t *testing.T, path string) func() {
 }
 
 func TestCodexImageProjectionConsumerCrashPreservesOtherProcess(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	c, ctx, request, hash := codexImageProjectionFixture(t)
 	first, err := newCodexImageProjection(ctx, c, request, hash)
 	if err != nil {

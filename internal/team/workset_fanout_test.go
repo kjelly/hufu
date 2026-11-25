@@ -28,7 +28,7 @@ func TestStructuredFanOutUsesValidatedManifestBindings(t *testing.T) {
 	c.executionRunID = "run-1"
 	manifestPath := writeWorksetManifest(t, c.session.Workspace, `{"schema_version":1,"items":[{"key":"alpha","bindings":{"name":"alpha","input":"a.txt"},"touched_paths":["internal/team/z.go","internal/team/a.go","internal/team/z.go"]},{"key":"beta","bindings":{"name":"beta","input":"b.txt"},"touched_paths":["cmd/hufu/main.go"]}]}`)
 	parent := TaskDef{ID: "prepare", Agent: "worker", InvariantVerification: InvariantVerificationReport, FanOut: &FanOutSpec{Source: "manifest.json", GoalTemplate: "process {name} from {input}"}}
-	tasks, err := c.expandFanOutTasks([]TaskDef{parent})
+	tasks, err := c.expandFanOutTasks(t.Context(), []TaskDef{parent})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestTaskGoalInvariantContractPropagatesThroughFanOutAndSubmission(t *testin
 		t.Fatal(err)
 	}
 	c := &Coordinator{session: session, executionRunID: "run-1"}
-	expanded, err := c.expandFanOutTasks(bound)
+	expanded, err := c.expandFanOutTasks(t.Context(), bound)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestStructuredFanOutRejectsInvalidManifestAtomically(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c := newTestCoordinator(t)
 			writeWorksetManifest(t, c.session.Workspace, content)
-			if expanded, err := c.expandFanOutTasks([]TaskDef{
+			if expanded, err := c.expandFanOutTasks(t.Context(), []TaskDef{
 				{Agent: "other", Goal: "must not commit"},
 				{Agent: "worker", FanOut: &FanOutSpec{Source: "manifest.json", GoalTemplate: "{x}"}},
 			}); err == nil || expanded != nil {
@@ -184,7 +184,7 @@ func TestStructuredFanOutResolvesOpaqueSourceArtifactAndInputIntegrity(t *testin
 		TaskID: producer.ID, Attempt: 1, Agent: "producer", Status: TaskResultStatusSuccess,
 		Artifacts: append([]ArtifactRef{manifestRef.ArtifactRef}, inputs...),
 	}}
-	tasks, err := c.expandFanOutTasks([]TaskDef{{ID: "producer", Agent: "worker", FanOut: &FanOutSpec{
+	tasks, err := c.expandFanOutTasks(t.Context(), []TaskDef{{ID: "producer", Agent: "worker", FanOut: &FanOutSpec{
 		SourceArtifact: FactRef{TaskID: "producer", Artifact: manifestRef.ID}, GoalTemplate: "process {name}",
 	}}})
 	if err != nil || len(tasks) != len(keys) {

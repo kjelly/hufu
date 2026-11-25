@@ -301,7 +301,7 @@ func (c *Coordinator) validateRequiredArtifactReadSubmission(ctx context.Context
 		return fmt.Errorf("required_reads_invalid: %w", err)
 	}
 	metadata, ok := invocationMetadataFromContext(ctx)
-	identity, err := submitResultRuntimeIdentityFromContext(ctx, c, taskID)
+	identity, err := c.resultSubmissionEvidenceIdentity(ctx, taskID)
 	if !ok || err != nil || metadata.TaskID != taskID || metadata.RunID != identity.RunID || metadata.Attempt != identity.Attempt || metadata.AgentName != identity.Agent || metadata.ModelExecutionID == "" {
 		return fmt.Errorf("artifact_read_coverage_identity_invalid")
 	}
@@ -315,7 +315,7 @@ func (c *Coordinator) validateRequiredArtifactReadSubmission(ctx context.Context
 	if !c.hasDurableEventJournal() {
 		return fmt.Errorf("artifact_read_observation_journal_unavailable")
 	}
-	sourceStore, err := NewFileArtifactStore(c.artifactStoreRootPath(), c.projectDir)
+	sourceStore, err := OpenFileArtifactStoreReadOnly(c.artifactStoreRootPath(), c.projectDir)
 	if err != nil {
 		return err
 	}

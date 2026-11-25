@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -257,6 +258,70 @@ func TestBindRunWorkspaceVersioning(t *testing.T) {
 	cfg.WorkspaceVersioning.Mode = "sometimes"
 	if err = bindRunWorkspaceVersioning(context.Background(), newSession(), cfg); err == nil {
 		t.Fatal("an unknown mode was accepted")
+	}
+}
+
+func TestBoundWorkspaceVersionRejectsReplacedSubject(t *testing.T) {
+	ctx := t.Context()
+	f := newVersionedCLIFixture(t)
+	f.write(t, "file.txt", "admitted")
+	stateRoot := os.Getenv("HUFU_STATE_HOME")
+	registry, err := workspacepkg.OpenReadOnly(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = registry.Close() }()
+	managed, err := registry.GetWorkspaceByControlRoot(ctx, f.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := &team.TeamSession{Workspace: f.control, WorkspaceLease: &commandWorkspaceLease{stateRoot: stateRoot, workspaceID: managed.ID}}
+	cfg := &config.Config{}
+	cfg.WorkspaceVersioning.Mode = "required"
+	if err := bindRunWorkspaceVersioning(ctx, session, cfg); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = closeSessionWorkspaceLease(session) }()
+	tree, events, err := openSessionStores(f.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = events.Close() }()
+	binding := session.WorkspaceVersion
+	store, err := binding.OpenStore(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ops := &team.WorkspaceSessionOps{Version: binding, Workspace: f.control, Tree: tree, Events: events, Store: store}
+	accepted, _, err := ops.SnapshotNow(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := f.subject + "-original"
+	if err := os.Rename(f.subject, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(f.subject, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f.write(t, ".hufuignore", "")
+	f.write(t, "file.txt", "replacement")
+	if _, _, err := ops.SnapshotNow(ctx); !errors.Is(err, versionstore.ErrVersionedWorkspaceUnresolved) {
+		t.Fatalf("snapshot with a different physical subject: %v", err)
+	}
+	if _, err := store.Materialize(ctx, versionstore.MaterializeRequest{
+		Root: binding.SubjectRoot, SubjectIdentity: binding.SubjectIdentity, SnapshotID: accepted.ID,
+	}); !errors.Is(err, versionstore.ErrVersionedWorkspaceUnresolved) {
+		t.Fatalf("materialization with a different physical subject: %v", err)
+	}
+	head, _, hasHead, err := store.GetBranchHead(ctx, binding.WorkspaceID, tree.ActiveBranch)
+	if err != nil || !hasHead || head.ID != accepted.ID {
+		t.Fatalf("branch head moved after subject replacement: %v, %v", head, err)
+	}
+	admitted, err := os.ReadFile(filepath.Join(moved, "file.txt"))
+	if err != nil || string(admitted) != "admitted" || f.read(t, "file.txt") != "replacement" {
+		t.Fatalf("subject replacement modified one of the trees: %v", err)
 	}
 }
 

@@ -14,7 +14,7 @@ func (c *Coordinator) loadLegacyCandidate(ctx context.Context, item *TodoItem, c
 	if item == nil || candidate == nil {
 		return nil, errTaskResultStale
 	}
-	evidence, err := c.resultCandidateEvidenceHash(item)
+	evidence, err := c.resultCandidateEvidenceHash(ctx, item)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +38,10 @@ func (c *Coordinator) validateLegacyDependencyDispatch(ctx context.Context, item
 	if !authoritativeDependencyViewRequest(manifest, item) || manifest.RunID != r.RunID || manifest.Attempt != r.Attempt || manifest.ModelExecutionID != r.ModelExecutionID || !supportedDeliveryContextManifest(manifest) {
 		return fmt.Errorf("legacy dependency dispatch identity changed")
 	}
-	expected := hashContentKey(FormatDependencyResults(c.dependencyResultsForTask(item.ID)))
+	expected := hashContentKey(FormatDependencyResults(c.dependencyResultsForTaskWithContext(ctx, item.ID)))
+	if err := artifactReadContextError(ctx); err != nil {
+		return err
+	}
 	matched := 0
 	for _, entry := range manifest.Items {
 		if entry.Kind != "dependency_result" {

@@ -199,7 +199,7 @@ func TestReviewWorksetProgressRequiresAllVerifiedChildren(t *testing.T) {
 	producer.TypedResult.Artifacts = []ArtifactRef{artifact.ArtifactRef}
 	contract := session.ContractTasks[slices.IndexFunc(session.ContractTasks, func(task TaskDef) bool { return task.ID == "review-primary-workset" })]
 	contract.FanOut.SourceArtifact = FactRef{TaskID: producer.ID, Artifact: artifact.ID}
-	children, err := c.expandFanOutTasks([]TaskDef{contract})
+	children, err := c.expandFanOutTasks(t.Context(), []TaskDef{contract})
 	if err != nil {
 		t.Fatal(err)
 	}

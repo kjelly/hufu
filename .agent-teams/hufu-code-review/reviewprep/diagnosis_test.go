@@ -26,7 +26,7 @@ func TestReviewBudgetFailureExplainsFixedEvidenceOverhead(t *testing.T) {
 		t.Fatal(err)
 	}
 	current := &batch{paths: []string{"primary.go"}}
-	config := Config{MaxSourceSnapshotBytes: 1000, MaxReviewInputTokens: 200000}
+	config := Config{MaxSourceSnapshotBytes: 1000, MaxReviewInputTokens: 16000}
 	failure := oversizedReviewInputError(current, source, inventory, estimateReviewInputTokens(len(source)+len(inventory)), config)
 	var typed *reviewBudgetError
 	if !errors.As(failure, &typed) || typed.diagnosis.CauseStatus != "confirmed" || !strings.Contains(typed.diagnosis.Cause, "without primary content") {
@@ -51,14 +51,14 @@ func TestReviewBudgetFailureExplainsFixedEvidenceOverhead(t *testing.T) {
 	for _, fact := range response.Error.Diagnosis.Evidence {
 		facts[fact.Name] = fact.Value
 	}
-	if facts["primary_content_bytes"] != "1" || facts["related_paths"] != "30" || facts["max_source_snapshot_bytes"] != "1000" {
+	if facts["primary_content_bytes"] != "1" || facts["related_paths"] != fmt.Sprint(maxSnapshotRelatedPaths) || facts["max_source_snapshot_bytes"] != "1000" {
 		t.Fatalf("inexact evidence=%v", facts)
 	}
 }
 
 func TestRunEmitsStructuredBudgetFailureWithoutPublishingWorksets(t *testing.T) {
 	repo := newLargeSourceBudgetRepo(t)
-	payload, err := json.Marshal(wireConfig{Repository: repo, OutputDir: "out", Scope: scopePointer(lastNScope(1)), MaxSourceSnapshotBytes: 400, MaxReviewInputTokens: 200000})
+	payload, err := json.Marshal(wireConfig{Repository: repo, OutputDir: "out", Scope: scopePointer(lastNScope(1)), MaxSourceSnapshotBytes: 400, MaxReviewInputTokens: 16000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func scopePointer(scope resolverScope) *resolverScope { return &scope }
 func TestEmbeddedRuntimeEmitsReviewBudgetDiagnosis(t *testing.T) {
 	repo := newLargeSourceBudgetRepo(t)
 	scope := lastNScope(1)
-	payload := wireConfig{Repository: repo, OutputDir: "out", Scope: &scope, MaxSourceSnapshotBytes: 400, MaxReviewInputTokens: 200000}
+	payload := wireConfig{Repository: repo, OutputDir: "out", Scope: &scope, MaxSourceSnapshotBytes: 400, MaxReviewInputTokens: 16000}
 	request := mustJSON(t, actionRequest{Type: "prepare_review_workset", Payload: string(mustJSON(t, payload))})
 	source, err := os.Getwd()
 	if err != nil {

@@ -90,6 +90,8 @@ func attemptPathHasGitSegment(rel string) bool {
 
 // observeAttemptEntry reads one path's state through an os.Root, without
 // following a final symlink. It returns nil for a path that does not exist.
+var errAttemptPathIsDirectory = errors.New("attempt path is a directory")
+
 func observeAttemptEntry(root *os.Root, rel string) (*AttemptManifestEntry, error) {
 	name := filepath.FromSlash(rel)
 	info, err := root.Lstat(name)
@@ -121,7 +123,7 @@ func observeAttemptEntry(root *os.Root, rel string) (*AttemptManifestEntry, erro
 		sum := sha256.Sum256([]byte(target))
 		entry.Kind, entry.LinkTarget, entry.SHA256, entry.Mode = AttemptEntrySymlink, target, hex.EncodeToString(sum[:]), 0
 	case info.IsDir():
-		return nil, fmt.Errorf("%s is a directory", rel)
+		return nil, fmt.Errorf("%s: %w", rel, errAttemptPathIsDirectory)
 	default:
 		entry.Kind = AttemptEntryOther
 	}

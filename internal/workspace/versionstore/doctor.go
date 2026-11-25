@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -176,6 +179,23 @@ func (s *Store) verifyEntryMemo(ctx context.Context, entry TreeEntry, verified m
 }
 
 func (s *Store) subjectMarkerIssues(ctx context.Context) ([]DoctorIssue, error) {
+	entries, err := os.ReadDir(s.layout.root)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace provider recovery records: %w", err)
+	}
+	markers := make(map[string]providerRecovery)
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), providerRecoveryPrefix) || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		marker, err := readProviderRecoveryFile(filepath.Join(s.layout.root, entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		if marker.Code != "" {
+			markers[marker.SubjectRoot] = marker
+		}
+	}
 	rows, err := s.db.QueryContext(ctx, "SELECT "+subjectColumns+" FROM subject_state ORDER BY subject_key")
 	if err != nil {
 		return nil, fmt.Errorf("read subject state: %w", err)
@@ -187,16 +207,36 @@ func (s *Store) subjectMarkerIssues(ctx context.Context) ([]DoctorIssue, error) 
 		if scanErr != nil {
 			return nil, scanErr
 		}
+		if marker, ok := markers[state.SubjectRoot]; ok {
+			marker.applyTo(&state)
+			delete(markers, state.SubjectRoot)
+		}
 		if state.RecoveryRequired {
-			issues = append(issues, DoctorIssue{Code: "recovery_required", Severity: severityWarning,
-				Detail: fmt.Sprintf("%s: %s (%s); use `hufu workspace version restore <head>` or `adopt`", state.SubjectRoot, state.RecoveryCode, state.RecoveryDetail)})
+			issues = append(issues, recoveryRequiredIssue(state.SubjectRoot, state.RecoveryCode, state.RecoveryDetail))
 		}
 		if state.CheckpointDeferred {
 			issues = append(issues, DoctorIssue{Code: "checkpoint_deferred", Severity: severityWarning,
 				Detail: state.SubjectRoot + ": the last run's files were not checkpointed; the next run admission records them"})
 		}
 	}
-	return issues, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var unboundSubjects []string
+	for subject := range markers {
+		unboundSubjects = append(unboundSubjects, subject)
+	}
+	slices.Sort(unboundSubjects)
+	for _, subject := range unboundSubjects {
+		marker := markers[subject]
+		issues = append(issues, recoveryRequiredIssue(subject, marker.Code, marker.Detail))
+	}
+	return issues, nil
+}
+
+func recoveryRequiredIssue(root, code, detail string) DoctorIssue {
+	return DoctorIssue{Code: "recovery_required", Severity: severityWarning,
+		Detail: fmt.Sprintf("%s: %s (%s); use `hufu workspace version restore <head>` or `adopt`", root, code, detail)}
 }
 
 // RemoveStaleTempFiles deletes temp files older than an hour (doctor --repair).

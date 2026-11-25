@@ -67,13 +67,13 @@ func TestDependencyResultViewRuntimePreparesAndVerifiesDelivery(t *testing.T) {
 	if err := c.taskTracker.TodoList().SetContextManifest(consumer.ID, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.ModelCalled || c.validateSelectedDependencyDelivery(consumer.ID, 1, manifest.RunID) == nil {
+	if manifest.ModelCalled || c.validateSelectedDependencyDelivery(t.Context(), consumer.ID, 1, manifest.RunID) == nil {
 		t.Fatal("prepared request was counted as dispatched")
 	}
 	if _, err := markDependencyViewModelCall(c.bindDependencyViewCall(t.Context(), &manifest)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.validateSelectedDependencyDelivery(consumer.ID, 1, manifest.RunID); err != nil {
+	if err := c.validateSelectedDependencyDelivery(t.Context(), consumer.ID, 1, manifest.RunID); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.validateSelectedRepairContext(t.Context(), consumer, &manifest); err != nil {
@@ -93,7 +93,7 @@ func TestDependencyResultViewRuntimePreparesAndVerifiesDelivery(t *testing.T) {
 	if err := c.taskTracker.TodoList().SetContextManifest(consumer.ID, &consumer.ContextManifests[0]); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.validateSelectedDependencyDelivery(consumer.ID, 1, manifest.RunID); err == nil {
+	if err := c.validateSelectedDependencyDelivery(t.Context(), consumer.ID, 1, manifest.RunID); err == nil {
 		t.Fatal("rewritten delivery hash was accepted")
 	}
 }

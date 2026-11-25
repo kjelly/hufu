@@ -140,6 +140,9 @@ func (c *Coordinator) restoreTranscriptEvidence(ctx context.Context, receipt *Ex
 		return nil, err
 	}
 	const maxBytes = 16 << 20
+	if artifact.RunID != receipt.RunID || artifact.TaskID != receipt.TaskID || artifact.Agent != receipt.ProducerID || artifact.Attempt != receipt.Attempt {
+		return nil, fmt.Errorf("protocol repair transcript producer does not match its receipt")
+	}
 	if artifact.Bytes < 0 || artifact.Bytes > maxBytes || artifact.ByteSize != artifact.Bytes || artifact.SHA256 == "" || artifact.MediaType != taskTranscriptMediaType {
 		return nil, fmt.Errorf("protocol repair transcript has invalid size or digest")
 	}

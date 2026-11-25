@@ -227,7 +227,13 @@ func (c *Coordinator) authorizedArtifactRef(ctx context.Context, id string) (Art
 	}
 	if scope, scoped := artifactAccessScopeFromContext(ctx); scoped {
 		if scope.RunID != "" && c.executionRunID != "" && scope.RunID != c.executionRunID {
-			return ArtifactRef{}, "", false
+			if _, historical, err := c.originalNormalizationEvidence(ctx, scope.TaskID); err != nil || !historical {
+				return ArtifactRef{}, "", false
+			}
+			identity, err := c.resultSubmissionEvidenceIdentity(ctx, scope.TaskID)
+			if err != nil || identity.RunID != scope.RunID || identity.Attempt != scope.Attempt {
+				return ArtifactRef{}, "", false
+			}
 		}
 		if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID != "" && scope.TaskID != todoID {
 			return ArtifactRef{}, "", false
@@ -257,19 +263,19 @@ func (c *Coordinator) authorizedArtifactRef(ctx context.Context, id string) (Art
 			return ArtifactRef{}, "", false
 		}
 		if consumer.WorksetBinding != nil {
-			return c.authorizedWorksetInput(consumer, id)
+			return c.authorizedWorksetInput(ctx, consumer, id)
 		}
 		// Structured fan-out children receive exact opaque references in their
 		// immutable workset binding only when the runtime receipt commits this
 		// exact child. A binding by itself is not authorization evidence.
-		if input, producerID, ok := c.authorizedWorksetInput(consumer, id); ok {
+		if input, producerID, ok := c.authorizedWorksetInput(ctx, consumer, id); ok {
 			return input, producerID, true
 		}
 		for _, dependency := range resultDependencyIDs(consumer) {
 			allowedProducers[dependency] = true
 		}
 		for _, source := range consumer.EvidenceFrom {
-			for _, input := range c.dependencyReviewedInputs(c.todoItemByID(source)) {
+			for _, input := range c.dependencyReviewedInputs(ctx, c.todoItemByID(source)) {
 				if input.ID == id {
 					return input, input.TaskID, true
 				}
@@ -310,7 +316,10 @@ func (c *Coordinator) buildArtifactAccessScope(ctx context.Context, todoID strin
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return nil, fmt.Errorf("artifact scope requires task state")
 	}
-	authorizer := c.newArtifactInputAuthorizer(ctx, c.taskTracker.TodoList().Items())
+	// Fanout leaves isolate their lifecycle, while the admitted parent owns
+	// the task's dependency results and workset receipts.
+	owner := c.dependencyViewOwner(todoID)
+	authorizer := owner.newArtifactInputAuthorizer(ctx, owner.taskTracker.TodoList().Items())
 	item := authorizer.tasks[todoID]
 	if item == nil {
 		return nil, fmt.Errorf("artifact scope task %q does not exist", todoID)
@@ -508,11 +517,11 @@ func (c *Coordinator) artifactScopePathCandidates(scope *ArtifactAccessScope) []
 	return paths
 }
 
-func (c *Coordinator) authorizedWorksetInput(consumer *TodoItem, id string) (ArtifactRef, string, bool) {
+func (c *Coordinator) authorizedWorksetInput(ctx context.Context, consumer *TodoItem, id string) (ArtifactRef, string, bool) {
 	if c == nil || c.taskTracker == nil || consumer == nil || consumer.WorksetBinding == nil {
 		return ArtifactRef{}, "", false
 	}
-	authorizer := c.newArtifactInputAuthorizer(context.Background(), c.taskTracker.TodoList().Items())
+	authorizer := c.newArtifactInputAuthorizer(ctx, c.taskTracker.TodoList().Items())
 	ref, producerID, err := authorizer.resolve(consumer, id)
 	return ref, producerID, err == nil
 }

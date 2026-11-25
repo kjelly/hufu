@@ -102,7 +102,7 @@ func (c *Coordinator) updateResultCollection(ctx context.Context, expected *Resu
 		return nil, errTaskResultStale
 	}
 	if _, err := c.loadCollectionWork(ctx, item, expected); err != nil {
-		return nil, err
+		return nil, rejectNormalizationRecoveryRead(err)
 	}
 	limit, err := collectionTurnLimit(receipt)
 	if err != nil || limit != expected.TurnLimit {
@@ -114,7 +114,7 @@ func (c *Coordinator) updateResultCollection(ctx context.Context, expected *Resu
 		return nil, err
 	}
 	if err := c.appendCollectionCheckpointLocked(ctx, item, receipt, next, nil); err != nil {
-		return nil, err
+		return nil, rejectLocalResultPersistence(err)
 	}
 	return cloneResultCollectionCheckpoint(next), nil
 }
@@ -151,7 +151,12 @@ func (c *Coordinator) reserveResultCollection(ctx context.Context, expected *Res
 		next.FailureReason = ""
 		ref, err := c.putCollectionBlob(ctx, next, "request", request)
 		if err != nil {
-			return err
+			return rejectLocalResultPersistence(err)
+		}
+		// Authenticate the stored request before publishing InFlight and
+		// spending a turn. Dispatch uses these same canonical request bytes.
+		if _, err := c.readCollectionBlob(ctx, next, "request", ref); err != nil {
+			return rejectNormalizationRecoveryRead(err)
 		}
 		next.Request = ref
 		return nil
@@ -164,7 +169,7 @@ func (c *Coordinator) recordCollectionSchemaFailure(ctx context.Context, expecte
 	}
 	raw, err := c.readCollectionBlob(ctx, expected, "response", expected.Response)
 	if err != nil {
-		return nil, err
+		return nil, rejectNormalizationRecoveryRead(err)
 	}
 	_, rejection := c.decodeCollectionClaims(expected.TaskID, raw)
 	if reason := localResultRejectionReason(rejection); rejection == nil || (reason != RepairFailureInvalidSchema && reason != RepairFailureResultMissing) {
@@ -179,7 +184,7 @@ func (c *Coordinator) recordCollectionSchemaFailure(ctx context.Context, expecte
 func (c *Coordinator) recordCollectionFormatFailure(ctx context.Context, expected *ResultCollectionCheckpoint, rejections ...error) (*ResultCollectionCheckpoint, error) {
 	raw, err := c.readCollectionBlob(ctx, expected, "response", expected.Response)
 	if err != nil {
-		return nil, err
+		return nil, rejectNormalizationRecoveryRead(err)
 	}
 	if value, decodeErr := decodeUniqueJSON(raw); decodeErr == nil {
 		raw, err = json.Marshal(value, json.Deterministic(true))
@@ -225,17 +230,7 @@ func (c *Coordinator) recordCollectionFormatFailure(ctx context.Context, expecte
 }
 
 func (c *Coordinator) recordCollectionResponse(ctx context.Context, expected *ResultCollectionCheckpoint, response []byte) (*ResultCollectionCheckpoint, error) {
-	return c.updateResultCollection(ctx, expected, func(next *ResultCollectionCheckpoint, _ *ExecutionReceipt) error {
-		if next.State != ResultCollectionInFlight || next.InvocationRunID != c.executionRunID {
-			return errResultCollectionStale
-		}
-		ref, err := c.putCollectionBlob(ctx, next, "response", response)
-		if err != nil {
-			return err
-		}
-		next.State, next.Response = ResultCollectionReceived, ref
-		return nil
-	})
+	return c.recordCollectionResponseUsage(ctx, expected, response, ExecutionUsage{}, nil)
 }
 
 func (c *Coordinator) blockResultCollection(ctx context.Context, expected *ResultCollectionCheckpoint, reason RepairFailureReason) (*ResultCollectionCheckpoint, error) {

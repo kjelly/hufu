@@ -145,6 +145,10 @@ func resultTransportFromPolicy(policy *ExecutionResultCollectionPolicySnapshot, 
 
 type workerResultTargetKey struct{}
 
+func taskUsesResultCollection(task TaskDef, transport agent.ResultTransport) bool {
+	return transport == agent.ResultTransportRuntime && task.Execution.RequiresResult && (!task.PlanFirst || task.PlanID != "")
+}
+
 func (c *Coordinator) resultTransportForTask(def *agent.AgentDef, task TaskDef) (agent.ResultTransport, error) {
 	return c.resultTransportForTaskContext(context.Background(), def, task)
 }

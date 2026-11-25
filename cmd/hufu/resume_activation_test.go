@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -20,6 +22,7 @@ func TestManagedResumeBindingAndActivation(t *testing.T) {
 		busy       bool
 		wrongTeam  bool
 		staticFail bool
+		redirect   bool
 		mode       versionstore.Mode
 	}{
 		{name: "explicit registered control root"},
@@ -29,6 +32,7 @@ func TestManagedResumeBindingAndActivation(t *testing.T) {
 		{name: "project conflict precedes activation", busy: true},
 		{name: "foreign team refused", wrongTeam: true},
 		{name: "static gate precedes activation", staticFail: true},
+		{name: "redirected subject cannot strand provider recovery", redirect: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			oldOpts := opts
@@ -91,6 +95,10 @@ func TestManagedResumeBindingAndActivation(t *testing.T) {
 			if err := applyWorkspaceResolution(session, binding.Resolution, binding.Lease); err != nil {
 				t.Fatal(err)
 			}
+			if tc.redirect {
+				assertResumeRejectsRedirectedSubject(t, ctx, f, session)
+				return
+			}
 			if tc.busy {
 				lock, err := versionstore.TryLockProject(f.state, versionstore.LockOwner{WorkspaceID: "other", Operation: "run"})
 				if err != nil {
@@ -137,5 +145,43 @@ func TestManagedResumeBindingAndActivation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func assertResumeRejectsRedirectedSubject(t *testing.T, ctx context.Context, f versionedCLIFixture, session *team.TeamSession) {
+	t.Helper()
+	if err := versionstore.RecordProviderRecovery(f.state, f.subject, "unauthorized_mutation", "fixture recovery"); err != nil {
+		t.Fatal(err)
+	}
+	store, err := versionstore.Open(ctx, versionstore.Options{StateDir: f.state, ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	before, err := store.ListBranchHeads(ctx)
+	if err != nil || len(before) == 0 {
+		t.Fatalf("expected existing branch heads: %v, %v", before, err)
+	}
+	t.Chdir(filepath.Dir(f.subject))
+	redirect := t.TempDir()
+	if err := os.Rename(f.subject, filepath.Join(filepath.Dir(f.subject), "original")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(redirect, f.subject); err != nil {
+		t.Fatal(err)
+	}
+	if err := bindRunWorkspaceVersioning(ctx, session, config.LoadConfig()); !errors.Is(err, versionstore.ErrVersionedWorkspaceUnresolved) {
+		t.Fatalf("redirected subject was admitted: %v", err)
+	}
+	state, found, err := store.GetSubjectState(ctx, f.subject)
+	if err != nil || !found || !state.RecoveryRequired || state.RecoveryCode != "unauthorized_mutation" {
+		t.Fatalf("registered subject lost recovery state: %+v, %v", state, err)
+	}
+	if _, found, err := store.GetSubjectState(ctx, redirect); err != nil || found {
+		t.Fatalf("resume bound the replacement subject: found=%t, err=%v", found, err)
+	}
+	after, err := store.ListBranchHeads(ctx)
+	if err != nil || !slices.Equal(before, after) {
+		t.Fatalf("resume changed the existing branch heads: %+v, %v", after, err)
 	}
 }

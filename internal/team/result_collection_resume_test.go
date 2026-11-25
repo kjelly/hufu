@@ -9,8 +9,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/decisionrt"
+	"github.com/kjelly/hufu/internal/sidecar"
 )
 
 func TestResultCollectionResumesOnlyOriginalArtifactCapabilities(t *testing.T) {
@@ -108,6 +112,54 @@ func TestResultCollectionResumeCompletesDurableClaimsWithoutWorkerOrProvider(t *
 	}
 }
 
+func TestResultCollectionSealsReturnedWorkBeforeReadingTranscript(t *testing.T) {
+	for _, temporary := range []bool{false, true} {
+		t.Run(map[bool]string{false: "missing", true: "temporary"}[temporary], func(t *testing.T) {
+			var collections atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/chat/completions" {
+					_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 131072","capabilities":["completion","tools"]}`)
+					return
+				}
+				collections.Add(1)
+				writeNativeRepairStream(t, w, map[string]any{"content": `{"status":"success","summary":"original transcript recovered"}`}, "stop", "test")
+			}))
+			t.Cleanup(server.Close)
+			c, item, ctx, receipt := resultCollectionProviderFixture(t, server.URL+"/v1", true)
+			restore := faultNormalizedEvidencePath(t, normalizedArtifactData(c, receipt.TranscriptRef), temporary)
+			err := c.collectReturnedWork(ctx, c.session.Agents["worker"], receipt, "complete original work", "input")
+			want := RepairFailureSource
+			if temporary {
+				want = RepairFailureCommit
+			}
+			if localResultRejectionReason(err) != want {
+				t.Fatalf("transcript classification = %v, want %s", err, want)
+			}
+			c = reopenRecoveryCoordinator(t, c)
+			before := todoByID(t, c, item.ID)
+			cp, err := c.readReturnedCollection(before, 0)
+			if err != nil || cp == nil || before.Status != TaskInProgress || currentResultCollection(before).Work != cp.Work {
+				t.Fatalf("original transcript stopped before sealing: status=%s checkpoint=%+v err=%v", before.Status, cp, err)
+			}
+			forbidden := scriptWorker(failTurn(errors.New("work or repair repeated")))
+			c.workerAgentOverride, c.repairAgentOverride = forbidden, forbidden
+			c.executionRunID = "resume-transcript-collection"
+			if temporary {
+				restore()
+			}
+			count, err := c.ResumeInterruptedTasks(WithSessionResume(t.Context()))
+			after := todoByID(t, c, item.ID)
+			if count != 1 || forbidden.Calls() != 0 || currentResultCollection(after).Work != cp.Work {
+				t.Fatalf("work changed across resume: count=%d reruns=%d error=%v", count, forbidden.Calls(), err)
+			}
+			if temporary && (err != nil || after.Status != TaskDone || currentResultCollection(after).TurnsUsed != 1 || collections.Load() != 1) ||
+				!temporary && (localResultRejectionReason(err) != RepairFailureSource || after.Status != TaskBlocked || currentResultCollection(after).TurnsUsed != 0 || collections.Load() != 0) {
+				t.Fatalf("transcript recovery status=%s collections=%d error=%v", after.Status, collections.Load(), err)
+			}
+		})
+	}
+}
+
 func TestResultCollectionBlockedResumeCannotReplayWork(t *testing.T) {
 	c, item, ctx, checkpoint := beginCollectionFixture(t)
 	worker := scriptWorker(textTurn("must never execute"))
@@ -121,9 +173,107 @@ func TestResultCollectionBlockedResumeCannotReplayWork(t *testing.T) {
 	}
 }
 
+func TestResultCollectionRequestEvidenceIsVerifiedBeforeSpendingTurn(t *testing.T) {
+	for _, scenario := range []string{"initial", "repair", "corrupt"} {
+		t.Run(scenario, func(t *testing.T) {
+			var collections atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/chat/completions" {
+					_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 131072","model_info":{"general.architecture":"qwen2","qwen2.context_length":131072},"capabilities":["completion","tools"]}`)
+					return
+				}
+				collections.Add(1)
+				writeNativeRepairStream(t, w, map[string]any{"content": `{"status":"success","summary":"work kept after request storage recovery"}`}, "stop", "test")
+			}))
+			t.Cleanup(server.Close)
+			c, item, ctx, receipt := resultCollectionProviderFixture(t, server.URL+"/v1", true)
+			cp, err := c.beginResultCollection(ctx, item.ID, receipt, "completed original work")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "repair" {
+				cp, err = c.reserveResultCollection(ctx, cp, "original-invocation", []byte(`{"tools":[]}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				cp, err = c.recordCollectionResponse(ctx, cp, []byte(`{"status":`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				cp, err = c.recordCollectionFormatFailure(ctx, cp)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			worker := c.session.Agents[item.Agent]
+			invocation, request, err := c.prepareCollectionInvocation(ctx, worker, cp, "faulted-invocation", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			prospective := *cp
+			prospective.InvocationID, prospective.InvocationRunID = "faulted-invocation", c.executionRunID
+			ref, err := c.putCollectionBlob(ctx, &prospective, "request", request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := normalizedArtifactData(c, ref.ArtifactID)
+			want := RepairFailureCommit
+			var restore func()
+			if scenario == "corrupt" {
+				want = RepairFailureSource
+				if err := os.WriteFile(path, []byte("wrong immutable request bytes"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				restore = faultNormalizedEvidencePath(t, path, true)
+			}
+			_, err = c.executeFrozenCollectionTurn(ctx, invocation, worker, cp, prospective.InvocationID, request)
+			if localResultRejectionReason(err) != want || collections.Load() != 0 {
+				t.Fatalf("request failure = %v, provider calls = %d, want %s and zero calls", err, collections.Load(), want)
+			}
+			c = reopenRecoveryCoordinator(t, c)
+			before := currentResultCollection(todoByID(t, c, item.ID))
+			if before == nil || before.Work != cp.Work || before.TurnsUsed != cp.TurnsUsed {
+				t.Fatalf("failure changed original work or spent a turn: %+v", before)
+			}
+			if want == RepairFailureSource {
+				if before.State != ResultCollectionBlocked || before.FailureReason != want {
+					t.Fatalf("invalid immutable request was not blocked: %+v", before)
+				}
+				return
+			}
+			if before.State != cp.State || !sameCanonicalEvidence(before.Response, cp.Response) {
+				t.Fatalf("storage fault replaced previous progress: before=%+v after=%+v", cp, before)
+			}
+			restore()
+			forbidden := scriptWorker(failTurn(errors.New("work or legacy repair repeated")))
+			c.workerAgentOverride, c.repairAgentOverride = forbidden, forbidden
+			c.executionRunID = "restart-before-request-reservation"
+			count, err := c.ResumeInterruptedTasks(WithSessionResume(t.Context()))
+			item = todoByID(t, c, item.ID)
+			after := currentResultCollection(item)
+			if err != nil || count != 1 || item.Status != TaskDone || after == nil || after.Work != cp.Work ||
+				after.TurnsUsed != cp.TurnsUsed+1 || collections.Load() != 1 || forbidden.Calls() != 0 {
+				t.Fatalf("resume status=%s checkpoint=%+v count=%d collector=%d worker=%d err=%v", item.Status, after, count, collections.Load(), forbidden.Calls(), err)
+			}
+		})
+	}
+}
+
 func TestResultCollectionFanoutResumesPreparedLeafWithoutWorker(t *testing.T) {
 	parent, item, _, receipt := resultCollectionFixture(t)
-	leafWorkspace, err := os.MkdirTemp(filepath.Join(parent.session.Workspace), "leaf-")
+	shared := filepath.Join(parent.session.Workspace, "shared")
+	if err := os.MkdirAll(shared, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(shared, "original.txt")
+	if err := os.WriteFile(source, []byte("shared at dispatch"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("original.txt", filepath.Join(shared, "source-link")); err != nil {
+		t.Fatal(err)
+	}
+	leafWorkspace, err := parent.createFanoutWorkspace(item.Agent, receipt.Model)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,6 +300,9 @@ func TestResultCollectionFanoutResumesPreparedLeafWithoutWorker(t *testing.T) {
 	if _, err := leaf.prepareCollectionClaims(leafCtx, checkpoint); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(source, []byte("changed after dispatch"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	events, err := parent.EventJournal().ReadEvents(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -157,9 +310,15 @@ func TestResultCollectionFanoutResumesPreparedLeafWithoutWorker(t *testing.T) {
 	parent.revokeTaskOccurrence(item.ID)
 	parent.taskTracker = NewTaskTracker()
 	parent.taskTracker.TodoList().AddReserved(ReduceToTodoList(events))
+	forbidden := scriptWorker(failTurn(errors.New("recovered leaf dispatched the worker")))
+	parent.workerAgentOverride = forbidden
 	task := taskDefFromTodoItem(parent.todoItemByID(item.ID))
 	def := cloneAgentDef(parent.session.Agents["worker"])
-	output, err := parent.executeSingleAgentWithModel(WithSessionResume(t.Context()), "worker", def, task, item.ID, "main", 0)
+	recovery, err := parent.prepareFanoutCollectionLeaf(t.Context(), parent.todoItemByID(item.ID), 0, task.ExecutionTopology[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := parent.executeSingleAgentWithModel(WithSessionResume(t.Context()), "worker", def, task, item.ID, "main", 0, &recovery)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,8 +326,15 @@ func TestResultCollectionFanoutResumesPreparedLeafWithoutWorker(t *testing.T) {
 	if output == "" || current.Status != TaskInProgress || current.TypedResult != nil {
 		t.Fatalf("leaf completed parent: status=%s output=%q", current.Status, output)
 	}
-	if current.ExecutionReceipt.ResultCollection.State != ResultCollectionCommitted || current.ExecutionReceipt.ResultCollection.TurnsUsed != 1 {
+	if current.ExecutionReceipt.ResultCollection.State != ResultCollectionCommitted || current.ExecutionReceipt.ResultCollection.TurnsUsed != 1 || forbidden.Calls() != 0 {
 		t.Fatal("leaf recovery spent another model turn")
+	}
+	retained := filepath.Join(leafWorkspace, "shared", "source-link")
+	if target, err := os.Readlink(retained); err != nil || target != "original.txt" {
+		t.Fatalf("retained shared symlink = %q, %v", target, err)
+	}
+	if original, err := os.ReadFile(retained); err != nil || string(original) != "shared at dispatch" {
+		t.Fatalf("retained shared evidence = %q, %v", original, err)
 	}
 	accepted, err := parent.acceptedCollectionResult(t.Context(), current, current.ExecutionReceipt.ResultCollection)
 	if err != nil || len(accepted.Artifacts) != 1 {
@@ -191,6 +357,205 @@ func TestResultCollectionFanoutResumesPreparedLeafWithoutWorker(t *testing.T) {
 		t.Fatalf("durable delivery=%q read=%v close=%v", body, err, closeErr)
 	}
 
+}
+
+func TestResultCollectionFanoutRestoresUnpublishedWorkBySlot(t *testing.T) {
+	parent, item, _, receipt := resultCollectionTaskFixture(t, "http://127.0.0.1:1/v1", false, func(spec *TodoSpec) {
+		// Repeated targets must still have independent work seals.
+		spec.ExecutionTopology = append(spec.ExecutionTopology, spec.ExecutionTarget)
+	})
+	first := sealFanoutWorkForRecovery(t, parent, item, receipt, 0)
+	execJournal(t, parent.session.Workspace, `CREATE TRIGGER refuse_fanout_collection BEFORE INSERT ON events WHEN NEW.type='task_result_collection_checkpointed' BEGIN SELECT RAISE(ABORT, 'fixture leaf checkpoint write failure'); END`)
+	second := sealFanoutWorkForRecovery(t, parent, item, receipt, 1)
+	execJournal(t, parent.session.Workspace, "DROP TRIGGER refuse_fanout_collection")
+	reader := reopenRecoveryCoordinator(t, parent)
+	before := todoByID(t, reader, item.ID)
+	if len(before.ExecutionReceipts) != 1 || before.ExecutionReceipts[0].ResultCollection.Work != first.Work {
+		t.Fatalf("unpublished leaf appeared in journal projection: %+v", before.ExecutionReceipts)
+	}
+	if err := reader.restoreReturnedCollections(t.Context(), before); err != nil {
+		t.Fatal(err)
+	}
+	for slot, original := range []*ResultCollectionCheckpoint{first, second} {
+		recovery, err := reader.prepareFanoutCollectionLeaf(t.Context(), todoByID(t, reader, item.ID), slot, receipt.ExecutionTarget)
+		checkpoint, work := recovery.checkpoint, recovery.work
+		if err != nil || checkpoint == nil || work == nil || checkpoint.Work != original.Work || checkpoint.TurnsUsed != 0 || work.Receipt.ModelExecutionID != original.ModelExecutionID {
+			t.Fatalf("leaf %d lost its work: checkpoint=%+v error=%v", slot, checkpoint, err)
+		}
+	}
+}
+
+func TestResultCollectionFanoutFreshSlotIgnoresSiblingCheckpoint(t *testing.T) {
+	parent, item, _, receipt := resultCollectionTaskFixture(t, "http://127.0.0.1:1/v1", false, func(spec *TodoSpec) {
+		spec.ExecutionTopology = append(spec.ExecutionTopology, spec.ExecutionTarget)
+	})
+	worker := scriptWorker(textTurn("fresh sibling output"))
+	sealFanoutWorkForRecovery(t, parent, item, receipt, 0)
+	parent = reopenRecoveryCoordinator(t, parent)
+	parent.workerAgentOverride = worker
+	if !hasCurrentFanoutCollection(todoByID(t, parent, item.ID)) {
+		t.Fatal("sibling's checkpoint was not visible on the parent")
+	}
+	// Slot 1 reaches the leaf entry after slot 0 has published its checkpoint.
+	// The parent's launch mode was captured while neither slot had published.
+	task := taskDefFromTodoItem(item)
+	output, err := parent.executeSingleAgentWithModel(t.Context(), item.Agent, cloneAgentDef(parent.session.Agents[item.Agent]), task, item.ID, "extra-1", 1, nil)
+	if err != nil || worker.Calls() != 1 || !strings.Contains(output, "fresh sibling output") {
+		t.Fatalf("delayed sibling was not dispatched: calls=%d output=%q error=%v", worker.Calls(), output, err)
+	}
+}
+
+func TestResultCollectionFanoutResumesOnlyCurrentDAGOccurrence(t *testing.T) {
+	parent, item, _, receipt := resultCollectionTaskFixture(t, "http://127.0.0.1:1/v1", false, func(spec *TodoSpec) {
+		spec.ExecutionTopology = append(spec.ExecutionTopology, spec.ExecutionTarget)
+	})
+	oldReceipt := receipt
+	oldReceipt.Attempt = 2
+	oldReceipt.TranscriptRef = fanoutFixtureTranscript(t, parent, item, 2)
+	old := sealFanoutWorkForRecovery(t, parent, item, oldReceipt, 0)
+	if err := parent.CommitTaskTransition(t.Context(), item.ID, TaskInProgress, TaskDone, "", "first wave", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.CommitTaskResetForRetry(t.Context(), item.ID, "another DAG wave"); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.CommitTaskTransition(t.Context(), item.ID, TaskPending, TaskInProgress, "", "", attemptStartMetadata(1)); err != nil {
+		t.Fatal(err)
+	}
+	item = todoByID(t, parent, item.ID)
+	receipt.OccurrenceAttempt = item.Retries + 1
+	fresh := sealFanoutWorkForRecovery(t, parent, item, receipt, 0)
+	parent = reopenRecoveryCoordinator(t, parent)
+	current := todoByID(t, parent, item.ID)
+	if currentResultCollection(current) != nil || !hasCurrentFanoutCollection(current) {
+		t.Fatalf("parent's historical singular receipt hid current leaf: %+v", current.ExecutionReceipt)
+	}
+	recovery, err := parent.prepareFanoutCollectionLeaf(t.Context(), current, 0, receipt.ExecutionTarget)
+	cp := recovery.checkpoint
+	if err != nil || cp == nil || cp.Work != fresh.Work || cp.Work == old.Work {
+		t.Fatalf("selected earlier DAG wave: checkpoint=%+v error=%v", cp, err)
+	}
+}
+
+func fanoutFixtureTranscript(t *testing.T, parent *Coordinator, item *TodoItem, attempt int) string {
+	t.Helper()
+	transcript, err := newTaskTranscriptForAttempt(parent.session.Workspace, item.ID, parent.executionRunID, attempt, item.Agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = transcript.Close() })
+	if err := transcript.RecordAssistantOutput("original fanout work"); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := sealVerbatimTaskTranscript(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ref.ID
+}
+
+func TestResultCollectionFanoutResumesSealedJudgeAfterTerminalWriteFault(t *testing.T) {
+	for _, publication := range []struct{ name, statement string }{
+		{"parent_event", "BEFORE INSERT ON events WHEN NEW.type='task_completed'"},
+		{"output_document", "BEFORE INSERT ON runtime_documents WHEN NEW.name LIKE 'result-collection-fanout-output:%'"},
+	} {
+		t.Run(publication.name, func(t *testing.T) {
+			testResumesSealedFanoutJudge(t, publication.statement)
+		})
+	}
+}
+
+func testResumesSealedFanoutJudge(t *testing.T, trigger string) {
+	t.Helper()
+	compiled, err := CompileResultContractDocument("findings.json", []byte(collectedFindingSchema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := compiled.ref(true)
+	var normalizations atomic.Int32
+	parent, item, _, receipt := resultCollectionTaskFixture(t, "http://127.0.0.1:1/v1", false, func(spec *TodoSpec) {
+		spec.ExecutionTopology = append(spec.ExecutionTopology, spec.ExecutionTarget)
+		spec.ResultContract = &ref
+	}, func(c *Coordinator) {
+		c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
+		ref.Normalizer, ref.NormalizerSHA256 = registerTestNormalizer(t, c, &mockNormalizerProvider{fn: func(_ context.Context, draft []byte) ([]byte, error) {
+			normalizations.Add(1)
+			return draft, nil
+		}})
+	})
+	for i := range 2 {
+		leaf, ctx, cp, err := beginFanoutWorkForRecovery(t, parent, item, receipt, i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		commitNormalizedCollectionFixture(t, leaf, ctx, cp, `{"findings":[]}`)
+	}
+	parent = reopenRecoveryCoordinator(t, parent)
+	graft := scriptWorker(textTurn(`{"reason":"original judge explanation","grafts":[]}`))
+	judge := sidecar.NewSidecarForTest("judge", graft)
+	var judgments int
+	judge.SetDecisionExecutor(func(context.Context, sidecar.DecisionInvocation) (decisionrt.Result, error) {
+		judgments++
+		return decisionrt.Result{Status: decisionrt.StatusDecided, Value: decisionrt.Value{Choice: "candidate_0"}}, nil
+	})
+	def := parent.session.Agents[item.Agent]
+	parent.SetAgentPool(&mockAgentPool{resolveDef: def, resolveKey: item.Agent, judgeSidecar: judge})
+	forbidden := scriptWorker(failTurn(errors.New("accepted leaf ran again")))
+	parent.workerAgentOverride, parent.repairAgentOverride = forbidden, forbidden
+	parent.providerBoundaryStart = func(context.Context, string) error { return nil }
+	execJournal(t, parent.session.Workspace, `CREATE TRIGGER refuse_parent_done `+trigger+` BEGIN SELECT RAISE(ABORT, 'fixture parent completion write failure'); END`)
+	task := taskDefFromTodoItem(item)
+	_, err = parent.executeTaskWithExtraModels(WithSessionResume(t.Context()), item.Agent, def, task, item.ID)
+	if localResultRejectionReason(err) != RepairFailureCommit || judgments != 1 || graft.Calls() != 1 {
+		t.Fatalf("terminal fault=%v judgments=%d grafts=%d", err, judgments, graft.Calls())
+	}
+	parent.terminalizeTaskErrorIfUnresolved(item.ID, err)
+	execJournal(t, parent.session.Workspace, "DROP TRIGGER refuse_parent_done")
+	parent = reopenRecoveryCoordinator(t, parent)
+	before := todoByID(t, parent, item.ID)
+	saved, _, err := parent.readFanoutSettlement(t.Context(), before)
+	if err != nil || saved == nil || !strings.Contains(saved.Output, "original judge explanation") {
+		t.Fatalf("finished judge output not sealed: status=%s output=%+v error=%v", before.Status, saved, err)
+	}
+	parent.SetAgentPool(&mockAgentPool{resolveDef: def, resolveKey: item.Agent, judgeSidecar: judge})
+	parent.workerAgentOverride, parent.repairAgentOverride = forbidden, forbidden
+	parent.providerBoundaryStart = func(context.Context, string) error { return errors.New("settled fanout crossed provider boundary") }
+	parent.providerBoundaryStarted = false
+	count, err := parent.ResumeInterruptedTasks(WithSessionResume(t.Context()))
+	after := todoByID(t, parent, item.ID)
+	if count != 1 || err != nil || after.Status != TaskDone || after.Output != saved.Output ||
+		forbidden.Calls() != 0 || normalizations.Load() != 2 || judgments != 1 || graft.Calls() != 1 {
+		t.Fatalf("count=%d status=%s work=%d normalization=%d judge=%d graft=%d error=%v",
+			count, after.Status, forbidden.Calls(), normalizations.Load(), judgments, graft.Calls(), err)
+	}
+}
+
+func sealFanoutWorkForRecovery(t *testing.T, parent *Coordinator, item *TodoItem, receipt ExecutionReceipt, slot int) *ResultCollectionCheckpoint {
+	t.Helper()
+	_, _, cp, err := beginFanoutWorkForRecovery(t, parent, item, receipt, slot)
+	if cp == nil || (slot == 0 && err != nil) || (slot == 1 && localResultRejectionReason(err) != RepairFailureCommit) {
+		t.Fatalf("seal leaf %d: checkpoint=%+v error=%v", slot, cp, err)
+	}
+	return cp
+}
+
+func beginFanoutWorkForRecovery(t *testing.T, parent *Coordinator, item *TodoItem, receipt ExecutionReceipt, slot int, prepare ...func(*Coordinator, context.Context, *ExecutionReceipt)) (*Coordinator, context.Context, *ResultCollectionCheckpoint, error) {
+	t.Helper()
+	workspace, err := os.MkdirTemp(parent.session.Workspace, "leaf-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := cloneCoordinator(parent, cloneSession(parent.session, workspace))
+	leaf.modelFanout = &modelFanoutBinding{parent: parent, taskID: item.ID, index: slot, target: receipt.ExecutionTarget}
+	leaf.taskTracker = NewTaskTracker()
+	leaf.taskTracker.TodoList().AddReserved([]*TodoItem{cloneTodoItem(item)})
+	ctx := occurrenceTestContext(leaf, item.ID, receipt.Attempt)
+	receipt.ModelExecutionID = fmt.Sprintf("leaf-execution-%d-wave-%d", slot, item.Retries)
+	for _, setup := range prepare {
+		setup(leaf, ctx, &receipt)
+	}
+	cp, err := leaf.beginResultCollection(ctx, item.ID, receipt, "complete leaf work")
+	return leaf, ctx, cp, err
 }
 
 func TestResultCollectionGrantCanContinueEarlierDurableProgress(t *testing.T) {

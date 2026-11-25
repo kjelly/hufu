@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -159,6 +160,8 @@ func TestCollectionModelSchemaFailureProtectsRuntimeOwnedValues(t *testing.T) {
 	}{
 		{"model constraint", `{"type":"object","properties":{"bound":{"type":"string"},"model":{"type":"string","minLength":1}}}`, `{"bound":"trusted","model":""}`, true},
 		{"runtime constraint", `{"type":"object","properties":{"bound":{"type":"string","minLength":10},"model":{"type":"string"}}}`, `{"bound":"trusted","model":"ok"}`, false},
+		{"required model sibling", `{"type":"object","required":["bound","model/answer"]}`, `{"bound":"trusted"}`, true},
+		{"required runtime field", `{"type":"object","required":["bound","model"]}`, `{}`, false},
 		{"ancestor constraint", `{"type":"object","properties":{"bound":{"type":"string"}},"not":{"required":["bound"]}}`, `{"bound":"trusted"}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -186,6 +189,8 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 	conditionalValid := strings.Replace(valid, `"structured_payload":{"findings":[{"summary":"observed finding"}]}`, `"structured_payload":{"findings":[{"summary":"observed finding","status":"unknown"}]}`, 1)
 	conditionalInvalid := strings.Replace(conditionalValid, `"status":"unknown"`, `"status":"unknown","finding_index":0`, 1)
 	const severitySchema = `{"type":"object","required":["findings"],"properties":{"findings":{"type":"array","items":{"type":"object","required":["summary","severity","review_required"],"properties":{"summary":{"type":"string"},"severity":{"type":"string","enum":["warning","info"]},"review_required":{"type":"boolean"}},"allOf":[{"if":{"properties":{"severity":{"const":"warning"}}},"then":{"properties":{"review_required":{"const":true}}}}]}}}}`
+	const requiredSiblingSchema = `{"type":"object","required":["findings","scope"],"properties":{"scope":{"const":"sealed"},"findings":{"type":"array","items":{"type":"object","properties":{"summary":{"type":"string"}}}}},"x-hufu-runtime-inputs":[{"target":"/scope","source_kind":"const"}]}`
+	missingFindings := strings.Replace(valid, `"structured_payload":{"findings":[{"summary":"observed finding"}]}`, `"structured_payload":{}`, 1)
 	severityValid := strings.Replace(valid, `"structured_payload":{"findings":[{"summary":"observed finding"}]}`, `"structured_payload":{"findings":[{"summary":"observed finding","severity":"warning","review_required":true}]}`, 1)
 	severityInvalid := strings.Replace(severityValid, `"summary":"observed finding","severity":"warning","review_required":true`, `"severity":"warning","review_required":false`, 1)
 	mismatch := strings.Replace(valid, `"findings":[{"summary":"observed finding"}]`, `"findings":[{"summary":"different wording"}]`, 1)
@@ -203,6 +208,7 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	forgedReceipt := strings.Replace(conditionalInvalid, `"status":"success"`, `"receipt_ids":["forged-receipt"],"status":"success"`, 1)
 	for _, tc := range []struct {
 		name            string
 		first           string
@@ -211,6 +217,8 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 		contractFailure bool
 		sourceFailure   bool
 		failureReason   RepairFailureReason
+		normalize       bool
+		normalizerCalls int32
 	}{
 		{name: "multiple_wrong_layers", first: string(richInvalid), second: richValid, schema: richSchema},
 		{name: "empty_response", second: valid},
@@ -225,10 +233,16 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 		{name: "conditional_and_missing_field", first: strings.Replace(conditionalInvalid, `"summary":"observed finding","status"`, `"status"`, 1), second: conditionalValid, schema: collectedConditionalFindingSchema},
 		{name: "conditional_const_and_missing_field", first: severityInvalid, second: severityValid, schema: severitySchema},
 		{name: "canonical_conditional_budget", first: conditionalInvalid, second: conditionalInvalid, schema: collectedConditionalFindingSchema, failureReason: RepairFailureInvalidSchema},
-		{name: "forged_receipt_with_conditional", first: strings.Replace(conditionalInvalid, `"status":"success"`, `"receipt_ids":["forged-receipt"],"status":"success"`, 1), schema: collectedConditionalFindingSchema, sourceFailure: true, failureReason: RepairFailureSource},
+		{name: "forged_receipt_with_conditional", first: forgedReceipt, schema: collectedConditionalFindingSchema, sourceFailure: true, failureReason: RepairFailureSource},
+		{name: "normalized_schema_repair", first: conditionalInvalid, second: conditionalValid, schema: collectedConditionalFindingSchema, normalize: true, normalizerCalls: 2},
+		{name: "normalized_missing_required_model_sibling", first: missingFindings, second: valid, schema: requiredSiblingSchema, normalize: true, normalizerCalls: 2},
+		{name: "normalized_schema_repair_exhausted", first: conditionalInvalid, second: conditionalInvalid, schema: collectedConditionalFindingSchema, normalize: true, normalizerCalls: 1, failureReason: RepairFailureInvalidSchema},
+		{name: "normalized_forged_receipt_fails_before_action", first: forgedReceipt, schema: collectedConditionalFindingSchema, normalize: true, sourceFailure: true, failureReason: RepairFailureSource},
+		{name: "normalizer_failure_stops_collection", first: valid, schema: collectedFindingSchema, normalize: true, normalizerCalls: 1, failureReason: RepairFailureAction},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var calls atomic.Int32
+			var calls, normalizations atomic.Int32
+			failFast := tc.contractFailure || tc.sourceFailure || tc.failureReason == RepairFailureAction
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/v1/chat/completions" {
 					_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 131072","model_info":{"general.architecture":"qwen2","qwen2.context_length":131072},"capabilities":["completion","tools"]}`)
@@ -247,7 +261,7 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 					assertCollectorResponseChannel(t, request)
 				}
 				n := calls.Add(1)
-				if n > 2 || ((tc.contractFailure || tc.sourceFailure) && n > 1) {
+				if n > 2 || (failFast && n > 1) {
 					t.Error("unexpected repair turn")
 					http.Error(w, "extra call", 400)
 					return
@@ -312,7 +326,17 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 			}
 			c, _, _, _ := resultCollectionProviderFixture(t, server.URL+"/v1", true, func(c *Coordinator) {
 				c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
-				c.session.AgentResultContracts = map[string]ResultContractRef{"worker": compiled.ref(true)}
+				ref := compiled.ref(true)
+				if tc.normalize {
+					ref.Normalizer, ref.NormalizerSHA256 = registerTestNormalizer(t, c, &mockNormalizerProvider{fn: func(_ context.Context, draft []byte) ([]byte, error) {
+						normalizations.Add(1)
+						if tc.failureReason == RepairFailureAction {
+							return nil, errors.New("normalization fault")
+						}
+						return draft, nil
+					}})
+				}
+				c.session.AgentResultContracts = map[string]ResultContractRef{"worker": ref}
 				if strings.HasPrefix(tc.name, "syntax_") {
 					c.session.Config.CollectorResponseChannel = agent.CollectorResponseTextJSON
 				}
@@ -334,18 +358,24 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 				t.Fatalf("status=%s detail=%s error=%v", item.Status, item.Detail, err)
 			}
 			wantCalls := int32(2)
-			if tc.contractFailure || tc.sourceFailure {
+			if failFast {
 				wantCalls = 1
 			}
 			checkpoint := currentResultCollection(item)
 			if worker.Calls() != 1 || calls.Load() != wantCalls || checkpoint == nil || checkpoint.TurnsUsed != int(wantCalls) {
 				t.Fatalf("work=%d collection=%d checkpoint=%+v", worker.Calls(), calls.Load(), checkpoint)
 			}
+			if normalizations.Load() != tc.normalizerCalls {
+				t.Fatalf("normalizations=%d, want %d", normalizations.Load(), tc.normalizerCalls)
+			}
 			if wantSuccess && (item.Status != TaskDone || checkpoint.State != ResultCollectionCommitted) {
 				t.Fatal("repaired claims did not complete")
 			}
 			if tc.schema == severitySchema && (!strings.Contains(string(item.TypedResult.StructuredPayload.Value), `"severity":"warning"`) || !strings.Contains(string(item.TypedResult.StructuredPayload.Value), `"review_required":true`)) {
 				t.Fatal("repair changed severity or lost the required review flag")
+			}
+			if tc.schema == requiredSiblingSchema && !strings.Contains(string(item.TypedResult.StructuredPayload.Value), `"scope":"sealed"`) {
+				t.Fatal("repair lost the runtime-owned value")
 			}
 			if !wantSuccess && (item.TypedResult != nil || checkpoint.State != ResultCollectionBlocked) {
 				t.Fatal("rejected claims published success")
@@ -369,8 +399,54 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 			if wantSuccess && (replayed.TypedResult == nil || string(replayed.TypedResult.StructuredPayload.Value) != string(item.TypedResult.StructuredPayload.Value)) {
 				t.Fatal("replay changed nested findings or evidence")
 			}
+			if tc.normalize && wantSuccess {
+				assertCollectionRejectsForeignNormalization(t, events, item.ID)
+			}
+			if tc.name == "normalized_schema_repair_exhausted" {
+				ctx := WithResultOnlyRepair(t.Context(), item.ID)
+				assessment, err := c.AssessResultCollectionRecovery(ctx, item.ID)
+				if err != nil || assessment.Disposition != RecoveryBlocked || !slices.ContainsFunc(assessment.Checks, func(check ResultCollectionRecoveryCheck) bool {
+					return check.Code == collectionSchemaBudgetCheck && !check.Passed
+				}) {
+					t.Fatalf("exhausted schema recovery = %+v, %v", assessment, err)
+				}
+				if err := c.authorizeOperatorResultRepair(ctx); err == nil || calls.Load() != wantCalls || worker.Calls() != 1 {
+					t.Fatalf("operator recovery regranted a correction: %v", err)
+				}
+			}
 		})
 	}
+}
+
+func assertCollectionRejectsForeignNormalization(t *testing.T, events []RunEvent, id string) {
+	t.Helper()
+	for _, event := range events {
+		if event.TaskID != id || event.Type != string(EventTaskResultCollectionCheckpointed) {
+			continue
+		}
+		var payload resultCollectionEvent
+		if err := json.Unmarshal(event.Payload, &payload, collectionDurationFormat); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Result == nil {
+			continue
+		}
+		normalization := payload.Result.StructuredPayload.Normalization
+		if normalization == nil {
+			t.Fatal("accepted collection lacks normalization")
+		}
+		normalization.OccurrenceSHA256 = sha256HexBytes([]byte("another collection occurrence"))
+		var err error
+		event.Payload, err = json.Marshal(payload, collectionDurationFormat)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateResultCollectionEvent(event); err == nil {
+			t.Fatal("replay accepted the immutable payload under a foreign collection occurrence")
+		}
+		return
+	}
+	t.Fatal("accepted collection event missing")
 }
 
 func TestResultCollectionSchemaProjectsOrdinaryInvariantClaims(t *testing.T) {

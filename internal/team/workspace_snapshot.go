@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -39,7 +41,8 @@ type WorkspaceSnapshot struct {
 	ManifestRef string
 	Digest      string
 
-	files map[string]WorkspaceFileState
+	rootInfo fs.FileInfo
+	files    map[string]WorkspaceFileState
 }
 
 // fileState looks up one path's observed state in this snapshot.
@@ -71,14 +74,6 @@ type WorkspaceSnapshotter interface {
 	Diff(ctx context.Context, before, after WorkspaceSnapshot) (WorkspaceDelta, error)
 }
 
-// workspaceSnapshotterWithIgnoredFiles is an internal extension used only by
-// the execution-world boundary. It permits that boundary to identify the
-// exact Hufu checkpoint path without making the general-purpose snapshotter
-// ignore every project file with the same basename.
-type workspaceSnapshotterWithIgnoredFiles interface {
-	SnapshotWithIgnoredFiles(ctx context.Context, root string, paths []string) (WorkspaceSnapshot, error)
-}
-
 // workspaceSnapshotMaxFiles bounds a single snapshot (§11.4 "enforce a
 // maximum file count / total metadata budget"). It is deliberately generous
 // for real repositories while still bounding a runaway/unbounded workspace.
@@ -105,21 +100,56 @@ func NewWorkspaceSnapshotter() WorkspaceSnapshotter {
 }
 
 func (s *defaultWorkspaceSnapshotter) Snapshot(ctx context.Context, root string) (WorkspaceSnapshot, error) {
-	return s.snapshot(ctx, root, nil)
-}
-
-func (s *defaultWorkspaceSnapshotter) SnapshotWithIgnoredFiles(ctx context.Context, root string, paths []string) (WorkspaceSnapshot, error) {
-	ignored, err := normalizeWorkspaceSnapshotIgnoredPaths(paths)
-	if err != nil {
-		return WorkspaceSnapshot{}, err
-	}
-	return s.snapshot(ctx, root, ignored)
-}
-
-func (s *defaultWorkspaceSnapshotter) snapshot(ctx context.Context, root string, ignored map[string]bool) (WorkspaceSnapshot, error) {
-	cleanRoot, err := resolveSnapshotRoot(root)
+	cleanRoot, rootInfo, err := resolveSnapshotDirectory(root)
 	if err != nil {
 		return WorkspaceSnapshot{}, fmt.Errorf("workspace snapshot: %w", err)
+	}
+	directory, err := os.Open(cleanRoot)
+	if err != nil {
+		return WorkspaceSnapshot{}, fmt.Errorf("workspace snapshot: open root: %w", err)
+	}
+	defer func() { _ = directory.Close() }()
+	opened, err := directory.Stat()
+	if err != nil {
+		return WorkspaceSnapshot{}, fmt.Errorf("workspace snapshot: stat root: %w", err)
+	}
+	if !os.SameFile(rootInfo, opened) {
+		return WorkspaceSnapshot{}, errWorkspaceSnapshotRootChanged
+	}
+	return s.snapshotPinned(ctx, root, cleanRoot, directory, nil)
+}
+
+// Linux exec changes directory before applying close-on-exec, so both a
+// child process and the parent can use the held directory without publishing
+// a descriptor in the child's environment or descriptor table.
+func pinnedDirectoryPath(directory *os.File, fallback string) string {
+	if runtime.GOOS == "linux" && directory != nil {
+		return fmt.Sprintf("/proc/self/fd/%d", directory.Fd())
+	}
+	return fallback
+}
+
+func (s *defaultWorkspaceSnapshotter) snapshotPinned(ctx context.Context, root, cleanRoot string, directory *os.File, ignoredPaths []string) (WorkspaceSnapshot, error) {
+	rootInfo, err := directory.Stat()
+	if err != nil {
+		return WorkspaceSnapshot{}, fmt.Errorf("workspace snapshot: %w", err)
+	}
+	verifyRoot := func() error {
+		currentRoot, currentInfo, err := resolveSnapshotDirectory(root)
+		if err != nil {
+			return fmt.Errorf("workspace snapshot: recheck root: %w", err)
+		}
+		if currentRoot != cleanRoot || !os.SameFile(rootInfo, currentInfo) {
+			return errWorkspaceSnapshotRootChanged
+		}
+		return nil
+	}
+	if err := verifyRoot(); err != nil {
+		return WorkspaceSnapshot{}, err
+	}
+	ignored, err := normalizeWorkspaceSnapshotIgnoredPaths(ignoredPaths)
+	if err != nil {
+		return WorkspaceSnapshot{}, err
 	}
 	maxFiles := s.maxFiles
 	if maxFiles <= 0 {
@@ -127,18 +157,24 @@ func (s *defaultWorkspaceSnapshotter) snapshot(ctx context.Context, root string,
 	}
 
 	var files map[string]WorkspaceFileState
-	if candidates, ok := gitCandidateFiles(ctx, cleanRoot); ok {
-		files, err = hashCandidateFiles(cleanRoot, candidates, maxFiles, ignored)
+	scanRoot := pinnedDirectoryPath(directory, cleanRoot)
+	if candidates, ok := gitCandidateFiles(ctx, scanRoot); ok {
+		files, err = hashCandidateFiles(scanRoot, candidates, maxFiles, ignored)
 	} else {
-		files, err = walkAndHashWorkspace(ctx, cleanRoot, maxFiles, ignored)
+		// The final dot makes WalkDir enter the directory denoted by the
+		// procfs descriptor instead of visiting the descriptor link.
+		files, err = walkAndHashWorkspace(ctx, scanRoot+string(filepath.Separator)+".", maxFiles, ignored)
 	}
 	if err != nil {
 		return WorkspaceSnapshot{}, fmt.Errorf("workspace snapshot: %w", err)
 	}
+	if err := verifyRoot(); err != nil {
+		return WorkspaceSnapshot{}, err
+	}
 
 	return WorkspaceSnapshot{
 		ID: newWorkspaceSnapshotID(), Root: cleanRoot, CapturedAt: time.Now(),
-		Digest: workspaceManifestDigest(files), files: files,
+		Digest: workspaceManifestDigest(files), rootInfo: rootInfo, files: files,
 	}, nil
 }
 
@@ -155,6 +191,9 @@ func normalizeWorkspaceSnapshotIgnoredPaths(paths []string) (map[string]bool, er
 }
 
 func (s *defaultWorkspaceSnapshotter) Diff(_ context.Context, before, after WorkspaceSnapshot) (WorkspaceDelta, error) {
+	if before.Root != after.Root || !os.SameFile(before.rootInfo, after.rootInfo) {
+		return WorkspaceDelta{}, errWorkspaceSnapshotRootChanged
+	}
 	var delta WorkspaceDelta
 	for path, afterState := range after.files {
 		beforeState, existed := before.files[path]
@@ -177,27 +216,34 @@ func (s *defaultWorkspaceSnapshotter) Diff(_ context.Context, before, after Work
 	return delta, nil
 }
 
+var errWorkspaceSnapshotRootChanged = errors.New("workspace snapshot: root directory identity changed")
+
 func resolveSnapshotRoot(root string) (string, error) {
+	resolved, _, err := resolveSnapshotDirectory(root)
+	return resolved, err
+}
+
+func resolveSnapshotDirectory(root string) (string, fs.FileInfo, error) {
 	trimmed := strings.TrimSpace(root)
 	if trimmed == "" {
-		return "", fmt.Errorf("workspace root is required")
+		return "", nil, fmt.Errorf("workspace root is required")
 	}
 	abs, err := filepath.Abs(trimmed)
 	if err != nil {
-		return "", fmt.Errorf("resolve workspace root: %w", err)
+		return "", nil, fmt.Errorf("resolve workspace root: %w", err)
 	}
 	resolved, err := filepath.EvalSymlinks(abs)
 	if err != nil {
-		return "", fmt.Errorf("resolve workspace root: %w", err)
+		return "", nil, fmt.Errorf("resolve workspace root: %w", err)
 	}
-	info, err := os.Stat(resolved)
+	info, err := os.Lstat(resolved)
 	if err != nil {
-		return "", fmt.Errorf("stat workspace root: %w", err)
+		return "", nil, fmt.Errorf("stat workspace root: %w", err)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("workspace root %q is not a directory", root)
+		return "", nil, fmt.Errorf("workspace root %q is not a directory", root)
 	}
-	return resolved, nil
+	return resolved, info, nil
 }
 
 // isWithinRoot reports whether resolved (already symlink-evaluated) is root
@@ -235,24 +281,17 @@ func hufuControlWorkspaceSnapshotPaths(root, controlWorkspace string) ([]string,
 	return paths, nil
 }
 
-// escapingSymlinkState represents a symlink whose target lies outside the
-// workspace root. Its content is never read — that would leak outside-root
-// bytes into the snapshot as if they were legitimately part of the
-// workspace — but a stable placeholder identity, derived only from the
-// resolved target path (never its content), still lets Diff correctly
-// detect this exact symlink appearing, retargeting, or disappearing as
-// Added/Modified/Deleted (§10.4's actual security-relevant signal: a
-// provider creating a new escaping symlink during its attempt). A
-// pre-existing escaping symlink already present before the attempt started
-// — e.g. some unrelated local tool's own runtime artifact sitting in a real
-// repository — is therefore unchanged across baseline and final snapshots
-// and never trips ValidateExecutionWorldDelta on its own; only a genuinely
-// new or retargeted one does.
-func escapingSymlinkState(rel, resolvedTarget string) WorkspaceFileState {
+// Capture the link's stored destination without reading or resolving it.
+// This observes directory links, dangling links, and retargeting equally.
+func workspaceSymlinkState(path, rel string) (WorkspaceFileState, error) {
+	target, err := os.Readlink(path)
+	if err != nil {
+		return WorkspaceFileState{}, fmt.Errorf("read symlink %q: %w", rel, err)
+	}
 	h := sha256.New()
-	h.Write([]byte("workspace-snapshot:escaping-symlink:"))
-	h.Write([]byte(resolvedTarget))
-	return WorkspaceFileState{Path: rel, SHA256: hex.EncodeToString(h.Sum(nil)), Bytes: 0, Mode: uint32(fs.ModeSymlink)}
+	h.Write([]byte("workspace-snapshot:symlink:"))
+	h.Write([]byte(target))
+	return WorkspaceFileState{Path: rel, SHA256: hex.EncodeToString(h.Sum(nil)), Mode: uint32(fs.ModeSymlink)}, nil
 }
 
 // specialFileState represents a FIFO, socket, or device. Opening one could
@@ -338,48 +377,20 @@ func walkAndHashWorkspace(ctx context.Context, root string, maxFiles int, ignore
 		if isWorkspaceBookkeepingPath(rel, ignored) {
 			return nil
 		}
-		if d.Type()&fs.ModeSymlink != 0 {
-			resolved, evalErr := filepath.EvalSymlinks(path)
-			if evalErr != nil {
-				return fmt.Errorf("resolve symlink %q: %w", rel, evalErr)
-			}
-			if !isWithinRoot(root, resolved) {
-				count++
-				if count > maxFiles {
-					return fmt.Errorf("exceeds the maximum snapshot file budget (%d)", maxFiles)
-				}
-				files[rel] = escapingSymlinkState(rel, resolved)
-				return nil
-			}
-			target, statErr := os.Stat(resolved)
-			if statErr != nil {
-				return fmt.Errorf("stat symlink target %q: %w", rel, statErr)
-			}
-			if target.IsDir() {
-				// Same as the Git-assisted path: the directory's contents are
-				// observed through their real paths; reading the directory
-				// itself as a file would fail the whole snapshot with EISDIR.
-				return nil
-			}
-			if !target.Mode().IsRegular() {
-				count++
-				if count > maxFiles {
-					return fmt.Errorf("exceeds the maximum snapshot file budget (%d)", maxFiles)
-				}
-				files[rel] = specialFileState(rel, target.Mode())
-				return nil
-			}
-		} else if !d.Type().IsRegular() {
-			count++
-			if count > maxFiles {
-				return fmt.Errorf("exceeds the maximum snapshot file budget (%d)", maxFiles)
-			}
-			files[rel] = specialFileState(rel, d.Type())
-			return nil
-		}
 		count++
 		if count > maxFiles {
 			return fmt.Errorf("exceeds the maximum snapshot file budget (%d)", maxFiles)
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			link, err := workspaceSymlinkState(path, rel)
+			if err == nil {
+				files[rel] = link
+			}
+			return err
+		}
+		if !d.Type().IsRegular() {
+			files[rel] = specialFileState(rel, d.Type())
+			return nil
 		}
 		info, infoErr := d.Info()
 		if infoErr != nil {
@@ -400,12 +411,20 @@ func walkAndHashWorkspace(ctx context.Context, root string, maxFiles int, ignore
 
 func hashCandidateFiles(root string, candidates []string, maxFiles int, ignored map[string]bool) (map[string]WorkspaceFileState, error) {
 	files := make(map[string]WorkspaceFileState, len(candidates))
+	directories := map[string]bool{".": true}
 	if len(candidates) > maxFiles {
 		return nil, fmt.Errorf("exceeds the maximum snapshot file budget (%d)", maxFiles)
 	}
 	for _, rel := range candidates {
 		rel = filepath.ToSlash(rel)
 		if isWorkspaceBookkeepingPath(rel, ignored) {
+			continue
+		}
+		visible, err := observeGitCandidateParent(root, filepath.Dir(rel), directories, files)
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
 			continue
 		}
 		full := filepath.Join(root, filepath.FromSlash(rel))
@@ -419,19 +438,12 @@ func hashCandidateFiles(root string, candidates []string, maxFiles int, ignored 
 			return nil, fmt.Errorf("stat %q: %w", rel, err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			resolved, evalErr := filepath.EvalSymlinks(full)
-			if evalErr != nil {
-				return nil, fmt.Errorf("resolve symlink %q: %w", rel, evalErr)
-			}
-			if !isWithinRoot(root, resolved) {
-				files[rel] = escapingSymlinkState(rel, resolved)
-				continue
-			}
-			full = resolved
-			info, err = os.Stat(full)
+			link, err := workspaceSymlinkState(full, rel)
 			if err != nil {
-				return nil, fmt.Errorf("stat %q: %w", rel, err)
+				return nil, err
 			}
+			files[rel] = link
+			continue
 		}
 		if info.IsDir() {
 			continue
@@ -447,6 +459,39 @@ func hashCandidateFiles(root string, candidates []string, maxFiles int, ignored 
 		files[rel] = WorkspaceFileState{Path: rel, SHA256: sum, Bytes: size, Mode: uint32(info.Mode().Perm())}
 	}
 	return files, nil
+}
+
+// A tracked path can appear in Git's index after a parent directory was
+// replaced by a link. Observe the link at that parent and skip its subtree.
+func observeGitCandidateParent(root, rel string, directories map[string]bool, files map[string]WorkspaceFileState) (bool, error) {
+	if visible, exists := directories[rel]; exists {
+		return visible, nil
+	}
+	parentVisible, err := observeGitCandidateParent(root, filepath.Dir(rel), directories, files)
+	if err != nil {
+		return false, err
+	}
+	directories[rel] = false
+	if !parentVisible {
+		return false, nil
+	}
+	path := filepath.Join(root, rel)
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("stat candidate directory %q: %w", rel, err)
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		link, err := workspaceSymlinkState(path, filepath.ToSlash(rel))
+		if err == nil {
+			files[link.Path] = link
+		}
+		return false, err
+	}
+	directories[rel] = info.IsDir()
+	return directories[rel], nil
 }
 
 func hashFileContents(path string) (sha256Hex string, size int64, err error) {
@@ -481,6 +526,13 @@ func hashWorkspaceFile(root, relPath string) (sha256Hex string, size int64, err 
 	}
 	if !isWithinRoot(resolvedRoot, resolved) {
 		return "", 0, fmt.Errorf("path %q escapes the authorized workspace", relPath)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", 0, err
+	}
+	if !info.Mode().IsRegular() {
+		return "", 0, fmt.Errorf("path %q is not a regular file", relPath)
 	}
 	return hashFileContents(resolved)
 }

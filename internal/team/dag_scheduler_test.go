@@ -109,6 +109,7 @@ func TestExecutionBackendSemaphoreUsesCanonicalBackendBucket(t *testing.T) {
 }
 
 func TestCodexBackendDefaultsToSerializedConcurrency(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	t.Parallel()
 	registry := NewExecutionRegistry()
 	if err := registry.Register(fakeExecutionBackend{name: codexSubagentProviderName, kind: execution.BackendKindAgent}); err != nil {

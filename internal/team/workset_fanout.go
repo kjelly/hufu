@@ -6,8 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -21,7 +19,7 @@ func usesStructuredWorkset(task TaskDef) bool {
 		strings.EqualFold(filepath.Ext(strings.TrimSpace(task.FanOut.Source)), ".json")
 }
 
-func (c *Coordinator) expandStructuredFanOutTask(task TaskDef) ([]TaskDef, error) {
+func (c *Coordinator) expandStructuredFanOutTask(ctx context.Context, task TaskDef) ([]TaskDef, error) {
 	if task.FanOut == nil {
 		return nil, fmt.Errorf("fan-out spec is nil")
 	}
@@ -29,7 +27,6 @@ func (c *Coordinator) expandStructuredFanOutTask(task TaskDef) ([]TaskDef, error
 	if strings.TrimSpace(spec.GoalTemplate) == "" {
 		return nil, fmt.Errorf("goal_template is required")
 	}
-	ctx := context.Background()
 	data, source, err := c.readStructuredWorksetSource(ctx, task)
 	if err != nil {
 		return nil, err
@@ -102,7 +99,7 @@ func (c *Coordinator) readStructuredWorksetSource(ctx context.Context, task Task
 			return nil, ArtifactRef{}, fmt.Errorf("source_artifact %q has invalid current producer occurrence: %w", ref.ID, err)
 		}
 		currentOccurrence := ref
-		store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
+		store, err := OpenFileArtifactStoreReadOnly(c.session.Workspace, c.session.Workspace)
 		if err != nil {
 			return nil, ArtifactRef{}, err
 		}
@@ -112,34 +109,24 @@ func (c *Coordinator) readStructuredWorksetSource(ctx context.Context, task Task
 			return nil, ArtifactRef{}, fmt.Errorf("source_artifact %q failed integrity verification: %w", sourceID, err)
 		}
 		ref = artifactContentWithCurrentOccurrence(ref, currentOccurrence)
-		reader, err := store.Open(ctx, ref.ID)
-		if err != nil {
-			return nil, ArtifactRef{}, err
-		}
-		data, readErr := io.ReadAll(io.LimitReader(reader, maxWorksetBytes+1))
-		_ = reader.Close()
-		if readErr != nil {
-			return nil, ArtifactRef{}, readErr
-		}
-		if len(data) > maxWorksetBytes {
-			return nil, ArtifactRef{}, fmt.Errorf("source artifact %q exceeds %d bytes", ref.ID, maxWorksetBytes)
-		}
-		return data, ref, nil
+		data, err := readWorksetManifestArtifact(ctx, store, ref)
+		return data, ref, err
 	}
 	workspace := ""
 	if c != nil && c.session != nil {
 		workspace = c.session.Workspace
 	}
-	absSource, err := resolveWorkspaceRelativePath(workspace, strings.TrimSpace(spec.Source))
+	relSource := strings.TrimSpace(spec.Source)
+	if !filepath.IsLocal(relSource) || filepath.Clean(relSource) == "." {
+		return nil, ArtifactRef{}, fmt.Errorf("source %q must be a relative file path beneath the team workspace", relSource)
+	}
+	absSource, err := resolveArtifactSourcePath(workspace, relSource)
 	if err != nil {
 		return nil, ArtifactRef{}, err
 	}
-	data, err := os.ReadFile(absSource)
+	data, err := readWorksetManifestFile(ctx, absSource)
 	if err != nil {
 		return nil, ArtifactRef{}, err
-	}
-	if len(data) > maxWorksetBytes {
-		return nil, ArtifactRef{}, fmt.Errorf("source %q exceeds %d bytes", spec.Source, maxWorksetBytes)
 	}
 	digest := sha256.Sum256(data)
 	ref := ArtifactRef{ID: "sha256-" + hex.EncodeToString(digest[:]), Path: spec.Source, SHA256: hex.EncodeToString(digest[:]), ByteSize: int64(len(data)), Bytes: int64(len(data))}
@@ -148,13 +135,35 @@ func (c *Coordinator) readStructuredWorksetSource(ctx context.Context, task Task
 		if storeErr != nil {
 			return nil, ArtifactRef{}, storeErr
 		}
-		putResult, putErr := store.Put(ctx, PutArtifactRequest{SourcePath: spec.Source, Path: spec.Source, Kind: "workset_manifest", RunID: c.executionRunID, TaskID: task.ID})
+		putResult, putErr := store.Put(ctx, PutArtifactRequest{Content: data, Path: relSource, Kind: "workset_manifest", RunID: c.executionRunID, TaskID: task.ID})
 		if putErr != nil {
 			return nil, ArtifactRef{}, fmt.Errorf("snapshot workset source: %w", putErr)
 		}
 		ref = putResult.ArtifactRef
 	}
 	return data, ref, nil
+}
+
+func readWorksetManifestArtifact(ctx context.Context, store *FileArtifactStore, ref ArtifactRef) ([]byte, error) {
+	if !validArtifactID(ref.ID) || isMediaArtifactID(ref.ID) {
+		return nil, fmt.Errorf("manifest requires a file artifact")
+	}
+	data, err := readWorksetManifestFile(ctx, filepath.Join(store.root, "data", ref.ID))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) != ref.ByteSize || sha256HexBytes(data) != ref.SHA256 {
+		return nil, fmt.Errorf("workset artifact %q bytes differ from verified content", ref.ID)
+	}
+	return data, nil
+}
+
+func readWorksetManifestFile(ctx context.Context, path string) ([]byte, error) {
+	data, err := readArtifactFileWithin(ctx, path, maxWorksetBytes)
+	if err != nil {
+		return nil, fmt.Errorf("read bounded workset manifest %q: %w", path, err)
+	}
+	return data, nil
 }
 
 func normalizeStructuredWorkset(data []byte) (WorksetManifest, error) {
@@ -205,7 +214,7 @@ func (c *Coordinator) validateWorksetInputs(ctx context.Context, manifest Workse
 	if c == nil || c.session == nil {
 		return manifest, nil
 	}
-	store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
+	store, err := OpenFileArtifactStoreReadOnly(c.session.Workspace, c.session.Workspace)
 	if err != nil {
 		return WorksetManifest{}, err
 	}

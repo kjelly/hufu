@@ -119,13 +119,15 @@ type resultCollectionWork struct {
 }
 
 type resultCollectionBlob struct {
-	ResponseIssue   *agent.StructuredResponseIssue `json:"response_issue,omitempty"`
-	Version         int                            `json:"version"`
-	WorkSHA256      string                         `json:"work_sha256"`
-	InvocationID    string                         `json:"invocation_id"`
-	InvocationRunID string                         `json:"invocation_run_id"`
-	Kind            string                         `json:"kind"`
-	Data            []byte                         `json:"data"`
+	Normalization    *resultNormalization           `json:"normalization,omitempty"`
+	ResponseIssue    *agent.StructuredResponseIssue `json:"response_issue,omitempty"`
+	ResponseRedacted bool                           `json:"response_redacted,omitempty"`
+	Version          int                            `json:"version"`
+	WorkSHA256       string                         `json:"work_sha256"`
+	InvocationID     string                         `json:"invocation_id"`
+	InvocationRunID  string                         `json:"invocation_run_id"`
+	Kind             string                         `json:"kind"`
+	Data             []byte                         `json:"data"`
 }
 
 type resultCollectionEvent struct {
@@ -182,15 +184,19 @@ func preserveResultCollection(incoming, existing *ExecutionReceipt) {
 		// receipt cannot retain the checkpoint while erasing its grant history.
 		preserved := cloneExecutionReceipt(existing)
 		incoming.RepairProvenance = preserved.RepairProvenance
-		if existing.ResultCollection.State == ResultCollectionCommitted {
-			// Work completion can still hold its pre-collection receipt.
-			// The accepted event owns these canonical result bindings too.
-			incoming.ResultContractID = existing.ResultContractID
-			incoming.ResultContractSHA256 = existing.ResultContractSHA256
-			incoming.ResultPayloadSHA256 = existing.ResultPayloadSHA256
-			incoming.ResultValidation = existing.ResultValidation
-			incoming.ResultValidationFailures = existing.ResultValidationFailures
-		}
+	}
+	if existing.ResultCollection.State == ResultCollectionCommitted &&
+		incoming.ResultCollection.Revision == existing.ResultCollection.Revision {
+		// The accepted event owns these bindings even on later updates of the
+		// original work receipt.
+		incoming.ResultContractID = existing.ResultContractID
+		incoming.ResultContractSHA256 = existing.ResultContractSHA256
+		incoming.ResultPayloadSHA256 = existing.ResultPayloadSHA256
+		incoming.ResultRawPayloadSHA256 = existing.ResultRawPayloadSHA256
+		incoming.ResultNormalizerOutputSHA256 = existing.ResultNormalizerOutputSHA256
+		incoming.ResultNormalizerOccurrenceSHA256 = existing.ResultNormalizerOccurrenceSHA256
+		incoming.ResultValidation = existing.ResultValidation
+		incoming.ResultValidationFailures = existing.ResultValidationFailures
 	}
 }
 

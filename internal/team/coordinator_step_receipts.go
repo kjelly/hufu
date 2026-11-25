@@ -201,11 +201,14 @@ func (c *Coordinator) takeToolPolicyVerdict(toolCallID string) string {
 	return verdict
 }
 
-func (c *Coordinator) validateTaskResultReceiptClaims(todoID string, result *TaskResult) error {
+func (c *Coordinator) validateTaskResultReceiptClaims(ctx context.Context, todoID string, result *TaskResult) error {
 	if result == nil {
 		return fmt.Errorf("task result is nil")
 	}
 	attempt := c.currentTaskAttempt(todoID)
+	if cp, _ := ctx.Value(resultCollectionReadCheckpointKey{}).(*ResultCollectionCheckpoint); cp != nil && cp.TaskID == todoID {
+		attempt = cp.Attempt
+	}
 	if result.Attempt > 0 && attempt > 0 && result.Attempt != attempt {
 		return fmt.Errorf("result claims attempt %d while task %q is executing attempt %d", result.Attempt, todoID, attempt)
 	}
@@ -231,7 +234,7 @@ func (c *Coordinator) validateTaskResultReceiptClaims(todoID string, result *Tas
 	if requiresClaims && len(result.ReceiptIDs) == 0 {
 		return fmt.Errorf("structured execution result must cite execution receipt_ids")
 	}
-	registry, err := c.taskStepReceiptRegistry(todoID, attempt)
+	registry, err := c.resultStepReceiptRegistry(ctx, todoID, attempt)
 	if err != nil {
 		return err
 	}

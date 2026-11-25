@@ -47,11 +47,13 @@ Dispatch the fixed contracts in this order:
    that Go tests ran. The verifier executes in the immutable reviewed-revision
    snapshot. `completed: true` attests execution, while `passed` records the
    target outcome. Failed tests remain review evidence and require final
-   `completed_with_gaps`; a launch failure or timeout blocks PREPARE.
-   Tests have an explicit 40m package deadline and a 50m command deadline.
-   The action allows 55m including snapshot setup and evidence publication.
-   `timeout_kind` distinguishes `test`, `command`, `caller_deadline`, `canceled`,
-   and `none`. `diagnostic` is a bounded head/tail summary; `summary_truncated`
+   `completed_with_gaps`. A sealed timeout or unavailable frozen local
+   dependency also leaves a review gap. A launch failure blocks PREPARE.
+   The package timeout is 15m and the command budget is 20m. The action allows
+   25m for snapshot setup, execution and evidence publication.
+   `timeout_kind` distinguishes `test`, `command`, `preflight`,
+   `caller_deadline`, `canceled` and `none`. `diagnostic` is a bounded
+   head/tail summary. `summary_truncated`
    does not mean evidence was lost. `output_artifact_id` binds the complete
    merged stdout/stderr (up to a 64MiB storage budget; overflow fails closed).
    `output_truncated` still describes incomplete durable evidence and blocks.

@@ -12,7 +12,7 @@ func (e *resultReferenceNamespaceError) Error() string { return e.cause.Error() 
 func (e *resultReferenceNamespaceError) Unwrap() error { return e.cause }
 
 func rejectResultReferenceSource(err error) error {
-	return rejectLocalResult(RepairFailureSource, &resultReferenceNamespaceError{cause: err})
+	return rejectResultSourceRead(&resultReferenceNamespaceError{cause: err})
 }
 
 // A model-selected value from an independently authenticated finite namespace.

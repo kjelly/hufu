@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 )
@@ -23,6 +24,19 @@ func (e *resultEvidenceChoiceError) Error() string {
 
 func (c *Coordinator) verifiedResultEvidenceKeyRefs(ctx context.Context, taskID string, compiled *CompiledResultContract) (map[string]ArtifactRef, error) {
 	refs, err := c.resultEvidenceKeyRefs(ctx, taskID, compiled)
+	return c.verifyArtifactObservationRefs(ctx, refs, err)
+}
+
+func (c *Coordinator) verifyFanoutArtifactObservations(ctx context.Context, todoID string, compiled *CompiledResultContract) error {
+	if compiled == nil || (compiled.evidenceKeys == nil && !hasResultDecisions(compiled)) {
+		return nil
+	}
+	refs, err := c.resultArtifactObservationRefs(ctx, todoID, compiled, true)
+	_, err = c.verifyArtifactObservationRefs(ctx, refs, err)
+	return err
+}
+
+func (c *Coordinator) verifyArtifactObservationRefs(ctx context.Context, refs map[string]ArtifactRef, err error) (map[string]ArtifactRef, error) {
 	if err != nil || len(refs) == 0 {
 		return refs, err
 	}
@@ -97,33 +111,37 @@ func constrainEvidenceChoicePath(schema map[string]any, tokens, choices []string
 // A bad selection may consume the existing format-repair allowance only after
 // independent receipts, bindings and settled decisions have also been checked.
 func (c *Coordinator) collectionEvidenceRejection(ctx context.Context, cp *ResultCollectionCheckpoint, work *resultCollectionWork, raw string, err error) error {
-	return c.resultEvidenceRejection(ctx, cp.TaskID, cp.Attempt, work.Workspace, raw, err)
+	return c.resultEvidenceRejection(ctx, cp.TaskID, work.Workspace, raw, cp, err)
 }
 
 func (c *Coordinator) localEvidenceRejection(ctx context.Context, taskID, raw string, err error) error {
-	identity, identityErr := submitResultRuntimeIdentityFromContext(ctx, c, taskID)
-	if identityErr != nil {
-		return rejectLocalResult(RepairFailureSource, identityErr)
-	}
-	return c.resultEvidenceRejection(ctx, taskID, identity.Attempt, c.session.Workspace, raw, err)
+	return c.resultEvidenceRejection(ctx, taskID, c.session.Workspace, raw, nil, err)
 }
 
-func (c *Coordinator) resultEvidenceRejection(ctx context.Context, taskID string, attempt int, workspace, raw string, err error) error {
-	if !isResultReferenceChoiceError(err) {
-		return rejectLocalResult(RepairFailureSource, err)
+func isResultEvidenceFormatError(err error) bool {
+	_, worksetShape := errors.AsType[*resultWorksetPathShapeError](err)
+	return worksetShape || isResultReferenceChoiceError(err) || localResultRejectionReason(err) == RepairFailureInvalidSchema
+}
+
+func (c *Coordinator) resultEvidenceRejection(ctx context.Context, taskID, workspace, raw string, cp *ResultCollectionCheckpoint, err error) error {
+	if !isResultEvidenceFormatError(err) {
+		return rejectResultSourceRead(err)
 	}
-	_, compiled, sourceErr := c.boundResultContract(taskID)
+	ref, compiled, sourceErr := c.boundResultContract(taskID)
 	if sourceErr != nil {
-		return rejectLocalResult(RepairFailureSource, sourceErr)
+		return rejectResultSourceRead(sourceErr)
 	}
-	check := func(_ string, checkErr error) bool {
-		if sourceErr == nil {
-			sourceErr = checkErr
+	if sourceErr := c.validateSubmissionSourceEnvelope(ctx, taskID, workspace, raw, cp, compiled); sourceErr != nil &&
+		localResultRejectionReason(sourceErr) != RepairFailureInvalidSchema {
+		return rejectResultSourceRead(sourceErr)
+	}
+	if sourceErr := c.validateIndependentSubmissionSources(ctx, taskID, compiled, submissionSourceOmissions(compiled, raw, cp == nil)); sourceErr != nil {
+		return rejectResultSourceRead(sourceErr)
+	}
+	if ref == nil || ref.Normalizer == "" {
+		if sourceErr := c.validateReadablePayloadSources(ctx, taskID, compiled, raw, cp == nil); sourceErr != nil {
+			return sourceErr
 		}
-		return checkErr == nil
-	}
-	if !c.validateIndependentResultClaims(ctx, taskID, attempt, workspace, compiled, raw, check) {
-		return rejectLocalResult(RepairFailureSource, sourceErr)
 	}
 	return rejectLocalResult(RepairFailureInvalidSchema, err)
 }

@@ -177,13 +177,13 @@ func TestResultEvidenceInputReplayRejectsSourceDrift(t *testing.T) {
 	if err := json.Unmarshal(encoded, &restored); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.validateSubmittedEvidenceInputs(audit.ID, &restored); err != nil {
+	if err := c.validateSubmittedEvidenceInputs(t.Context(), audit.ID, &restored); err != nil {
 		t.Fatal(err)
 	}
 	contract.finalReport = template.Must(template.New("review").Parse("Review complete: {{.done}}"))
 	audit.Status = TaskDone
 	audit.TypedResult = &TaskResult{TaskID: audit.ID, Status: TaskResultStatusSuccess, StructuredPayload: &restored}
-	if _, selected, err := c.renderedContractFinalReport(); err != nil || !selected {
+	if _, selected, err := c.renderedContractFinalReport(t.Context()); err != nil || !selected {
 		t.Fatalf("valid persisted report rejected: selected=%v err=%v", selected, err)
 	}
 	sourceContract, err := c.compiledResultContract(source.ResultContract)
@@ -195,10 +195,10 @@ func TestResultEvidenceInputReplayRejectsSourceDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	source.TypedResult.StructuredPayload = changed
-	if err := c.validateSubmittedEvidenceInputs(audit.ID, &restored); err == nil {
+	if err := c.validateSubmittedEvidenceInputs(t.Context(), audit.ID, &restored); err == nil {
 		t.Fatal("stale review accepted after source replacement")
 	}
-	if _, _, err := c.renderedContractFinalReport(); err == nil {
+	if _, _, err := c.renderedContractFinalReport(t.Context()); err == nil {
 		t.Fatal("final report rendered stale input binding")
 	}
 }

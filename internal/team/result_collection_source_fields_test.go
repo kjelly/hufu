@@ -14,9 +14,164 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
 )
+
+func collectionFixtureReceiptSteps() []ExecutionStep {
+	return []ExecutionStep{
+		{ID: "inspect", Tool: "view", Effect: ExecutionEffectRead},
+		{ID: "finish", Tool: "ls", Effect: ExecutionEffectRead, DependsOn: []string{"inspect"}},
+	}
+}
+
+func bindCollectionFixtureMemory(t *testing.T, c *Coordinator, item *TodoItem, receipt ExecutionReceipt) {
+	t.Helper()
+	repo, err := contextstore.OpenSQLite(filepath.Join(c.session.Workspace, "context.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = repo.Close() }()
+	record := contextstore.ContextItem{ID: "observed-item", Kind: contextstore.ContextPattern, Content: "observed guidance", Scope: contextstore.Scope{ProjectID: c.contextScopeProjectID()}, Lifecycle: contextstore.LifecycleConfirmed}
+	if err := repo.Append(t.Context(), record); err != nil {
+		t.Fatal(err)
+	}
+	records, err := repo.GetMany(t.Context(), []string{record.ID})
+	if err != nil || len(records) != 1 {
+		t.Fatalf("original context record was not saved: %v", err)
+	}
+	if err := c.persistMemoryManifest(&MemoryInjectionManifest{
+		TaskID: item.ID, RunID: receipt.RunID, Attempt: receipt.Attempt, ModelExecutionID: receipt.ModelExecutionID, Agent: item.Agent,
+		RetrievalID: "fixture-retrieval", PolicyVersion: "v1", Items: []MemoryInjectionItem{{ContextItemID: record.ID, ContentHash: records[0].ContentHash}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResultCollectionRecoveryRepairsMemoryFormatForVerifiedSources(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	for _, tc := range []struct {
+		name, item, disposition string
+		want                    ResultCollectionRecoveryDisposition
+	}{
+		{"wrong type", "observed-item", `false`, RecoveryRepairClaims},
+		{"unknown enum", "observed-item", `"unsupported"`, RecoveryRepairClaims},
+		{"forged item", "invented", `false`, RecoveryBlocked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			valid := researchCollectionResponse(t, 2)
+			answer := strings.Replace(valid, "{", `{"memory_uses":[{"context_item_id":"observed-item","disposition":"consulted","confidence":0.8}],`, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/chat/completions" {
+					_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 262144","capabilities":["completion","tools"]}`)
+					return
+				}
+				calls.Add(1)
+				var request map[string]any
+				if err := json.UnmarshalRead(r.Body, &request); err != nil {
+					t.Error(err)
+					return
+				}
+				assertCollectorResponseChannel(t, request)
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprintf(w, "data: {\"id\":\"memory-repair\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"return\",\"type\":\"function\",\"function\":{\"name\":\"return_result\",\"arguments\":%q}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n", `{"result":`+answer+`}`)
+			}))
+			t.Cleanup(server.Close)
+			fields := fmt.Sprintf(`{"memory_uses":[{"context_item_id":%q,"disposition":%s,"confidence":0.8}],`, tc.item, tc.disposition)
+			body := strings.Replace(valid, "{", fields, 1)
+			c, source, id := contractCollectionFixture(t, body, SideEffectNone, contractCollectionFixtureOptions{AttributableMemory: true, PreserveContract: true, Endpoint: server.URL + "/v1"})
+			c = reopenContractCollection(t, c, source)
+			cp := currentResultCollection(c.todoItemByID(id))
+			a, err := c.AssessResultCollectionRecovery(t.Context(), id)
+			if err != nil || a.Disposition != tc.want || a.AdditionalTurns != 0 || calls.Load() != 0 || isCollectionSourceFieldRecollection(a) {
+				t.Fatalf("unexpected cold preview: %+v, err=%v", a, err)
+			}
+			ctx := WithResultOnlyRepair(t.Context(), id)
+			err = c.authorizeOperatorResultRepair(ctx)
+			if tc.want == RecoveryBlocked {
+				if err == nil || calls.Load() != 0 {
+					t.Fatal("unverified attribution received a correction turn")
+				}
+				return
+			}
+			if err != nil || a.RemainingTurns != 1 {
+				t.Fatalf("format repair requires one original turn: %+v, %v", a, err)
+			}
+			c = reopenRecoveryCoordinator(t, c)
+			c.executionRunID = "after-memory-format-grant"
+			worker := scriptWorker(textTurn("original worker must not rerun"))
+			c.workerAgentOverride = worker
+			_, err = c.executeTask(ctx, taskDefFromTodoItem(c.todoItemByID(id)), id)
+			item := c.todoItemByID(id)
+			if err != nil || calls.Load() != 1 || worker.Calls() != 0 || item.Status != TaskDone || currentResultCollection(item).Work != cp.Work || item.TypedResult == nil {
+				t.Fatalf("repair did not reuse original work: status=%s collector=%d worker=%d err=%v", item.Status, calls.Load(), worker.Calls(), err)
+			}
+			if want := (MemoryUseRef{ContextItemID: "observed-item", RetrievalID: "fixture-retrieval", Disposition: MemoryUseConsulted, Confidence: 0.8}); !slices.Equal(item.TypedResult.MemoryUses, []MemoryUseRef{want}) {
+				t.Fatalf("result lost original memory attribution: %+v", item.TypedResult.MemoryUses)
+			}
+			saved, err := c.readCollectionBlob(t.Context(), cp, "response", cp.Response)
+			if err != nil || string(saved) != body {
+				t.Fatalf("original response changed after repair: %v", err)
+			}
+		})
+	}
+}
+
+func TestResultAdmissionRequiresSuccessReceiptsForMalformedStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name, status string
+		wantDirect   RepairFailureReason
+		wantCold     ResultCollectionRecoveryDisposition
+	}{
+		{"unknown", `"unknown"`, RepairFailureSource, RecoveryBlocked},
+		{"wrong type", `false`, RepairFailureSource, RecoveryBlocked},
+		{"missing", ``, RepairFailureSource, RecoveryBlocked},
+		{"duplicate", `"unknown","status":"failed"`, RepairFailureSource, RecoveryBlocked},
+		{"uppercase", `"FAILED"`, RepairFailureInvalidSchema, RecoveryBlocked},
+		{"surrounding spaces", `" failed "`, RepairFailureInvalidSchema, RecoveryBlocked},
+		{"partial", `"partial"`, RepairFailureInvalidSchema, RecoveryRepairClaims},
+		{"failed", `"failed"`, RepairFailureInvalidSchema, RecoveryRepairClaims},
+		{"blocked", `"blocked"`, RepairFailureInvalidSchema, RecoveryRepairClaims},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fields := `"summary":["incorrect summary type"]`
+			if tc.status != "" {
+				fields = `"status":` + tc.status + "," + fields
+			}
+			t.Run("direct", func(t *testing.T) {
+				c, item, ctx, receipt := resultCollectionTaskFixture(t, "http://127.0.0.1:1/v1", false, func(spec *TodoSpec) {
+					spec.Execution.Steps = collectionFixtureReceiptSteps()
+				})
+				if err := c.recordActualToolReceipt(ctx, item.ID, receipt.Attempt, "first-read", "view", "{}", "observed", false, time.Now().UTC()); err != nil {
+					t.Fatal(err)
+				}
+				tool := &submitResultTool{coordinator: c, todoID: item.ID}
+				response, err := tool.Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: `{"receipt_ids":["first-read"],` + fields + `}`})
+				if err != nil || !response.IsError || submissionFailureMetadata(response.Metadata) != tc.wantDirect {
+					t.Fatalf("direct admission reason=%v, err=%v", submissionFailureMetadata(response.Metadata), err)
+				}
+			})
+			t.Run("cold recovery", func(t *testing.T) {
+				body := `{` + fields + `,"structured_payload":{"findings":["a","b"]}}`
+				c, source, id := contractCollectionFixture(t, body, SideEffectNone, contractCollectionFixtureOptions{PreserveContract: true, IncompleteReceipts: true})
+				c = reopenContractCollection(t, c, source)
+				a, err := c.AssessResultCollectionRecovery(t.Context(), id)
+				if err != nil || a.Disposition != tc.wantCold || a.AdditionalTurns != 0 {
+					t.Fatalf("unexpected cold receipt check: %+v, err=%v", a, err)
+				}
+				if tc.wantCold == RecoveryBlocked && !slices.ContainsFunc(a.Checks, func(check ResultCollectionRecoveryCheck) bool {
+					return !check.Passed && strings.Contains(check.Diagnostic, "finish")
+				}) {
+					t.Fatalf("missing required step was not the cause: %+v", a.Checks)
+				}
+			})
+		})
+	}
+}
 
 func TestResultCollectionBindsDurableStepReceipts(t *testing.T) {
 	c, item, ctx, receipt := resultCollectionTaskFixture(t, "http://127.0.0.1:1/v1", false, func(spec *TodoSpec) {
@@ -130,7 +285,7 @@ func TestResultCollectionRecollectsInapplicableSourceFields(t *testing.T) {
 		{"memory unavailable", `"memory_uses":[{"context_item_id":"current_task","disposition":"applied"}],`, true, "", 1},
 		{"memory cannot conceal foreign receipt", `"memory_uses":[{"context_item_id":"current_task","disposition":"applied"}],"receipt_ids":["unissued-receipt"],`, false, "", 0},
 		{"repeated inapplicable field", `"memory_uses":[{"context_item_id":"current_task","disposition":"applied","confidence":0.9}],`, true, "memory_uses", 1},
-		{"replacement fails a different schema check", `"receipt_ids":["fixture-observed-artifact"],`, true, "confidence", 2},
+		{"replacement fails a different schema check", `"receipt_ids":["fixture-observed-artifact"],`, true, "confidence", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls atomic.Int32

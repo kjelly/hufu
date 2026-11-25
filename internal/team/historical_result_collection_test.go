@@ -57,7 +57,7 @@ func TestHistoricalResultCollectionPreservesOriginalDelivery(t *testing.T) {
 	if current.Status != TaskDone || current.TypedResult == nil || current.TypedResult.Source != "collected" || worker.Calls() != 1 || calls.Load() != 1 {
 		t.Fatalf("historical collection = status %s, worker calls %d, collection calls %d", current.Status, worker.Calls(), calls.Load())
 	}
-	if err := c.validateHistoricalResultDelivery(item.ID, 1, c.executionRunID); err != nil {
+	if err := c.validateHistoricalResultDelivery(t.Context(), item.ID, 1, c.executionRunID); err != nil {
 		t.Fatal(err)
 	}
 	work, err := c.loadCollectionWork(t.Context(), current, currentResultCollection(current))

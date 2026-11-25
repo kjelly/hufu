@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-func (c *Coordinator) executeTaskOutputAssertVerification(_ context.Context, spec VerificationSpec) (*VerificationResult, error) {
+func (c *Coordinator) executeTaskOutputAssertVerification(ctx context.Context, spec VerificationSpec) (*VerificationResult, error) {
 	workDir := c.verificationWorkDir()
 	res := &VerificationResult{WorkDir: workDir, Spec: &spec}
 	fail := func(err error) (*VerificationResult, error) {
@@ -28,7 +28,7 @@ func (c *Coordinator) executeTaskOutputAssertVerification(_ context.Context, spe
 	}
 	snapshot := c.RunInputSnapshot()
 	items := c.taskTracker.TodoList().Items()
-	origins, err := c.recoveredTaskOutputOrigins(items)
+	origins, err := c.recoveredTaskOutputOrigins(ctx, items)
 	if err != nil {
 		return fail(err)
 	}

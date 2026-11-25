@@ -135,8 +135,12 @@ func deriveReportAction(current sourceSession, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	findings, err := canonicalDraftFindings(current, tasks, records)
+	if err != nil {
+		return &sourceReviewError{cause: err}
+	}
 	return json.NewEncoder(out).Encode(map[string]any{"outputs": map[string]any{
-		"review_coverage": coverage, "review_completion": completion,
+		"review_coverage": coverage, "review_completion": completion, "canonical_findings": findings,
 	}})
 }
 
@@ -182,6 +186,28 @@ func verifyReportCompletion(current sourceSession, report payload, coverage stri
 		if !seen || report.Completion == nil || *report.Completion != completion || summary != completion.Summary {
 			return fmt.Errorf("report completion or summary differs from audited evidence")
 		}
+	}
+	return nil
+}
+
+func verifyCanonicalFindings(current sourceSession, report payload, findings []canonicalFinding) error {
+	var expected json.RawMessage
+	for _, item := range current.Tasks {
+		if item.ContractID != "derive-review-report" || !item.VerifiedOutputs || item.Result == nil {
+			continue
+		}
+		expected = item.Result.RuntimeOutputs["canonical_findings"]
+	}
+	if len(expected) == 0 && len(report.CanonicalFindings) == 0 {
+		// Earlier report contracts carried only the original source records.
+		return nil
+	}
+	data, err := json.Marshal(findings)
+	if err != nil {
+		return err
+	}
+	if !equalJSON(data, expected) || !equalJSON(data, report.CanonicalFindings) {
+		return fmt.Errorf("canonical finding references or locations differ from audited drafts")
 	}
 	return nil
 }

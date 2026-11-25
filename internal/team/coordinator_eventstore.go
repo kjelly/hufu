@@ -810,13 +810,13 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) error {
 // Lifecycle snapshots and action observations share a lock through durable
 // append and live publication, so neither can overwrite the other's projection.
 func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, expected, next TaskStatus, detail, output string, metadata map[string]interface{}) error {
-	return c.commitTaskTransition(ctx, taskID, &expected, next, detail, output, metadata)
+	return c.commitTaskTransition(ctx, taskID, &expected, 0, next, detail, output, metadata)
 }
 
 // A nil expected status selects the current state inside the projection lock.
 // Explicit callers retain compare-and-swap semantics; cancellation and worker
 // finalization using FromCurrent cannot race between reading and committing.
-func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, expected *TaskStatus, next TaskStatus, detail, output string, metadata map[string]interface{}) error {
+func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, expected *TaskStatus, revision int, next TaskStatus, detail, output string, metadata map[string]interface{}) error {
 	for _, key := range []string{"media_binding", "media_input_digest"} {
 		if _, override := metadata[key]; override {
 			return fmt.Errorf("task media inputs are immutable")
@@ -835,6 +835,9 @@ func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, e
 			c.refreshBeliefs(&durable)
 		}
 	}()
+	controller := c.occurrenceController(taskID)
+	controller.projectionMu.Lock()
+	defer controller.projectionMu.Unlock()
 	current := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
 	if current == nil {
 		return fmt.Errorf("commit task transition: task %s not found", taskID)
@@ -842,25 +845,16 @@ func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, e
 	if expected != nil && current.Status != *expected {
 		return fmt.Errorf("commit task transition: task %s expected %s, got %s", taskID, *expected, current.Status)
 	}
+	if revision > 0 && current.OccurrenceRevision != revision {
+		return errTaskResultStale
+	}
 	resetForResume, repairGrant, modeErr := c.validateTaskTransitionMode(ctx, current, next, metadata)
 	if modeErr != nil {
 		return modeErr
 	}
 	if next == TaskDone {
-		attempt := c.currentTaskAttempt(taskID)
-		if attempt < 1 {
-			attempt = c.taskAttempt(taskID)
-		}
-		if err := c.validateRequiredEvidenceDelivery(taskID, attempt); err != nil {
-			return fmt.Errorf("commit task transition: %w", err)
-		}
-		if discipline := c.disciplineFor(taskID); discipline != nil {
-			discipline.mu.Lock()
-			stopped := discipline.stopped
-			discipline.mu.Unlock()
-			if stopped {
-				return fmt.Errorf("commit task transition: decision discipline stopped task %s; successful terminalization is forbidden", taskID)
-			}
+		if err := c.validateSuccessfulTaskTransition(ctx, taskID); err != nil {
+			return err
 		}
 	}
 	projected := *current
@@ -938,13 +932,32 @@ func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, e
 	if err := c.taskTracker.TodoList().TryApplyProjectedItem(&projected); err != nil {
 		return fmt.Errorf("apply task transition after durable append: %w", err)
 	}
-	c.revokeTaskOccurrence(taskID)
+	c.revokeTaskOccurrenceLocked(taskID, controller)
 	if !resetForResume {
 		c.recordCommittedMemoryOutcome(&projected)
 	}
 	if planLifecycleChanged {
 		if err := c.taskTracker.TodoList().SetPlanLifecycle(taskID, projected.PlanFirst, projected.PlanID); err != nil {
 			return fmt.Errorf("apply task plan lifecycle after durable append: %w", err)
+		}
+	}
+	return nil
+}
+
+func (c *Coordinator) validateSuccessfulTaskTransition(ctx context.Context, taskID string) error {
+	attempt := c.currentTaskAttempt(taskID)
+	if attempt < 1 {
+		attempt = c.taskAttempt(taskID)
+	}
+	if err := c.validateRequiredEvidenceDelivery(ctx, taskID, attempt); err != nil {
+		return fmt.Errorf("commit task transition: %w", err)
+	}
+	if discipline := c.disciplineFor(taskID); discipline != nil {
+		discipline.mu.Lock()
+		stopped := discipline.stopped
+		discipline.mu.Unlock()
+		if stopped {
+			return fmt.Errorf("commit task transition: decision discipline stopped task %s; successful terminalization is forbidden", taskID)
 		}
 	}
 	return nil
@@ -994,6 +1007,13 @@ func (c *Coordinator) commitTaskPlanLifecycle(ctx context.Context, taskID string
 	})
 }
 
+type taskTransitionAppendError struct{ cause error }
+
+func (e *taskTransitionAppendError) Error() string {
+	return "commit task transition append: " + e.cause.Error()
+}
+func (e *taskTransitionAppendError) Unwrap() error { return e.cause }
+
 // appendTaskTransition is the controlled durable append primitive for a task
 // lifecycle transition. The cancellation event is selected here, at the
 // canonical transition owner, so a FailureCancelled TaskError can never be
@@ -1001,6 +1021,11 @@ func (c *Coordinator) commitTaskPlanLifecycle(ctx context.Context, taskID string
 func (c *Coordinator) appendTaskTransition(ctx context.Context, item *TodoItem, metadata map[string]interface{}) (RunEvent, error) {
 	if item == nil {
 		return RunEvent{}, fmt.Errorf("append task transition: task is nil")
+	}
+	if item.Status == TaskVerifying && normalizedWorkerVerificationHandoff(item.ResultContract, item.ExecutionReceipt, item.TypedResult) {
+		if err := c.sealNormalizedVerificationPublication(ctx, item); err != nil {
+			return RunEvent{}, err
+		}
 	}
 	eventType, err := taskTransitionEventType(item)
 	if err != nil {
@@ -1039,7 +1064,7 @@ func (c *Coordinator) appendTaskTransition(ctx context.Context, item *TodoItem, 
 		durable, err = c.EventJournal().Append(appendCtx, event)
 	}
 	if err != nil {
-		return RunEvent{}, fmt.Errorf("commit task transition append: %w", err)
+		return RunEvent{}, &taskTransitionAppendError{cause: err}
 	}
 	c.eventOnceMu.Lock()
 	if c.emittedTaskTransitions == nil {
@@ -1069,6 +1094,9 @@ func (c *Coordinator) commitTaskResetForRetry(ctx context.Context, taskID string
 	}
 	c.taskProjectionMu.Lock()
 	defer c.taskProjectionMu.Unlock()
+	controller := c.occurrenceController(taskID)
+	controller.projectionMu.Lock()
+	defer controller.projectionMu.Unlock()
 	current := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
 	if current == nil {
 		return fmt.Errorf("commit task reset for retry: task %s not found", taskID)
@@ -1121,7 +1149,7 @@ func (c *Coordinator) commitTaskResetForRetry(ctx context.Context, taskID string
 		if err := c.taskTracker.TodoList().TryApplyProjectedItem(&projected); err != nil {
 			return err
 		}
-		c.revokeTaskOccurrence(taskID)
+		c.revokeTaskOccurrenceLocked(taskID, controller)
 		return nil
 	}
 	if _, err := c.admitTaskOccurrence(ctx, occurrence, taskID, projected.Retries+1); err != nil {
@@ -1165,7 +1193,7 @@ func (c *Coordinator) commitTaskResetForRetry(ctx context.Context, taskID string
 	if err := c.taskTracker.TodoList().TryApplyProjectedItem(&projected); err != nil {
 		return fmt.Errorf("apply task reset for retry after durable append: %w", err)
 	}
-	c.revokeTaskOccurrence(taskID)
+	c.revokeTaskOccurrenceLocked(taskID, controller)
 	return nil
 }
 
@@ -1179,6 +1207,9 @@ func (c *Coordinator) CommitStaleGateVerifierReset(ctx context.Context, taskID s
 	}
 	c.taskProjectionMu.Lock()
 	defer c.taskProjectionMu.Unlock()
+	controller := c.occurrenceController(taskID)
+	controller.projectionMu.Lock()
+	defer controller.projectionMu.Unlock()
 	current := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
 	if current == nil {
 		return fmt.Errorf("commit stale gate verifier reset: task %s not found", taskID)
@@ -1213,7 +1244,7 @@ func (c *Coordinator) CommitStaleGateVerifierReset(ctx context.Context, taskID s
 		if err := c.taskTracker.TodoList().TryApplyProjectedItem(&projected); err != nil {
 			return err
 		}
-		c.revokeTaskOccurrence(taskID)
+		c.revokeTaskOccurrenceLocked(taskID, controller)
 		return nil
 	}
 	payload := c.taskTransitionPayloadWithCoordinator(&projected)
@@ -1233,7 +1264,7 @@ func (c *Coordinator) CommitStaleGateVerifierReset(ctx context.Context, taskID s
 	if err := c.taskTracker.TodoList().TryApplyProjectedItem(&projected); err != nil {
 		return fmt.Errorf("apply stale gate verifier reset after durable append: %w", err)
 	}
-	c.revokeTaskOccurrence(taskID)
+	c.revokeTaskOccurrenceLocked(taskID, controller)
 	return nil
 }
 
@@ -1448,7 +1479,7 @@ func (c *Coordinator) CommitTaskResolution(ctx context.Context, taskID string, r
 		if resolution.Status == "superseded" || resolution.Status == "reconciled" {
 			resolver := c.todoItemByID(resolution.ResolvedBy)
 			if resolver.ResultContract != nil {
-				if err := c.validateAcceptedDependencyPayload(resolver); err != nil {
+				if err := c.validateAcceptedDependencyPayloadWithContext(ctx, resolver); err != nil {
 					return fmt.Errorf("resolution payload: %w", err)
 				}
 			}
@@ -1456,7 +1487,7 @@ func (c *Coordinator) CommitTaskResolution(ctx context.Context, taskID string, r
 			if resolver.TypedResult != nil && resolver.TypedResult.Attempt > 0 {
 				attempt = resolver.TypedResult.Attempt
 			}
-			if err := c.validateRequiredEvidenceDelivery(resolver.ID, attempt); err != nil {
+			if err := c.validateRequiredEvidenceDelivery(ctx, resolver.ID, attempt); err != nil {
 				return err
 			}
 		}
@@ -1537,7 +1568,7 @@ func (c *Coordinator) hasDurableEventJournal() bool {
 }
 
 func (c *Coordinator) commitTaskTransitionFromCurrent(ctx context.Context, taskID string, next TaskStatus, detail, output string, metadata map[string]interface{}) error {
-	return c.commitTaskTransition(ctx, taskID, nil, next, detail, output, metadata)
+	return c.commitTaskTransition(ctx, taskID, nil, 0, next, detail, output, metadata)
 }
 
 func todoItemByID(items []*TodoItem, id string) *TodoItem {

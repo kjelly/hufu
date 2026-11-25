@@ -63,10 +63,10 @@ func TestDependencyResultViewRetryFanoutAndReplayKeepSources(t *testing.T) {
 	}
 	c.taskTracker = NewTaskTracker()
 	c.taskTracker.TodoList().AddReserved(ReduceToTodoList(events))
-	if err := c.validateSelectedDependencyDelivery(consumer.ID, 1, input.Request.RunID); err != nil {
+	if err := c.validateSelectedDependencyDelivery(t.Context(), consumer.ID, 1, input.Request.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.validateSelectedDependencyDelivery(consumer.ID, 2, input.Request.RunID); err != nil {
+	if err := c.validateSelectedDependencyDelivery(t.Context(), consumer.ID, 2, input.Request.RunID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.compileWorkerContext(t.Context(), input); err != nil {

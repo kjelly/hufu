@@ -1,7 +1,9 @@
 package team
 
 import (
+	"context"
 	"encoding/json/v2"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -82,6 +84,7 @@ func contractRecoveryFixtureFromState(t *testing.T, f *versionFixture, configure
 	var tasks []*TodoItem
 	for i, definition := range c.session.ContractTasks {
 		id := string(rune('1' + i))
+		ref := definition.ResultContract
 		hash, err := effectiveContractHash(definition.ID, definition.Agent, definition.Execution, definition.OutputMode, definition.SideEffect, definition.Recovery, definition.MaxRetries, definition.Action, definition.FanOut, definition.Optional, definition)
 		if err != nil {
 			t.Fatal(err)
@@ -92,7 +95,7 @@ func contractRecoveryFixtureFromState(t *testing.T, f *versionFixture, configure
 			t.Fatal(err)
 		}
 		bound := materialized[0]
-		payload, err := validateStructuredResultPayload(old, oldRef, []byte(`{"value":"verified"}`))
+		payload, err := validateStructuredResultPayload(old, *ref, []byte(`{"value":"verified"}`))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -100,9 +103,21 @@ func contractRecoveryFixtureFromState(t *testing.T, f *versionFixture, configure
 		if err != nil {
 			t.Fatal(err)
 		}
-		receipt := &ExecutionReceipt{RunID: "source-run", TaskID: id, Attempt: 1, ModelExecutionID: "original-" + id, ProducerID: "worker", TranscriptRef: transcript.ID, StartedAt: time.Now(), ExitCode: new(0), RunInputSnapshotID: snapshot.ID, RunInputSnapshotHash: snapshot.SnapshotHash, ResultContractID: oldRef.ID, ResultContractSHA256: oldRef.SchemaSHA256, ResultPayloadSHA256: payload.SHA256, ResultValidation: ResultValidationValid}
-		item := &TodoItem{ID: id, Agent: "worker", Desc: "original goal", Goal: "original goal", Status: TaskDone, Phase: definition.Phase, ContractID: definition.ID, ContractHash: bound.ContractHash, Action: bound.Action, ActionInputBindings: bound.ActionInputBindings, MaterializedActionPayloadHash: bound.MaterializedActionPayloadHash, BoundInputs: bound.BoundInputs, ContractRevision: effectiveTaskContractRevision, SideEffect: SideEffectNone, Recovery: RecoveryRetry, Execution: definition.Execution, ResultContract: &oldRef, RunInputSnapshotID: snapshot.ID, RunInputSnapshotHash: snapshot.SnapshotHash, ExecutionReceipt: receipt, ExecutionReceipts: []ExecutionReceipt{*receipt}, TypedResult: &TaskResult{TaskID: id, Status: TaskResultStatusSuccess, Summary: "accepted", StructuredPayload: payload}, VerifyResult: &VerificationResult{ExitCode: 0}}
+		receipt := &ExecutionReceipt{RunID: "source-run", TaskID: id, Attempt: 1, ModelExecutionID: "original-" + id, ProducerID: "worker", TranscriptRef: transcript.ID, StartedAt: time.Now(), ExitCode: new(0), RunInputSnapshotID: snapshot.ID, RunInputSnapshotHash: snapshot.SnapshotHash, ResultContractID: ref.ID, ResultContractSHA256: ref.SchemaSHA256, ResultPayloadSHA256: payload.SHA256, ResultValidation: ResultValidationValid}
+		item := &TodoItem{ID: id, Agent: "worker", Desc: "original goal", Goal: "original goal", Status: TaskDone, Phase: definition.Phase, ContractID: definition.ID, ContractHash: bound.ContractHash, Action: bound.Action, ActionInputBindings: bound.ActionInputBindings, MaterializedActionPayloadHash: bound.MaterializedActionPayloadHash, BoundInputs: bound.BoundInputs, ContractRevision: effectiveTaskContractRevision, SideEffect: SideEffectNone, Recovery: RecoveryRetry, Execution: definition.Execution, ResultContract: ref, RunInputSnapshotID: snapshot.ID, RunInputSnapshotHash: snapshot.SnapshotHash, ExecutionReceipt: receipt, ExecutionReceipts: []ExecutionReceipt{*receipt}, TypedResult: &TaskResult{TaskID: id, Status: TaskResultStatusSuccess, Summary: "accepted", StructuredPayload: payload}, VerifyResult: &VerificationResult{ExitCode: 0}}
 		item.TypedResult.Attempt, item.TypedResult.Agent = 1, "worker"
+		if ref.Normalizer != "" {
+			payload.Normalization = &resultNormalization{
+				OccurrenceSHA256: sha256HexBytes([]byte("original occurrence " + id)),
+				ProviderSHA256:   ref.NormalizerSHA256, Raw: []byte(`{ "value": "VERIFIED" }`),
+				Output: []byte(`{ "value": "verified" }`),
+			}
+			payload.RawSHA256 = sha256HexBytes(payload.Normalization.Raw)
+			payload.Normalization.OutputSHA256 = sha256HexBytes(payload.Normalization.Output)
+			receipt.ResultRawPayloadSHA256, receipt.ResultNormalizerOutputSHA256 = payload.RawSHA256, payload.Normalization.OutputSHA256
+			receipt.ResultNormalizerOccurrenceSHA256 = payload.Normalization.OccurrenceSHA256
+			item.ExecutionReceipts = []ExecutionReceipt{*receipt}
+		}
 		if i == 0 {
 			item.TypedResult.Artifacts = []ArtifactRef{input.ArtifactRef, manifest.ArtifactRef}
 			if bound.Action != nil {
@@ -150,8 +165,9 @@ func contractRecoveryFixtureFromState(t *testing.T, f *versionFixture, configure
 		t.Fatal(err)
 	}
 	c.session.ResultContracts[next.ID] = next
-	newRef := next.ref(true)
 	for i := range c.session.ContractTasks {
+		newRef := *c.session.ContractTasks[i].ResultContract
+		newRef.SchemaSHA256 = next.SchemaSHA256
 		c.session.ContractTasks[i].ResultContract = &newRef
 	}
 	source, err := ReadResumeSource(f.control, "main", "")
@@ -159,6 +175,59 @@ func contractRecoveryFixtureFromState(t *testing.T, f *versionFixture, configure
 		t.Fatal(err)
 	}
 	return c, f, source
+}
+
+func TestContractRecoveryPreservesPinnedNormalizerAcrossSchemaUpgrade(t *testing.T) {
+	calls := 0
+	c, f, source := contractRecoveryFixture(t, func(c *Coordinator) {
+		task := &c.session.ContractTasks[0]
+		task.ResultContract = task.ResultContract.clone()
+		bindTestNormalizer(t, c, &TodoItem{ResultContract: task.ResultContract}, &mockNormalizerProvider{
+			fn: func(context.Context, []byte) ([]byte, error) {
+				calls++
+				return nil, errors.New("recovery invoked the normalizer")
+			},
+		})
+		task.ResultContractSpec.Normalizer = task.ResultContract.Normalizer
+	})
+	expected := c.session.ContractTasks[0].ResultContract
+	drifted := *expected
+	drifted.NormalizerSHA256 = strings.Repeat("0", 64)
+	c.session.ContractTasks[0].ResultContract = &drifted
+	if _, err := c.AssessContractRecovery(t.Context(), source); err == nil || !strings.Contains(err.Error(), "normalizer drift") {
+		t.Fatalf("normalizer identity drift was not rejected: %v", err)
+	}
+	c.session.ContractTasks[0].ResultContract = expected
+	plan, err := c.AssessContractRecovery(t.Context(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := source.Session.Tasks[0]
+	patch := plan.Tasks[0]
+	if patch.Action != "retain" || patch.Revalidation == nil || patch.Revalidation.Original != *prior.ResultContract ||
+		patch.Revalidation.Accepted != *expected || calls != 0 {
+		t.Fatalf("schema-only preview lost the pinned normalizer: %+v, calls=%d", patch, calls)
+	}
+	change := plan.ContractChanges[len(plan.ContractChanges)-1]
+	if change.Owner != "contract:source" || change.Original != *prior.ResultContract || change.Accepted != *expected {
+		t.Fatalf("preview summary lost normalizer identity: %+v", plan.ContractChanges)
+	}
+	branch, err := c.ApplyContractRecovery(t.Context(), source, "normalized-schema", plan.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := ReadResumeSource(f.control, branch, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained := child.Session.Tasks[0]
+	got := retained.TypedResult.StructuredPayload
+	if got.Contract != *expected || got.SHA256 != prior.TypedResult.StructuredPayload.SHA256 ||
+		!sameCanonicalEvidence(got.Normalization, prior.TypedResult.StructuredPayload.Normalization) ||
+		!sameCanonicalEvidence(retained.ExecutionReceipt, prior.ExecutionReceipt) ||
+		!validContractRevalidation(retained, retained.ExecutionReceipt) || !receiptMatchesResultPayload(retained.ExecutionReceipt, got) || calls != 0 {
+		t.Fatalf("replay lost normalized result evidence: %+v, calls=%d", retained, calls)
+	}
 }
 
 func TestContractRecoveryPreservesParentAndRevalidatesChild(t *testing.T) {
@@ -261,7 +330,7 @@ func TestContractRecoveryPreservesParentAndRevalidatesChild(t *testing.T) {
 				t.Fatal(err)
 			}
 			if test.name == "input_bound_action" {
-				value, err := c.resolveRuntimeOutputValue(FactRef{Name: "scope", TaskID: "source"}, "scope")
+				value, err := c.resolveRuntimeOutputValue(t.Context(), FactRef{Name: "scope", TaskID: "source"}, "scope")
 				if err != nil || !sameCanonicalEvidence(value, map[string]any{"satisfied": true}) {
 					t.Fatalf("retained native output was not delivered: value=%v err=%v", value, err)
 				}

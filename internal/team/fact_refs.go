@@ -1,6 +1,7 @@
 package team
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -13,7 +14,7 @@ import (
 // whole dispatch (no partial substitution) so a coordinator's mistake is
 // caught immediately rather than silently leaving a literal {placeholder} in
 // a worker's prompt.
-func (c *Coordinator) resolveFactRefs(tasks []TaskDef) ([]TaskDef, error) {
+func (c *Coordinator) resolveFactRefs(ctx context.Context, tasks []TaskDef) ([]TaskDef, error) {
 	resolved := make([]TaskDef, len(tasks))
 	for i, t := range tasks {
 		if len(t.FactRefs) == 0 {
@@ -22,7 +23,7 @@ func (c *Coordinator) resolveFactRefs(tasks []TaskDef) ([]TaskDef, error) {
 		}
 		var replacements []string
 		for _, ref := range t.FactRefs {
-			value, err := c.resolveFactRef(ref)
+			value, err := c.resolveFactRef(ctx, ref)
 			if err != nil {
 				return nil, fmt.Errorf("tasks[%d].fact_refs: %w", i, err)
 			}
@@ -39,7 +40,7 @@ func (c *Coordinator) resolveFactRefs(tasks []TaskDef) ([]TaskDef, error) {
 	return resolved, nil
 }
 
-func (c *Coordinator) resolveFactRef(ref FactRef) (string, error) {
+func (c *Coordinator) resolveFactRef(ctx context.Context, ref FactRef) (string, error) {
 	name := strings.TrimSpace(ref.Name)
 	if name == "" {
 		return "", fmt.Errorf("fact_ref requires a non-empty name")
@@ -55,7 +56,7 @@ func (c *Coordinator) resolveFactRef(ref FactRef) (string, error) {
 		return "", fmt.Errorf("fact_ref %q must set exactly one of fact or artifact or runtime_output", name)
 	}
 	if runtimeOutput != "" {
-		return c.resolveRuntimeOutputRef(ref, runtimeOutput)
+		return c.resolveRuntimeOutputRef(ctx, ref, runtimeOutput)
 	}
 
 	runtimeTaskID, err := c.resolveTaskReference(taskID)
@@ -93,26 +94,26 @@ func factRefSelectorCount(ref FactRef) int {
 	return count
 }
 
-func (c *Coordinator) resolveRuntimeOutputRef(ref FactRef, output string) (string, error) {
-	value, err := c.resolveRuntimeOutputValue(ref, output)
+func (c *Coordinator) resolveRuntimeOutputRef(ctx context.Context, ref FactRef, output string) (string, error) {
+	value, err := c.resolveRuntimeOutputValue(ctx, ref, output)
 	if err != nil {
 		return "", err
 	}
 	return stringifyFactValue(value), nil
 }
 
-func (c *Coordinator) resolveRuntimeOutputValue(ref FactRef, output string) (any, error) {
-	value, _, _, err := c.resolveVerifiedRuntimeOutput(ref, output)
+func (c *Coordinator) resolveRuntimeOutputValue(ctx context.Context, ref FactRef, output string) (any, error) {
+	value, _, _, err := c.resolveVerifiedRuntimeOutput(ctx, ref, output)
 	return value, err
 }
 
-func (c *Coordinator) resolveVerifiedRuntimeOutput(ref FactRef, output string) (any, *TodoItem, *ExecutionReceipt, error) {
+func (c *Coordinator) resolveVerifiedRuntimeOutput(ctx context.Context, ref FactRef, output string) (any, *TodoItem, *ExecutionReceipt, error) {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return nil, nil, nil, fmt.Errorf("fact_ref %q: canonical task occurrences are unavailable", ref.Name)
 	}
 	items := c.taskTracker.TodoList().Items()
 	runID := coordinatorRuntimeRunID(c)
-	origins, err := c.recoveredTaskOutputOrigins(items)
+	origins, err := c.recoveredTaskOutputOrigins(ctx, items)
 	if err != nil {
 		return nil, nil, nil, err
 	}

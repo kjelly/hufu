@@ -42,7 +42,7 @@ func nativeMediaAcceptedPayload(item *TodoItem, receipt ExecutionReceipt) bool {
 		return item.ResultContract == nil || !item.ResultContract.RequireStructured
 	}
 	if item.ResultContract == nil || payload.Contract != *item.ResultContract ||
-		receipt.ResultValidation != ResultValidationValid || receipt.ResultPayloadSHA256 != payload.SHA256 ||
+		receipt.ResultValidation != ResultValidationValid || !receiptMatchesResultPayload(&receipt, payload) ||
 		receipt.ResultContractID != payload.Contract.ID || receipt.ResultContractSHA256 != payload.Contract.SchemaSHA256 ||
 		len(payload.Value) > resultPayloadMaxBytes {
 		return false

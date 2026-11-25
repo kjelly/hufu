@@ -13,7 +13,11 @@ func openBoundedArtifact(path string) (*os.File, error) {
 	// final-component symlinks when opening untrusted inspection artifacts.
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, err
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
 	return os.NewFile(uintptr(fd), path), nil
+}
+
+func openGroundedArtifact(root *os.Root, path string) (*os.File, error) {
+	return root.OpenFile(path, os.O_RDONLY|unix.O_NONBLOCK, 0)
 }

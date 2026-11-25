@@ -146,6 +146,7 @@ func codexCommandDisablesNativeMultiAgent(cmd []string) (agentsDisabled, multiAg
 // and features.multi_agent_v2 precedence per test-matrix item I so enabling
 // one cannot silently override the other.
 func TestHufuCodingCodexProviderDisablesNativeMultiAgent(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	t.Parallel()
 	session := loadHufuCodingTeam(t)
 	provider, ok := session.Config.SubagentProviders["codex"]
@@ -171,6 +172,7 @@ func TestHufuCodingCodexProviderDisablesNativeMultiAgent(t *testing.T) {
 // so binding a side_effect:none role to codex does not grant it write access
 // — this is a config-only change, no runtime behavior to add.
 func TestHufuCodingAllRolesBoundToCodex(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	t.Parallel()
 	session := loadHufuCodingTeam(t)
 	for _, name := range []string{"sa", "coder", "verifier", "reviewer", "final-sa"} {
@@ -238,6 +240,7 @@ func TestHufuCodingVerifierCannotWrite(t *testing.T) {
 // read-only rather than workspace-write, regardless of what `tools:` would
 // otherwise have gated for a Hufu-native (non-subagent-provider) worker.
 func TestHufuCodingReadOnlyRolesSideEffectNoneGatesCodexSandbox(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	t.Parallel()
 	session := loadHufuCodingTeam(t)
 	byAgent := map[string]TaskDef{}

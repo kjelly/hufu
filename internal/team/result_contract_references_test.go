@@ -2,6 +2,7 @@ package team
 
 import (
 	"encoding/json/v2"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,38 @@ import (
 
 	"charm.land/fantasy"
 )
+
+func TestExternalResultAuthenticatesRuntimeInputsBeforeShapeRepair(t *testing.T) {
+	compiled := compileFixtureJSONSchema(t, "external-runtime-source", runtimeWorksetSchema)
+	request := scopedAttemptRequest("codex", "worker")
+	request.Task.ResultContract = new(compiled.ref(true))
+	request.resultContractSchema = compiled
+	unavailable := errors.New("original workset binding is unavailable")
+	request.resultRuntimeInputs = func(*CompiledResultContract) (map[string]any, error) { return nil, unavailable }
+	for _, payload := range []*string{nil, new(`{"record":{"judgment":42}}`)} {
+		proposal := &WorkerResultProposal{Status: TaskResultStatusSuccess, Summary: "original work", StructuredPayloadJSON: payload}
+		_, err := NewExternalResultCanonicalizer().Canonicalize(t.Context(), request, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, t.TempDir())
+		if !errors.Is(err, unavailable) || localResultRejectionReason(err) != RepairFailureSource {
+			t.Fatalf("unavailable runtime input was not authenticated: %v", err)
+		}
+	}
+}
+
+func TestExternalResultAuthenticatesWorksetPathsBeforeShapeRepair(t *testing.T) {
+	compiled := compileFixtureJSONSchema(t, "external-path-source", worksetPathResultSchema)
+	request := scopedAttemptRequest("codex", "worker")
+	request.Task.ResultContract = new(compiled.ref(true))
+	request.resultContractSchema = compiled
+	unavailable := errors.New("the frozen path manifest could no longer be read")
+	request.resultWorksetPaths = func() (worksetPathSelection, error) { return worksetPathSelection{}, unavailable }
+	for _, payload := range []*string{nil, new(`{"findings":[],"findings":[]}`)} {
+		proposal := &WorkerResultProposal{Status: TaskResultStatusSuccess, Summary: "original work", StructuredPayloadJSON: payload}
+		_, err := NewExternalResultCanonicalizer().Canonicalize(t.Context(), request, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, t.TempDir())
+		if !errors.Is(err, unavailable) || localResultRejectionReason(err) != RepairFailureSource {
+			t.Fatalf("repair became eligible without the frozen manifest: %v", err)
+		}
+	}
+}
 
 func referenceBindingFixture(t *testing.T) (*Coordinator, *TodoItem, *TodoItem, map[string]any) {
 	t.Helper()
@@ -50,6 +83,7 @@ func TestResultReferenceOwnershipAndReads(t *testing.T) {
 				entry["refs"] = []any{false}
 			case "retained":
 				spec.When = &resultReferenceMatch{Pointer: "/state", Value: "resolved"}
+				spec.bindConditionSchema(contract.schema)
 				entry["state"] = "retained"
 				entry["refs"] = []any{}
 			case "self_reference":
@@ -230,7 +264,7 @@ func TestReplayedResultReferenceChecksWithoutRequiredDelivery(t *testing.T) {
 				}
 			}
 			c.session.ResultContracts[audit.ResultContract.ID].finalReport = template.Must(template.New("report").Parse("Complete: {{.done}}"))
-			_, configured, err := c.renderedContractFinalReport()
+			_, configured, err := c.renderedContractFinalReport(t.Context())
 			if !configured || (err == nil) != (name == "valid") {
 				t.Fatalf("replayed final report reference validation: configured=%v err=%v", configured, err)
 			}

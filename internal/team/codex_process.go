@@ -5,9 +5,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
+
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // This file starts one codex app-server process and wires it to a
@@ -37,10 +40,11 @@ type CodexProcessConfig struct {
 type CodexAppServerProcess struct {
 	Client *CodexRPCClient
 
-	sup    ProcessSupervisor
-	handle ProcessHandle
-	stderr *boundedBuffer
-	stdout io.Closer
+	sup             ProcessSupervisor
+	handle          ProcessHandle
+	stderr          *codexStderrCapture
+	exited          chan struct{}
+	closeChildPipes func()
 
 	waitOnce sync.Once
 	waitErr  error
@@ -50,46 +54,42 @@ type CodexAppServerProcess struct {
 // (Interrupt/TerminateTree/KillTree via the same ProcessSupervisor).
 func (p *CodexAppServerProcess) Handle() ProcessHandle { return p.handle }
 
-// processRawWaiter is implemented by a platform's concrete ProcessHandle
-// (unixProcessHandle) when it can reap process exit directly, without going
-// through the generic ProcessHandle.Wait (== *exec.Cmd.Wait). This matters
-// specifically for the Codex process: its stdin/stdout are bridged to the
-// JSON-RPC client through an io.Pipe (see stdinRead/stdoutWrite above), and
-// os/exec's own Cmd.Wait cannot return until the goroutine it spawns to
-// bridge that pipe sees EOF — which only happens once CodexRPCClient.Close
-// closes the pipe's write end. Using Cmd.Wait to *detect* a crash is
-// therefore circular: detecting the crash is exactly what would let us
-// decide to call Close. A raw process wait breaks the cycle by reaping the
-// child directly (a plain waitpid, independent of any Go-level io.Pipe
-// plumbing), so the crash monitor below can close the client — and thereby
-// unblock the bridge goroutine — as soon as the process is actually gone,
-// rather than needing the bridge already unblocked first.
-type processRawWaiter interface {
-	waitRaw() error
+// codexProcessGroup is implemented by the native supervisor. Its child
+// inherits its own copies of the files passed in ProcessSpec.
+type codexProcessGroup interface {
+	groupExists() (bool, error)
+	waitAfterGroupKill(context.Context) error
 }
 
-// Wait blocks until the process has exited, closing the stdout pipe
-// afterward so the JSON-RPC client's read loop can observe EOF. It is safe
-// to call concurrently (memoized via sync.Once) since both the background
-// crash monitor below and stopCodexProcess's own cleanup need to observe
-// process exit.
+// Wait reaps the direct process. The separate stdout reader owns wire EOF
+// and may still have complete frames to dispatch after Wait returns.
 func (p *CodexAppServerProcess) Wait() error {
 	p.waitOnce.Do(func() {
-		if raw, ok := p.handle.(processRawWaiter); ok {
-			p.waitErr = raw.waitRaw()
-		} else {
-			p.waitErr = p.handle.Wait()
-		}
-		if p.stdout != nil {
-			_ = p.stdout.Close()
-		}
+		p.waitErr = p.handle.Wait()
+		p.closeChildPipes()
 	})
 	return p.waitErr
 }
 
-// Stderr returns the process's captured stderr so far, bounded by
-// MaxStderrBytes (§13.2 step 5, §17.2).
-func (p *CodexAppServerProcess) Stderr() string { return p.stderr.String() }
+// Stderr returns redacted process stderr within the configured capture bound.
+func (p *CodexAppServerProcess) Stderr() string {
+	diagnostics := p.Client.newDiagnostics(nil)
+	text, truncated := p.stderr.snapshot()
+	if truncated {
+		diagnostics.discard()
+	}
+	diagnostics.learn(text)
+	return diagnostics.secrets.RedactText(text)
+}
+
+type codexInitializationFailure struct {
+	cause   error
+	settled bool
+	secrets *utils.SecretRedactionScope
+}
+
+func (e *codexInitializationFailure) Error() string { return e.cause.Error() }
+func (e *codexInitializationFailure) Unwrap() error { return e.cause }
 
 // StartCodexAppServer performs §13.2's startup sequence: validate the
 // executable exists, start it under the process supervisor with a sanitized
@@ -118,49 +118,197 @@ func StartCodexAppServer(ctx context.Context, sup ProcessSupervisor, cfg CodexPr
 	if maxStderr <= 0 {
 		maxStderr = defaultCodexMaxStderrBytes
 	}
-	stderrBuf := newBoundedBuffer(maxStderr)
-
-	stdinRead, stdinWrite := io.Pipe()
-	stdoutRead, stdoutWrite := io.Pipe()
-
+	stdinRead, stdinWrite, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("codex process: stdin pipe: %w", err)
+	}
+	stdoutRead, stdoutWrite, err := os.Pipe()
+	if err != nil {
+		_ = stdinRead.Close()
+		_ = stdinWrite.Close()
+		return nil, fmt.Errorf("codex process: stdout pipe: %w", err)
+	}
+	closeWire := func() {
+		_ = stdinRead.Close()
+		_ = stdinWrite.Close()
+		_ = stdoutRead.Close()
+		_ = stdoutWrite.Close()
+	}
+	stderr, err := startCodexStderrCapture(maxStderr)
+	if err != nil {
+		closeWire()
+		return nil, fmt.Errorf("codex process: stderr capture: %w", err)
+	}
+	env := append([]string{}, cfg.Env...)
 	handle, err := sup.Start(startCtx, ProcessSpec{
-		Argv: cfg.Argv, Dir: cfg.Dir, Env: cfg.Env,
-		Stdin: stdinRead, Stdout: stdoutWrite, Stderr: stderrBuf,
+		Argv: cfg.Argv, Dir: cfg.Dir, Env: env,
+		Stdin: stdinRead, Stdout: stdoutWrite, Stderr: stderr.writer,
 	})
 	if err != nil {
+		closeWire()
+		stderr.finish()
 		return nil, fmt.Errorf("codex process: start: %w", err)
+	}
+	closeChildPipes := sync.OnceFunc(func() {
+		_ = stdinRead.Close()
+		_ = stdoutWrite.Close()
+		_ = stderr.writer.Close()
+	})
+	if _, external := handle.(codexProcessGroup); external {
+		closeChildPipes()
 	}
 
 	client := NewCodexRPCClient(stdinWrite, stdoutRead, cfg.MaxFrameBytes)
-	proc := &CodexAppServerProcess{Client: client, sup: sup, handle: handle, stderr: stderrBuf, stdout: stdoutWrite}
-	if _, err := codexInitialize(startCtx, client); err != nil {
-		// Initialization failure is still a started process lifecycle. Close
-		// the transport, terminate the complete process tree, and synchronously
-		// reap it before returning so failed admissions cannot leak a child or
-		// a blocked pipe-copy goroutine.
-		_ = client.Close()
-		if killErr := sup.KillTree(context.Background(), handle); killErr != nil {
-			return nil, fmt.Errorf("codex process: initialize: %w (stderr: %s; cleanup: %v)", err, stderrBuf.String(), killErr)
-		}
-		_ = proc.Wait()
-		return nil, fmt.Errorf("codex process: initialize: %w (stderr: %s)", err, stderrBuf.String())
+	client.diagnosticEnv = env
+	client.knownSecrets = new(utils.SecretRedactionScope)
+	client.knownSecrets.DiscoverEnvironment(env)
+	client.stderr = stderr
+	proc := &CodexAppServerProcess{
+		Client: client, sup: sup, handle: handle, stderr: stderr,
+		exited: make(chan struct{}), closeChildPipes: closeChildPipes,
 	}
-
-	// The process's real stdout is bridged into stdoutRead through an
-	// io.Pipe (see the type doc above): os/exec's internal copy goroutine
-	// never closes a non-*os.File Stdout writer once the child exits, so an
-	// unexpected crash would otherwise leave the client's read loop blocked
-	// forever waiting for EOF that never comes, and any in-flight Call
-	// blocked forever waiting for a response that will never arrive. This
-	// background monitor is what actually notices the crash: once the
-	// process exits for any reason, it closes the client, which unblocks
-	// every pending/future Call via its closeCh case (§16.3).
 	go func() {
 		_ = proc.Wait()
-		_ = proc.Client.Close()
+		close(proc.exited)
+		// An orphan that kept stdout open must not hide leader exit
+		// indefinitely. Close the read descriptor at the deadline so the
+		// wire reader can publish its buffered frames before disconnecting.
+		select {
+		case <-client.Done():
+		case <-time.After(time.Second):
+		}
+		_ = stdoutRead.Close()
+		<-client.Done()
+		_ = client.Close()
+		proc.stderr.finish()
 	}()
+	var rejected *jsonRPCError
+	if _, err := codexInitialize(startCtx, client, func(reply jsonRPCResponse) error {
+		rejected = reply.Error
+		return fmt.Errorf("initialize RPC rejected")
+	}); err != nil {
+		_ = client.Close()
+		killErr := proc.forceStop(defaultCodexProcessReapTimeout)
+		proc.stderr.finish()
+		captured, truncated := proc.stderr.snapshot()
+		diagnostics := client.newDiagnostics(nil)
+		if killErr != nil || truncated {
+			diagnostics.discard()
+		}
+		diagnostics.learn(captured)
+		if rejected != nil {
+			err = rejected.redacted(diagnostics)
+		} else {
+			diagnostics.learn(err.Error())
+			err = redactCodexError(err, diagnostics.secrets)
+		}
+		captured = utils.TruncateRunes(diagnostics.secrets.RedactText(captured), codexFailureEvidenceMaxRunes)
+		if killErr != nil {
+			return nil, &codexInitializationFailure{
+				cause:   fmt.Errorf("codex process: initialize: %w (stderr: %s; cleanup: %v)", err, captured, redactCodexError(killErr, diagnostics.secrets)),
+				secrets: diagnostics.secrets,
+			}
+		}
+		return nil, &codexInitializationFailure{
+			cause:   fmt.Errorf("codex process: initialize: %w (stderr: %s)", err, captured),
+			settled: true, secrets: diagnostics.secrets,
+		}
+	}
 
 	return proc, nil
+}
+
+const defaultCodexProcessReapTimeout = 3 * time.Second
+
+func (p *CodexAppServerProcess) waitForExit(grace time.Duration) bool {
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-p.exited:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func (p *CodexAppServerProcess) waitForTreeExit(grace time.Duration) bool {
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-p.exited:
+	case <-timer.C:
+		return false
+	}
+	group, ok := p.handle.(codexProcessGroup)
+	if !ok {
+		return true
+	}
+	poll := time.NewTicker(10 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		exists, err := group.groupExists()
+		if err != nil || !exists {
+			return err == nil
+		}
+		select {
+		case <-timer.C:
+			return false
+		case <-poll.C:
+		}
+	}
+}
+
+func (p *CodexAppServerProcess) forceStop(grace time.Duration) error {
+	if err := p.sup.KillTree(context.Background(), p.handle); err != nil {
+		return err
+	}
+	if !p.waitForExit(grace) {
+		return fmt.Errorf("codex process did not exit after force-kill")
+	}
+	if group, ok := p.handle.(codexProcessGroup); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), grace)
+		defer cancel()
+		return group.waitAfterGroupKill(ctx)
+	}
+	return nil
+}
+
+// Own the stderr pipe explicitly so a direct process wait cannot bypass
+// its draining. A descendent that retains the descriptor cannot prevent
+// settlement, and a truncated or interrupted stream suppresses details.
+type codexStderrCapture struct {
+	*boundedBuffer
+	reader, writer *os.File
+	done           chan error
+	finishOnce     sync.Once
+}
+
+func startCodexStderrCapture(limit int) (*codexStderrCapture, error) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	capture := &codexStderrCapture{boundedBuffer: newBoundedBuffer(limit), reader: reader, writer: writer, done: make(chan error, 1)}
+	go func() {
+		_, err := io.Copy(capture.boundedBuffer, reader)
+		capture.done <- err
+	}()
+	return capture, nil
+}
+
+func (s *codexStderrCapture) finish() {
+	s.finishOnce.Do(func() {
+		_ = s.writer.Close()
+		timer := time.AfterFunc(time.Second, func() { _ = s.reader.Close() })
+		err := <-s.done
+		timer.Stop()
+		_ = s.reader.Close()
+		if err != nil {
+			s.mu.Lock()
+			s.truncated = true
+			s.mu.Unlock()
+		}
+	})
 }
 
 // boundedBuffer caps how much of a stream it retains, recording (but not
@@ -198,12 +346,17 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 }
 
 func (b *boundedBuffer) String() string {
+	text, _ := b.snapshot()
+	return text
+}
+
+func (b *boundedBuffer) snapshot() (string, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.truncated {
-		return b.buf.String() + "\n...[truncated]"
+		return b.buf.String() + "\n...[truncated]", true
 	}
-	return b.buf.String()
+	return b.buf.String(), false
 }
 
 func (b *boundedBuffer) Truncated() bool {

@@ -84,7 +84,7 @@ func (c *Coordinator) prepareContractRecoveryAssessment(ctx context.Context, sou
 	if actionPayloadReconstructionRequested(ctx) && readOnlyActionRepairID(ctx) == "" {
 		return fmt.Errorf("action payload reconstruction requires an explicit read-only Go action repair")
 	}
-	if err := ctx.Err(); err != nil {
+	if err := artifactReadContextError(ctx); err != nil {
 		return err
 	}
 	if contractResultRepairID(ctx) != "" && frozenInputPolicyRecoveryRequested(ctx) {
@@ -203,6 +203,9 @@ func (c *Coordinator) assessPreparedContractRecovery(ctx context.Context, source
 	if err := validateActionRepairProof(source.lineage, source.Session.Tasks, plan); err != nil {
 		return nil, err
 	}
+	if err := artifactReadContextError(ctx); err != nil {
+		return nil, err
+	}
 	plan.SHA256, err = recoveryPlanHash(*plan)
 	return plan, err
 }
@@ -240,7 +243,7 @@ func (c *Coordinator) validateContractRecoverySource(ctx context.Context, item *
 		return fmt.Errorf("task %s runtime output integrity mismatch", item.ID)
 	}
 	if payload := item.TypedResult.StructuredPayload; payload != nil {
-		if receipt.ResultPayloadSHA256 != payload.SHA256 || receipt.ResultValidation != ResultValidationValid {
+		if !receiptMatchesResultPayload(receipt, payload) || receipt.ResultValidation != ResultValidationValid {
 			return fmt.Errorf("task %s receipt/payload mismatch", item.ID)
 		}
 		sum := sha256.Sum256(payload.Value)
@@ -294,6 +297,9 @@ func (c *Coordinator) ApplyContractRecovery(ctx context.Context, source *ResumeS
 		c.eventStore.SetBranchID(source.BranchID)
 		c.SetEventJournal(eventStoreJournal{store: c.eventStore})
 	}
+	if err := artifactReadContextError(ctx); err != nil {
+		return "", err
+	}
 	branch, err := c.forkContractRecovery(ctx, source, tree, name, plan.MetadataOnly)
 	if err != nil {
 		return "", err
@@ -336,6 +342,7 @@ func validContractRevalidation(item *TodoItem, receipt *ExecutionReceipt) bool {
 	}
 	p := item.ContractRevalidation
 	return p != nil && receipt != nil && item.ResultContract != nil && p.Accepted == *item.ResultContract &&
+		p.Original.Normalizer == p.Accepted.Normalizer && p.Original.NormalizerSHA256 == p.Accepted.NormalizerSHA256 &&
 		receipt.ResultContractID == p.Original.ID && receipt.ResultContractSHA256 == p.Original.SchemaSHA256 && receipt.ResultPayloadSHA256 == p.PayloadSHA256 &&
 		item.TypedResult != nil && item.TypedResult.StructuredPayload != nil && item.TypedResult.StructuredPayload.SHA256 == p.PayloadSHA256 && validCollectionDigest(p.SourceTaskSHA256)
 }
@@ -655,15 +662,18 @@ func (c *Coordinator) contractRecoveryPolicies(ctx context.Context, source *Resu
 		return nil, nil, nil, fmt.Errorf("contract recovery cannot add or remove result owners")
 	}
 	for _, b := range current.ResultContracts {
-		if _, ok := bindings[b.Owner]; !ok {
+		original, ok := bindings[b.Owner]
+		if !ok {
 			return nil, nil, nil, fmt.Errorf("contract recovery changed result owner %s", b.Owner)
+		}
+		if original.Normalizer != b.Normalizer || original.NormalizerSHA256 != b.NormalizerSHA256 {
+			return nil, nil, nil, fmt.Errorf("contract recovery refuses normalizer drift for %s", b.Owner)
 		}
 	}
 	for i := range historical.ContractTasks {
 		task := &historical.ContractTasks[i]
 		if b, ok := bindings["contract:"+task.ID]; ok {
-			task.ResultContract = &ResultContractRef{ID: b.ID, SchemaSHA256: b.SchemaSHA256, RequireStructured: b.RequireStructured}
-			task.ResultContractSpec = &resultContractSpec{Schema: b.ID, RequireStructured: b.RequireStructured}
+			bindRecoveryContract(task, b)
 		}
 	}
 	if item := selectedLegacySubmission(source.Session, contractResultRepairID(ctx)); item != nil {
@@ -713,8 +723,7 @@ func (c *Coordinator) assessContractRecoveryTask(ctx context.Context, item *Todo
 	}
 	oldDef := definition
 	if b, ok := bindings["contract:"+definition.ID]; ok {
-		oldDef.ResultContract = &ResultContractRef{ID: b.ID, SchemaSHA256: b.SchemaSHA256, RequireStructured: b.RequireStructured}
-		oldDef.ResultContractSpec = &resultContractSpec{Schema: b.ID, RequireStructured: b.RequireStructured}
+		bindRecoveryContract(&oldDef, b)
 	}
 	if contractResultRepairID(ctx) == item.ID && legacySubmissionTarget(item) {
 		if !validateLegacyExecutionChange(item.Execution, definition.Execution) {
@@ -818,4 +827,12 @@ func recoveryOriginalContractMatches(item *TodoItem, original ResultContractRef)
 		return original == item.ContractRevalidation.Original
 	}
 	return original == *item.ResultContract
+}
+
+func bindRecoveryContract(task *TaskDef, binding ExecutionResultContractPolicySnapshot) {
+	ref := recoveryBindingRef(binding)
+	task.ResultContract = &ref
+	task.ResultContractSpec = &resultContractSpec{
+		Schema: ref.ID, RequireStructured: ref.RequireStructured, Normalizer: ref.Normalizer,
+	}
 }

@@ -45,6 +45,10 @@ type AttemptRequest struct {
 	// authorizes and integrity-verifies the reference. The scope is copied into
 	// every initial, retry, and result-repair request.
 	ArtifactScope *ArtifactAccessScope
+	// Mixed collection fanout keeps returned evidence after the provider's
+	// execution world is closed and publishes it with the terminal handoff.
+	sealFanoutResult bool
+	modelExecutionID string
 	// invariantRepairInstructions is coordinator-authored from the persisted
 	// worker manifest. External result-only repair may reuse it but cannot
 	// choose IDs, policy text, hashes, or severities itself.
@@ -58,9 +62,13 @@ type AttemptRequest struct {
 	resultEvidenceInputs []TaskResult
 	// Hufu-owned lookup rechecks native receipts at proposal canonicalization,
 	// just like local submit_result. It never crosses the provider JSON boundary.
-	resultRuntimeInputs func() (map[string]any, error)
-	resultWorksetPaths  func() (worksetPathSelection, error)
-	resultProjectClaims func(SubmitResultInput) (SubmitResultInput, error)
+	resultRuntimeInputs   func(*CompiledResultContract) (map[string]any, error)
+	resultWorksetInputIDs func() ([]string, error)
+	resultWorksetPaths    func() (worksetPathSelection, error)
+	resultProjectClaims   func(SubmitResultInput) (SubmitResultInput, error)
+	// External result correction can ground paths only in the original turn.
+	resultWorkspaceBaseline *WorkspaceSnapshot
+	resultWorkspaceSnapshot *WorkspaceSnapshot
 	// Provider and ProviderBinding remain adapter-only compatibility fields for
 	// legacy SubagentProvider implementations. ExecutionRegistry adapters fill
 	// them from the canonical fields immediately before invoking that interface.
@@ -98,7 +106,8 @@ type AttemptResult struct {
 	// invariantClaims remains transient until the coordinator attests it
 	// against the durable context manifest. It is never serialized or copied
 	// into TaskResult by an external provider.
-	invariantClaims *[]InvariantAssessmentClaim
+	invariantClaims  *[]InvariantAssessmentClaim
+	repairProvenance *RepairProvenance
 	// WorkspaceDelta is the actually-observed change for this attempt, when
 	// an external provider's ExecutionWorld captured one — populated even on
 	// a failed/cancelled attempt when a final snapshot was possible (§16.3:

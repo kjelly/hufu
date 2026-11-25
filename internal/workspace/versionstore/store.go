@@ -32,11 +32,12 @@ type Options struct {
 
 // Store is the SQLite + CAS workspace version store for one project.
 type Store struct {
-	layout   layout
-	db       *sql.DB
-	readOnly bool
-	now      func() time.Time
-	random   io.Reader
+	layout           layout
+	db               *sql.DB
+	readOnly         bool
+	legacyOperations bool
+	now              func() time.Time
+	random           io.Reader
 
 	// mu serializes mutating operations inside one process; the project
 	// lock (lock.go) serializes processes.
@@ -83,6 +84,10 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	store.db = db
 	if options.ReadOnly {
 		err = sqlmigrate.Verify(ctx, db, "workspace versions", migrations)
+		if err != nil && sqlmigrate.Verify(ctx, db, "workspace versions", migrations[:1]) == nil {
+			store.legacyOperations = true
+			err = nil
+		}
 	} else {
 		err = sqlmigrate.Apply(ctx, db, "workspace versions", migrations, store.now)
 		if err == nil {

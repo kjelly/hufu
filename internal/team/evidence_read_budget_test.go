@@ -47,8 +47,11 @@ func TestArtifactReadBudgetAggregate(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, budget := WithArtifactReadBudget(t.Context(), 8)
+	if _, err := readArtifactFileWithin(ctx, path, 3); !errors.Is(err, ErrReadLimit) || budget.Err() != nil {
+		t.Fatalf("per-file limit must reject without exhausting aggregate budget: %v, budget: %v", err, budget.Err())
+	}
 	for range 2 {
-		data, err := readArtifactFile(ctx, path)
+		data, err := readArtifactFileWithin(ctx, path, 4)
 		if err != nil || string(data) != "1234" {
 			t.Fatalf("exact budget rejected: %q %v", data, err)
 		}
@@ -56,7 +59,7 @@ func TestArtifactReadBudgetAggregate(t *testing.T) {
 	if budget.Err() != nil {
 		t.Fatal("exact budget was marked exhausted")
 	}
-	if _, err := readArtifactFile(ctx, path); !errors.Is(err, ErrReadLimit) {
+	if _, err := readArtifactFileWithin(ctx, path, 4); !errors.Is(err, ErrReadLimit) {
 		t.Fatalf("cumulative excess accepted: %v", err)
 	}
 	if !errors.Is(budget.Err(), ErrReadLimit) {

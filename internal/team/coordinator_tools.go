@@ -456,7 +456,7 @@ func (t *finishTool) run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	// surfaced in the result and via a notifiable event so an unattended run's
 	// failure is not silent.
 	response := args.Response
-	if rendered, configured, err := t.coordinator.renderedContractFinalReport(); configured || err != nil {
+	if rendered, configured, err := t.coordinator.renderedContractFinalReport(ctx); configured || err != nil {
 		if err != nil {
 			if !args.AcknowledgeFailedTasks || len(failedTasks) == 0 {
 				return fantasy.NewTextErrorResponse("cannot finish: " + err.Error()), nil

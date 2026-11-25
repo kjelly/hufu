@@ -502,7 +502,8 @@ func assertAcceptedRepairContextClaims(t *testing.T, c *Coordinator, id string, 
 				candidate.MemoryUses = []MemoryUseRef{{ContextItemID: "new"}}
 			}
 			before := mustReadEvents(t, c.eventStore)
-			if err := c.validateRecoveryContextClaims(t.Context(), id, candidate); (err == nil) != (scenario == "unchanged") {
+			cp := currentResultCollection(c.todoItemByID(id))
+			if err := c.validateRecoveryContextClaims(t.Context(), cp, candidate, nil); (err == nil) != (scenario == "unchanged") {
 				t.Fatalf("context admission = %v", err)
 			}
 			if !reflect.DeepEqual(before, mustReadEvents(t, c.eventStore)) {

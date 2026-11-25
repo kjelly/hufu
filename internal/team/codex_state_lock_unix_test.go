@@ -17,6 +17,7 @@ import (
 )
 
 func TestCodexStateLockNormalizesCreationPermissions(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	// Umask is process-global. Isolate it from every other test and fixture.
 	if directory := os.Getenv("HUFU_TEST_CODEX_LOCK_DIRECTORY"); directory != "" {
 		mask, err := strconv.ParseInt(os.Getenv("HUFU_TEST_CODEX_LOCK_UMASK"), 8, 32)
@@ -73,6 +74,7 @@ func TestCodexStateLockNormalizesCreationPermissions(t *testing.T) {
 }
 
 func TestCodexStateLockPreservesExistingFiles(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	for _, scenario := range []string{"regular", "readonly", "public", "symlink", "directory"} {
 		t.Run(scenario, func(t *testing.T) {
 			directory := t.TempDir()
@@ -130,6 +132,7 @@ func TestCodexStateLockPreservesExistingFiles(t *testing.T) {
 }
 
 func TestCodexStateLockContentionHonorsCancellation(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	path := filepath.Join(t.TempDir(), "lock")
 	release, err := acquireCodexStateFileLock(t.Context(), path)
 	if err != nil {
@@ -153,6 +156,7 @@ func TestCodexStateLockContentionHonorsCancellation(t *testing.T) {
 }
 
 func TestCodexProjectionLockScopeAcrossIndependentHomes(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	for _, shared := range []bool{true, false} {
 		name := "separate workspaces"
 		if shared {
@@ -199,6 +203,7 @@ func TestCodexProjectionLockScopeAcrossIndependentHomes(t *testing.T) {
 }
 
 func TestCodexProjectionConsumerNormalizesCreationPermissions(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	if directory := os.Getenv("HUFU_TEST_CODEX_CONSUMER_DIRECTORY"); directory != "" {
 		root, err := os.OpenRoot(directory)
 		if err != nil {

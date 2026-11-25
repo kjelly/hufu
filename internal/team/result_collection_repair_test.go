@@ -77,7 +77,7 @@ func TestFixedCollectionPayloadClonesDoNotShareProvenance(t *testing.T) {
 	if err := json.Unmarshal(raw, &restored); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.validateSubmittedEvidenceInputs(item.ID, &restored); err != nil {
+	if err := c.validateSubmittedEvidenceInputs(t.Context(), item.ID, &restored); err != nil {
 		t.Fatal(err)
 	}
 }

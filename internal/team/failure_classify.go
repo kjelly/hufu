@@ -416,10 +416,7 @@ func exitCodeFromVerifyResult(vr *VerificationResult) int {
 // because the executable is missing is an environment failure, not a
 // verification failure, regardless of its exit code.
 func environmentFindingsFromVerifyResult(vr *VerificationResult) []ContractFinding {
-	if vr == nil {
-		return nil
-	}
-	if hasEnvironmentFailureSignal(vr.Stderr) || hasEnvironmentFailureSignal(vr.Stdout) {
+	if verificationReportsEnvironmentFailure(vr) {
 		return []ContractFinding{{
 			Severity: FindingSeverityError,
 			Code:     FindingExecutableUnresolved,
@@ -428,6 +425,16 @@ func environmentFindingsFromVerifyResult(vr *VerificationResult) []ContractFindi
 		}}
 	}
 	return nil
+}
+
+func verificationReportsEnvironmentFailure(vr *VerificationResult) bool {
+	if vr == nil {
+		return false
+	}
+	if vr.EnvironmentFailure != nil {
+		return *vr.EnvironmentFailure
+	}
+	return hasEnvironmentFailureSignal(vr.Stderr) || hasEnvironmentFailureSignal(vr.Stdout)
 }
 
 // hasEnvironmentFailureSignal reports whether the given output text contains
@@ -453,7 +460,7 @@ func hasEnvironmentFailureSignal(output string) bool {
 	}
 	// "executable file not found" is Go's / the OS's exec diagnostic for a
 	// missing executable. Distinct from a tool reporting an absent file.
-	if strings.Contains(lower, "executable file not found") {
+	if strings.Contains(lower, executableNotFoundDiagnostic) {
 		return true
 	}
 	// "executable unresolved" is hufu's own finding code phrasing.

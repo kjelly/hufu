@@ -285,7 +285,7 @@ func (c *Coordinator) executeStructuredCoordinatorTask(ctx context.Context, task
 		Summary: summary, Source: "runtime", ReceiptIDs: ids, Confidence: 1,
 		Outputs: structuredTaskOutputs(task.Execution, result),
 	}
-	if err := c.validateTaskResultReceiptClaims(todoID, typedResult); err != nil {
+	if err := c.validateTaskResultReceiptClaims(ctx, todoID, typedResult); err != nil {
 		_ = c.commitTaskTransitionFromCurrent(ctx, todoID, TaskError, err.Error(), "", nil)
 		return "", err
 	}

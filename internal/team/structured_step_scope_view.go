@@ -9,6 +9,16 @@ import (
 // failure diagnostics additionally select the exact currently authorized
 // occurrence, so historical attempts cannot satisfy a new task's claim.
 func (c *Coordinator) taskStepReceiptRegistry(taskID string, attempt int) (*ExecutionStepReceiptRegistry, error) {
+	return c.resultStepReceiptRegistry(context.Background(), taskID, attempt)
+}
+
+func (c *Coordinator) resultStepReceiptRegistry(ctx context.Context, taskID string, attempt int) (*ExecutionStepReceiptRegistry, error) {
+	if cp, _ := ctx.Value(resultCollectionReadCheckpointKey{}).(*ResultCollectionCheckpoint); cp != nil && cp.TaskID == taskID && cp.Attempt == attempt {
+		if _, err := c.loadCollectionWork(ctx, c.todoItemByID(taskID), cp); err != nil {
+			return nil, fmt.Errorf("validate structured step collection source: %w", err)
+		}
+		return c.collectionStepReceipts(ctx, cp)
+	}
 	registry := c.executionStepReceiptRegistry()
 	if c.EventStore() == nil {
 		return registry, nil
@@ -23,11 +33,22 @@ func (c *Coordinator) taskStepReceiptRegistry(taskID string, attempt int) (*Exec
 		runID = identity.RunID
 		if cp := currentResultCollection(item); cp != nil && cp.SourceRunID == identity.RunID && cp.Attempt == attempt &&
 			cp.SubmissionRevision == identity.OccurrenceRevision && cp.SubmissionDispatchID == identity.DispatchID {
-			if _, err := c.loadCollectionWork(context.Background(), item, cp); err != nil {
+			if _, err := c.loadCollectionWork(ctx, item, cp); err != nil {
 				return view, fmt.Errorf("validate structured step recovery source: %w", err)
 			}
 			branchID, revision = cp.BranchID, cp.WorkOccurrenceRevision
 		}
+	}
+	_, historical, err := c.originalNormalizationEvidence(ctx, taskID)
+	if err != nil {
+		return view, err
+	}
+	if historical {
+		identity, err := c.resultSubmissionEvidenceIdentity(ctx, taskID)
+		if err != nil {
+			return view, err
+		}
+		runID, revision = identity.RunID, identity.OccurrenceRevision
 	}
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()

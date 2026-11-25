@@ -78,6 +78,7 @@ func TestApplyConfiguredBackendsRejectsReservedLocalAgent(t *testing.T) {
 }
 
 func TestApplyConfiguredBackendsCodexUsesPresenceAwareBuiltInOverlay(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	var parsed struct {
 		Backends map[string]config.BackendConfig `yaml:"backends"`
 	}
@@ -111,6 +112,7 @@ func TestApplyConfiguredBackendsCodexUsesPresenceAwareBuiltInOverlay(t *testing.
 }
 
 func TestApplyConfiguredBackendsCodexRejectsExplicitEmptyCommand(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	var parsed struct {
 		Backends map[string]config.BackendConfig `yaml:"backends"`
 	}

@@ -66,11 +66,11 @@ func compareLegacyAndArtifactWorkset(t *testing.T, workspace string, legacyTask,
 	t.Helper()
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
 
-	legacy, err := c.expandFanOutTasks([]TaskDef{legacyTask})
+	legacy, err := c.expandFanOutTasks(t.Context(), []TaskDef{legacyTask})
 	if err != nil {
 		t.Fatalf("legacy fan-out expansion: %v", err)
 	}
-	artifactBacked, err := c.expandFanOutTasks([]TaskDef{artifactTask})
+	artifactBacked, err := c.expandFanOutTasks(t.Context(), []TaskDef{artifactTask})
 	if err != nil {
 		t.Fatalf("artifact-backed fan-out expansion: %v", err)
 	}

@@ -131,8 +131,15 @@ func repairValidationError(steps []fantasy.StepResult) string {
 			if result.ToolName != submitResultToolName {
 				continue
 			}
+			reason := submissionFailureMetadata(result.ClientMetadata)
+			if reason == ignoredSiblingSubmission {
+				continue
+			}
 			message, isError := toolResultOutputText(result.Result)
 			if isError && strings.TrimSpace(message) != "" {
+				if reason != "" {
+					return schemaRepairDiagnostic(message)
+				}
 				latest = message
 			}
 		}

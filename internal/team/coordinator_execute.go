@@ -122,8 +122,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	requestedTasks := tasks
 	// Fan-out must expand before the final goal-contract binding: the final
 	// pass matches against the real, substituted Goal text.
-	tasks, err = c.expandFanOutTasks(tasks)
+	tasks, err = c.expandFanOutTasks(ctx, tasks)
 	if err != nil {
+		if ctxErr := artifactReadContextError(ctx); ctxErr != nil {
+			return "", ctxErr
+		}
 		// A malformed fan-out spec is a configuration/authoring error, not a
 		// worker failure: fail the whole dispatch before any TODO/model call so
 		// a coordinator mistake never produces some correct and some silently
@@ -140,7 +143,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	// Static contracts contribute context references before resolution. Resolve
 	// each expanded task's template before the final goal-contract binding;
 	// that binding preserves context already resolved under the same hash.
-	tasks, err = c.resolveFactRefs(tasks)
+	tasks, err = c.resolveFactRefs(ctx, tasks)
 	if err != nil {
 		return "", c.rejectDelegationPolicy(err.Error())
 	}
@@ -165,11 +168,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 			return "", c.rejectDelegationPolicy(err.Error())
 		}
 	}
-	tasks, err = c.bindInventoryEvidence(tasks)
+	tasks, err = c.bindInventoryEvidence(ctx, tasks)
 	if err != nil {
 		return "", c.rejectDelegationPolicy(err.Error())
 	}
-	tasks, err = c.bindEvidenceSources(tasks)
+	tasks, err = c.bindEvidenceSources(ctx, tasks)
 	if err != nil {
 		return "", c.rejectDelegationPolicy(err.Error())
 	}

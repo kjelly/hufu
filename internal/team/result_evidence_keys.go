@@ -3,6 +3,7 @@ package team
 import (
 	"encoding/json/v2"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -43,7 +44,8 @@ func compileResultEvidenceKeys(root map[string]any, schema *jsonschema.Schema) (
 			return nil, fmt.Errorf("x-hufu-evidence-keys: %w", err)
 		}
 		tokens := fixedCollectionPointerTokens(pointer)
-		if pointer == "" || len(tokens) > 12 || seen[pointer] || !evidenceKeySchemaPath(schema, tokens, 0) {
+		leaf := resultReferenceSchemaAt(schema, tokens, 0)
+		if pointer == "" || len(tokens) > 12 || seen[pointer] || leaf == nil || leaf.Types == nil || !slices.Contains(leaf.Types.ToStrings(), "string") {
 			return nil, fmt.Errorf("x-hufu-evidence-keys: %q must uniquely select schema-declared strings", pointer)
 		}
 		seen[pointer] = true
@@ -51,20 +53,20 @@ func compileResultEvidenceKeys(root map[string]any, schema *jsonschema.Schema) (
 	return spec, nil
 }
 
-func evidenceKeySchemaPath(schema *jsonschema.Schema, tokens []string, depth int) bool {
+func resultReferenceSchemaAt(schema *jsonschema.Schema, tokens []string, depth int) *jsonschema.Schema {
 	if schema == nil || depth > maxDynamicSchemaDepth {
-		return false
+		return nil
 	}
 	if schema.Ref != nil {
-		return evidenceKeySchemaPath(schema.Ref, tokens, depth+1)
+		return resultReferenceSchemaAt(schema.Ref, tokens, depth+1)
 	}
 	if len(tokens) == 0 {
-		return schema.Types != nil && slices.Contains(schema.Types.ToStrings(), "string")
+		return schema
 	}
 	if tokens[0] == "*" {
-		return evidenceKeySchemaPath(schema.Items2020, tokens[1:], depth+1)
+		return resultReferenceSchemaAt(schema.Items2020, tokens[1:], depth+1)
 	}
-	return evidenceKeySchemaPath(schema.Properties[tokens[0]], tokens[1:], depth+1)
+	return resultReferenceSchemaAt(schema.Properties[tokens[0]], tokens[1:], depth+1)
 }
 
 // Only worker-facing guidance is widened. Expansion happens before DTO/schema
@@ -118,47 +120,40 @@ func advertiseStringReferencePath(schema map[string]any, tokens []string, keyPat
 }
 
 // transformEvidenceKeyPath never traverses undeclared fields or rewrites prose.
-func transformEvidenceKeyPath(value any, tokens []string, pointer string, resolve func(string) (string, error)) (any, bool, error) {
+func transformEvidenceKeyPath(value any, tokens []string, pointer string, resolve func(string, string) (any, error)) (any, error) {
 	if len(tokens) == 0 {
 		text, ok := value.(string)
 		if !ok || !strings.HasPrefix(text, evidenceKeyPrefix) {
-			return value, false, nil
+			return value, nil
 		}
-		next, err := resolve(text)
-		if err != nil {
-			return nil, false, fmt.Errorf("%s: %w", pointer, err)
-		}
-		return next, true, nil
+		return resolve(text, pointer)
 	}
-	changed := false
 	apply := func(child any, key string) (any, error) {
-		next, didChange, err := transformEvidenceKeyPath(child, tokens[1:], pointer+"/"+escapeJSONPointerToken(key), resolve)
-		changed = changed || didChange
-		return next, err
+		return transformEvidenceKeyPath(child, tokens[1:], pointer+"/"+escapeJSONPointerToken(key), resolve)
 	}
 	switch node := value.(type) {
 	case map[string]any:
-		for key, child := range node {
+		for _, key := range slices.Sorted(maps.Keys(node)) {
 			if tokens[0] != "*" && key != tokens[0] {
 				continue
 			}
-			next, err := apply(child, key)
+			next, err := apply(node[key], key)
 			if err != nil {
-				return nil, false, err
+				return nil, err
 			}
 			node[key] = next
 		}
 	case []any:
 		if tokens[0] != "*" {
-			return value, false, nil
+			return value, nil
 		}
 		for index, child := range node {
 			next, err := apply(child, strconv.Itoa(index))
 			if err != nil {
-				return nil, false, err
+				return nil, err
 			}
 			node[index] = next
 		}
 	}
-	return value, changed, nil
+	return value, nil
 }

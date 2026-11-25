@@ -147,34 +147,53 @@ func (c *Coordinator) integrateIsolatedAttempt(ctx context.Context, a *isolatedA
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	delta, err := a.world.Delta(ctx, a.prepared)
+	normalized := evidence.Receipt != nil && evidence.Receipt.ResultWorkDispatchID != "" && evidence.Receipt.ResultCollection == nil && isCompletedLocalResult(evidence.TypedResult)
+	item := c.todoItemByID(a.taskID)
+	var collection *ResultCollectionCheckpoint
+	if item != nil && item.ResultContract != nil && item.ResultContract.Normalizer != "" {
+		collection = currentResultCollection(item)
+	}
+	sealed := normalized || collection != nil
+	started := attemptApplyStartedPayload{
+		WorldID: a.worldID(), TypedResult: evidence.TypedResult, VerifyResult: evidence.VerifyResult,
+		ExecutionReceipt: evidence.Receipt, CoordinatorOutput: evidence.CoordinatorOutput,
+	}
+	var delta *AttemptWorkspaceDelta
+	var err error
+	if collection != nil {
+		delta, err = c.prepareCollectedApply(ctx, a, item, collection, &started)
+	} else if normalized {
+		delta, err = c.prepareNormalizedApply(ctx, a, &started)
+	} else {
+		delta, err = a.world.Delta(ctx, a.prepared)
+	}
 	if err != nil {
+		reason := localResultRejectionReason(err)
+		if sealed && (reason == RepairFailureCommit || reason == RepairFailureSource) {
+			a.state = isolatedAttemptRetained
+			return err
+		}
 		return withFailureClassOverride(err, FailurePolicy)
 	}
-	if len(delta.Changes) == 0 {
-		// Nothing to apply: the world is released at once, and the task
-		// completes exactly as a shared attempt would.
+	if len(delta.Changes) == 0 && !sealed {
 		a.state = isolatedAttemptApplied
 		c.releaseIsolatedAttempt(a)
 		return nil
 	}
-	if err := writeAttemptWorldDelta(a.worldDir(), delta); err != nil {
-		return fmt.Errorf("%s: %w", workspaceApplyIncompleteCode, err)
+	if !sealed {
+		if err := writeAttemptWorldDelta(a.worldDir(), delta); err != nil {
+			return fmt.Errorf("%s: %w", workspaceApplyIncompleteCode, err)
+		}
 	}
 	// From here on the apply must run to completion: a cancellation between
 	// two writes would leave a half-applied project.
 	applyCtx := context.WithoutCancel(ctx)
-	var receipt *ExecutionReceipt
-	if evidence.Receipt != nil {
-		cloned := cloneExecutionReceipt(evidence.Receipt)
-		receipt = &cloned
-	}
 	if err := c.appendAttemptWorldEvent(applyCtx, EventAttemptWorkspaceApplyStarted, a, map[string]any{
 		"world_id": a.worldID(), "delta_digest": delta.Digest, "change_count": len(delta.Changes),
-		"typed_result": evidence.TypedResult, "verify_result": evidence.VerifyResult,
-		"execution_receipt": receipt, "coordinator_output": evidence.CoordinatorOutput,
+		"typed_result": started.TypedResult, "verify_result": started.VerifyResult,
+		"execution_receipt": started.ExecutionReceipt, "coordinator_output": started.CoordinatorOutput,
 	}); err != nil {
-		return fmt.Errorf("record isolated attempt apply: %w", err)
+		return a.interruptedSettlement(sealed, fmt.Errorf("record isolated attempt apply: %w", err))
 	}
 	result, err := applyAttemptWorkspaceDelta(applyCtx, c.projectDir, a.prepared.Root, delta)
 	var conflict *AttemptWorkspaceConflictError
@@ -185,13 +204,20 @@ func (c *Coordinator) integrateIsolatedAttempt(ctx context.Context, a *isolatedA
 			// The journal still says the apply started; keep the world so
 			// recovery sees a consistent state instead of a missing root.
 			a.state = isolatedAttemptRetained
-			return &attemptWorkspaceApplyIncompleteError{err: fmt.Errorf("%s: record apply conflict: %w", workspaceApplyIncompleteCode, eventErr)}
+			return a.interruptedSettlement(sealed, &attemptWorkspaceApplyIncompleteError{err: fmt.Errorf("%s: record apply conflict: %w", workspaceApplyIncompleteCode, eventErr)})
 		}
 		a.state = isolatedAttemptClosed
 		c.removeAttemptWorld(a)
 		return withFailureClassOverride(err, FailureWorkspaceConflict)
 	}
 	if err != nil {
+		if sealed {
+			if errors.Is(err, errAttemptDeltaSourceChanged) {
+				a.state = isolatedAttemptRetained
+				return rejectLocalResult(RepairFailureSource, err)
+			}
+			return a.interruptedSettlement(true, fmt.Errorf("apply verified attempt workspace: %w", err))
+		}
 		// Writes are re-entrant: a path already at its final state is
 		// skipped, so a second pass converges or reports the same failure.
 		log.Printf("warning: isolated attempt apply for task %s failed, retrying once: %v", a.taskID, err)
@@ -206,10 +232,18 @@ func (c *Coordinator) integrateIsolatedAttempt(ctx context.Context, a *isolatedA
 		"files_written": result.FilesWritten, "files_deleted": result.FilesDeleted,
 	}); err != nil {
 		a.state = isolatedAttemptRetained
-		return &attemptWorkspaceApplyIncompleteError{err: fmt.Errorf("%s: record applied changes (world kept at %s): %w", workspaceApplyIncompleteCode, a.worldDir(), err)}
+		return a.interruptedSettlement(sealed, &attemptWorkspaceApplyIncompleteError{err: fmt.Errorf("%s: record applied changes (world kept at %s): %w", workspaceApplyIncompleteCode, a.worldDir(), err)})
 	}
 	a.state = isolatedAttemptApplied
 	return nil
+}
+
+func (a *isolatedAttempt) interruptedSettlement(normalized bool, err error) error {
+	if !normalized {
+		return err
+	}
+	a.state = isolatedAttemptRetained
+	return rejectLocalResultPersistence(err)
 }
 
 // releaseIsolatedAttempt deletes an applied world once its TaskDone has

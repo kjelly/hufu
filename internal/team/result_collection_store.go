@@ -1,6 +1,7 @@
 package team
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -144,16 +145,28 @@ func (c *Coordinator) readCollectionBytes(ctx context.Context, ref ResultCollect
 }
 
 func (c *Coordinator) putCollectionBlob(ctx context.Context, checkpoint *ResultCollectionCheckpoint, kind string, data []byte) (*ResultCollectionRef, error) {
-	return c.putCollectionBlobWithIssue(ctx, checkpoint, kind, data, nil)
+	return c.putCollectionBlobRecord(ctx, checkpoint, kind, data, nil, nil)
 }
 
-func (c *Coordinator) putCollectionBlobWithIssue(ctx context.Context, checkpoint *ResultCollectionCheckpoint, kind string, data []byte, issue *agent.StructuredResponseIssue) (*ResultCollectionRef, error) {
+func (c *Coordinator) putCollectionBlobRecord(ctx context.Context, checkpoint *ResultCollectionCheckpoint, kind string, data []byte, issue *agent.StructuredResponseIssue, normalization *resultNormalization) (*ResultCollectionRef, error) {
+	body, limit, err := encodeCollectionBlob(checkpoint, kind, data, issue, normalization)
+	if err != nil {
+		return nil, err
+	}
+	ref, err := c.putCollectionBytes(ctx, checkpoint, kind, body, limit)
+	if err != nil {
+		return nil, err
+	}
+	return &ref, nil
+}
+
+func encodeCollectionBlob(checkpoint *ResultCollectionCheckpoint, kind string, data []byte, issue *agent.StructuredResponseIssue, normalization *resultNormalization) ([]byte, int, error) {
 	if issue != nil {
 		if kind != "response" {
-			return nil, fmt.Errorf("response issue requires response evidence")
+			return nil, 0, fmt.Errorf("response issue requires response evidence")
 		}
 		if err := issue.Validate(); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 	limit := resultCollectionResponseMaxBytes
@@ -164,30 +177,28 @@ func (c *Coordinator) putCollectionBlobWithIssue(ctx context.Context, checkpoint
 		limit = resultCollectionAcceptedMaxBytes
 	}
 	if len(data) > limit {
-		return nil, fmt.Errorf("result collection %s exceeds %d bytes", kind, limit)
+		return nil, 0, fmt.Errorf("result collection %s exceeds %d bytes", kind, limit)
 	}
 	// Responses can be invalid JSON. Preserve their complete redacted bytes as
 	// data rather than requiring successful parsing to save the diagnostic.
 	var redacted []byte
 	switch kind {
-	case "response", "claims":
+	case "response":
 		redacted = []byte(utils.RedactSecrets(string(data)))
+	case "claims":
+		redacted = data
+		if normalization == nil {
+			redacted = []byte(utils.RedactSecrets(string(data)))
+		}
 	case "accepted", "request":
 		// Full canonical data already passed redaction and binding. Rewriting
 		// it here could invalidate immutable runtime-owned payload hashes.
 		redacted = data
 	default:
-		return nil, fmt.Errorf("unknown result collection blob kind %q", kind)
+		return nil, 0, fmt.Errorf("unknown result collection blob kind %q", kind)
 	}
-	body, err := json.Marshal(resultCollectionBlob{ResponseIssue: issue, Version: resultCollectionVersion, WorkSHA256: checkpoint.Work.SHA256, InvocationID: checkpoint.InvocationID, InvocationRunID: checkpoint.InvocationRunID, Kind: kind, Data: redacted}, json.Deterministic(true))
-	if err != nil {
-		return nil, err
-	}
-	ref, err := c.putCollectionBytes(ctx, checkpoint, kind, body, limit*2)
-	if err != nil {
-		return nil, err
-	}
-	return &ref, nil
+	body, err := json.Marshal(resultCollectionBlob{ResponseIssue: issue, ResponseRedacted: kind == "response" && !bytes.Equal(redacted, data), Normalization: normalization, Version: resultCollectionVersion, WorkSHA256: checkpoint.Work.SHA256, InvocationID: checkpoint.InvocationID, InvocationRunID: checkpoint.InvocationRunID, Kind: kind, Data: redacted}, json.Deterministic(true))
+	return body, limit * 2, err
 }
 
 func (c *Coordinator) readCollectionBlob(ctx context.Context, checkpoint *ResultCollectionCheckpoint, kind string, ref *ResultCollectionRef) ([]byte, error) {
@@ -213,6 +224,10 @@ func (c *Coordinator) readCollectionBlobRecord(ctx context.Context, checkpoint *
 	if err != nil {
 		return nil, err
 	}
+	return decodeCollectionBlob(checkpoint, kind, body, limit)
+}
+
+func decodeCollectionBlob(checkpoint *ResultCollectionCheckpoint, kind string, body []byte, limit int) (*resultCollectionBlob, error) {
 	var blob resultCollectionBlob
 	if err := json.Unmarshal(body, &blob, json.RejectUnknownMembers(true)); err != nil {
 		return nil, err
@@ -227,6 +242,9 @@ func (c *Coordinator) readCollectionBlobRecord(ctx context.Context, checkpoint *
 		if err := blob.ResponseIssue.Validate(); err != nil {
 			return nil, err
 		}
+	}
+	if blob.Normalization != nil && kind != "claims" {
+		return nil, fmt.Errorf("normalization requires prepared claims evidence")
 	}
 	return &blob, nil
 }

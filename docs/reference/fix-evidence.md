@@ -51,6 +51,9 @@ Offline success, one compliant model response and a passing probe demonstrate
 their tested scope; none alone proves the whole target workflow completed.
 When that workflow fails again after a claimed fix, revisit the evidence,
 acceptance boundary and recovery design before another patch or full rerun.
+After two unsuccessful fixes for the same workflow failure, suspend further
+commits and open an architecture review. Record the observed transitions,
+contract expectations and test evidence in the ADR before resuming commits.
 
 Record the remaining limitations and a supported recovery path that retains
 completed work. Do not use the user repeatedly rerunning the full workflow as
@@ -63,6 +66,10 @@ Every non-documentation PR includes exactly one `hufu-fix-evidence` fenced JSON
 block, as in [.github/pull_request_template.md](../../.github/pull_request_template.md).
 Use actual observations, commands and artifact/test references; do not invent
 successful checks. Do not include credentials or raw private model responses.
+
+For changes under `cmd/` or `internal/`, explain in the PR how another
+agent team can use the changed behavior. Keep policies specific to code
+review or another domain in the owning team.
 
 | Field | Contract |
 | --- | --- |

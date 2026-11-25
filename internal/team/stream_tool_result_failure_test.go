@@ -20,7 +20,10 @@ type rejectedResultStreamModel struct {
 	fantasy.LanguageModel
 	calls    int
 	toolName string
+	toolAt   func(int) string
+	onCall   func(int)
 	input    func(int) string
+	sibling  string
 	finish   fantasy.FinishReason
 	pauseAt  int
 	choices  []fantasy.ToolChoice
@@ -37,6 +40,9 @@ func (*rejectedResultStreamModel) Provider() string { return "test-provider" }
 
 func (m *rejectedResultStreamModel) Stream(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
 	m.calls++
+	if m.onCall != nil {
+		m.onCall(m.calls)
+	}
 	if call.ToolChoice != nil {
 		m.choices = append(m.choices, *call.ToolChoice)
 	}
@@ -45,19 +51,27 @@ func (m *rejectedResultStreamModel) Stream(_ context.Context, call fantasy.Call)
 			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
 		}, nil
 	}
-	callID := fmt.Sprintf("submit-%d", m.calls)
-	input := m.input(m.calls)
+	name := m.toolName
+	if m.toolAt != nil {
+		name = m.toolAt(m.calls)
+	}
+	callID, input := fmt.Sprintf("submit-%d", m.calls), m.input(m.calls)
 	return func(yield func(fantasy.StreamPart) bool) {
-		for _, part := range []fantasy.StreamPart{
-			{Type: fantasy.StreamPartTypeToolInputStart, ID: callID, ToolCallName: m.toolName},
-			{Type: fantasy.StreamPartTypeToolInputDelta, ID: callID, Delta: input},
-			{Type: fantasy.StreamPartTypeToolInputEnd, ID: callID},
-			{Type: fantasy.StreamPartTypeToolCall, ID: callID, ToolCallName: m.toolName, ToolCallInput: input},
-			{Type: fantasy.StreamPartTypeFinish, FinishReason: m.finish},
-		} {
-			if !yield(part) {
-				return
+		emit := func(id, arguments string) bool {
+			for _, part := range []fantasy.StreamPart{
+				{Type: fantasy.StreamPartTypeToolInputStart, ID: id, ToolCallName: name},
+				{Type: fantasy.StreamPartTypeToolInputDelta, ID: id, Delta: arguments},
+				{Type: fantasy.StreamPartTypeToolInputEnd, ID: id},
+				{Type: fantasy.StreamPartTypeToolCall, ID: id, ToolCallName: name, ToolCallInput: arguments},
+			} {
+				if !yield(part) {
+					return false
+				}
 			}
+			return true
+		}
+		if emit(callID, input) && (m.sibling == "" || m.calls != 1 || emit(callID+"-sibling", m.sibling)) {
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: m.finish})
 		}
 	}, nil
 }

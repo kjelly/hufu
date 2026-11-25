@@ -134,6 +134,7 @@ func TestValidateDoctorExecutionTargetsUsesRunTargetHierarchy(t *testing.T) {
 }
 
 func TestValidateDoctorExecutionTargetsReportsMissingCodex(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	session := &team.TeamSession{Config: agent.TeamConfig{
 		WorkerModel:      "codex/gpt-5.6-luna",
 		CoordinatorModel: "local/qwen3:8b",

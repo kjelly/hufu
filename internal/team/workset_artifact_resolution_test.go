@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,7 +16,7 @@ import (
 
 func TestStructuredFanOutResolvesBytesOnlyInputToCanonicalOccurrence(t *testing.T) {
 	t.Parallel()
-	workspace, c, producer, store := newWorksetArtifactFixture(t)
+	_, c, producer, store := newWorksetArtifactFixture(t)
 	input, err := store.Put(context.Background(), PutArtifactRequest{
 		Content: []byte("diff contents"), Path: "diff.patch", Kind: "diff", RunID: "run-1", TaskID: producer.ID, Attempt: 4, Agent: "reviewprep",
 	})
@@ -23,13 +24,37 @@ func TestStructuredFanOutResolvesBytesOnlyInputToCanonicalOccurrence(t *testing.
 		t.Fatal(err)
 	}
 	bytesOnly := ArtifactRef{ID: input.ID, SHA256: input.SHA256, Bytes: input.Bytes}
-	expanded := expandWorksetWithInput(t, workspace, c, producer, store, bytesOnly, true)
+	expanded := expandWorksetWithInput(t, c, producer, store, bytesOnly, true)
 	resolved := expanded[0].WorksetBinding.Inputs[0]
 	if resolved.ID != input.ID || resolved.SHA256 != input.SHA256 || resolved.Bytes != input.Bytes || resolved.ByteSize != input.ByteSize {
 		t.Fatalf("resolved input = %#v, want canonical metadata %#v", resolved, input)
 	}
 	if resolved.RunID != "run-1" || resolved.TaskID != producer.ID || resolved.Attempt != producer.TypedResult.Attempt || resolved.Agent != producer.TypedResult.Agent {
 		t.Fatalf("resolved input provenance = %#v", resolved)
+	}
+}
+
+func TestStructuredFanOutInheritsArtifactReadBudget(t *testing.T) {
+	_, c, producer, store := newWorksetArtifactFixture(t)
+	input, err := store.Put(t.Context(), PutArtifactRequest{
+		Content: []byte("checkpoint input"), Path: "input", RunID: "run-1", TaskID: producer.ID, Attempt: 4, Agent: "reviewprep",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := expandWorksetWithInput(t, c, producer, store, input.ArtifactRef, true)
+	manifest := rows[0].WorksetBinding.SourceArtifact
+	tasks := []TaskDef{{ID: "consumer", Agent: "reviewer", FanOut: &FanOutSpec{
+		SourceArtifact: FactRef{TaskID: "producer", Artifact: manifest.ID}, GoalTemplate: "Review {name}",
+	}}}
+	ctx, budget := WithArtifactReadBudget(t.Context(), manifest.Bytes)
+	if expanded, err := c.expandFanOutTasks(ctx, tasks); len(expanded) != 0 || !errors.Is(err, ErrReadLimit) || !errors.Is(budget.Err(), ErrReadLimit) {
+		t.Fatalf("fan-out exceeded the caller's budget: expanded=%d error=%v budget=%v", len(expanded), err, budget.Err())
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if expanded, err := c.expandFanOutTasks(ctx, tasks); len(expanded) != 0 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled fan-out: expanded=%d, error=%v", len(expanded), err)
 	}
 }
 
@@ -40,13 +65,13 @@ func TestStructuredFanOutRejectsConflictingInputSizeClaims(t *testing.T) {
 		"byte_size": func(ref *ArtifactRef) { ref.ByteSize++ },
 	} {
 		t.Run(name, func(t *testing.T) {
-			workspace, c, producer, store := newWorksetArtifactFixture(t)
+			_, c, producer, store := newWorksetArtifactFixture(t)
 			input, err := store.Put(context.Background(), PutArtifactRequest{Content: []byte("content"), Path: "input", RunID: "run-1", TaskID: producer.ID, Attempt: 4, Agent: "reviewprep"})
 			if err != nil {
 				t.Fatal(err)
 			}
 			mutate(&input.ArtifactRef)
-			if _, err := expandWorksetWithInputResult(workspace, c, producer, store, input.ArtifactRef, true); err == nil || !strings.Contains(err.Error(), "conflicts with immutable metadata") {
+			if _, err := expandWorksetWithInputResult(t.Context(), c, producer, store, input.ArtifactRef, true); err == nil || !strings.Contains(err.Error(), "conflicts with immutable metadata") {
 				t.Fatalf("conflicting size claim error = %v", err)
 			}
 		})
@@ -56,13 +81,13 @@ func TestStructuredFanOutRejectsConflictingInputSizeClaims(t *testing.T) {
 func TestStructuredFanOutRejectsWrongDigestAndTamperedData(t *testing.T) {
 	t.Parallel()
 	t.Run("wrong digest", func(t *testing.T) {
-		workspace, c, producer, store := newWorksetArtifactFixture(t)
+		_, c, producer, store := newWorksetArtifactFixture(t)
 		input, err := store.Put(context.Background(), PutArtifactRequest{Content: []byte("content"), Path: "input", RunID: "run-1", TaskID: producer.ID, Attempt: 4, Agent: "reviewprep"})
 		if err != nil {
 			t.Fatal(err)
 		}
 		input.SHA256 = strings.Repeat("0", 64)
-		if _, err := expandWorksetWithInputResult(workspace, c, producer, store, input.ArtifactRef, true); err == nil || !strings.Contains(err.Error(), "digest conflicts") {
+		if _, err := expandWorksetWithInputResult(t.Context(), c, producer, store, input.ArtifactRef, true); err == nil || !strings.Contains(err.Error(), "digest conflicts") {
 			t.Fatalf("wrong digest error = %v", err)
 		}
 	})
@@ -77,7 +102,7 @@ func TestStructuredFanOutRejectsWrongDigestAndTamperedData(t *testing.T) {
 		if err := os.WriteFile(dataPath, []byte("tampered"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := expandWorksetWithInputResult(workspace, c, producer, store, input.ArtifactRef, true); err == nil || !strings.Contains(err.Error(), "hash or size mismatch") {
+		if _, err := expandWorksetWithInputResult(t.Context(), c, producer, store, input.ArtifactRef, true); err == nil || !strings.Contains(err.Error(), "hash or size mismatch") {
 			t.Fatalf("tampered data error = %v", err)
 		}
 	})
@@ -85,13 +110,13 @@ func TestStructuredFanOutRejectsWrongDigestAndTamperedData(t *testing.T) {
 
 func TestStructuredFanOutResolvesZeroByteInput(t *testing.T) {
 	t.Parallel()
-	workspace, c, producer, store := newWorksetArtifactFixture(t)
+	_, c, producer, store := newWorksetArtifactFixture(t)
 	input, err := store.Put(context.Background(), PutArtifactRequest{Content: nil, Path: "empty", RunID: "run-1", TaskID: producer.ID, Attempt: 4, Agent: "reviewprep"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	bytesOnly := ArtifactRef{ID: input.ID, SHA256: input.SHA256}
-	expanded := expandWorksetWithInput(t, workspace, c, producer, store, bytesOnly, true)
+	expanded := expandWorksetWithInput(t, c, producer, store, bytesOnly, true)
 	resolved := expanded[0].WorksetBinding.Inputs[0]
 	if resolved.Bytes != 0 || resolved.ByteSize != 0 || resolved.SHA256 != input.SHA256 {
 		t.Fatalf("zero-byte resolved input = %#v", resolved)
@@ -114,7 +139,7 @@ func TestStructuredFanOutRejectsClearedSourceSizeClaims(t *testing.T) {
 	cleared.ByteSize = 0
 	producer.TypedResult = &TaskResult{TaskID: producer.ID, Agent: producer.Agent, Attempt: 4, Status: TaskResultStatusSuccess, Artifacts: []ArtifactRef{cleared}}
 	c.taskResults[producer.ID] = producer.TypedResult
-	if _, err := c.expandFanOutTasks([]TaskDef{{FanOut: &FanOutSpec{
+	if _, err := c.expandFanOutTasks(t.Context(), []TaskDef{{FanOut: &FanOutSpec{
 		SourceArtifact: FactRef{TaskID: "producer", Artifact: manifest.ID}, GoalTemplate: "process {name}",
 	}}}); err == nil || !strings.Contains(err.Error(), "byte count claims") {
 		t.Fatalf("cleared source size claims error = %v", err)
@@ -168,7 +193,7 @@ func TestStructuredProducerOutputFeedsWorksetFanOutAndAcceptance(t *testing.T) {
 	reviewTask := TaskDef{ID: "review", Agent: "reviewer", Goal: "review manifest", FanOut: &FanOutSpec{
 		SourceArtifact: FactRef{TaskID: "producer", Artifact: "manifest"}, GoalTemplate: "review {name}",
 	}}
-	expanded, err := c.expandFanOutTasks([]TaskDef{reviewTask})
+	expanded, err := c.expandFanOutTasks(t.Context(), []TaskDef{reviewTask})
 	if err != nil || len(expanded) != 1 {
 		t.Fatalf("expand structured workset = %#v, err=%v", expanded, err)
 	}
@@ -200,24 +225,24 @@ func TestStructuredProducerOutputFeedsWorksetFanOutAndAcceptance(t *testing.T) {
 
 func TestStructuredFanOutRejectsInputUndeclaredBySelectedProducer(t *testing.T) {
 	t.Parallel()
-	workspace, c, producer, store := newWorksetArtifactFixture(t)
+	_, c, producer, store := newWorksetArtifactFixture(t)
 	input, err := store.Put(context.Background(), PutArtifactRequest{Content: []byte("content"), Path: "input", RunID: "run-1", TaskID: producer.ID, Attempt: 4, Agent: "reviewprep"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := expandWorksetWithInputResult(workspace, c, producer, store, input.ArtifactRef, false); err == nil || !strings.Contains(err.Error(), "was not declared by the task result") || !strings.Contains(err.Error(), `producer task "producer"`) {
+	if _, err := expandWorksetWithInputResult(t.Context(), c, producer, store, input.ArtifactRef, false); err == nil || !strings.Contains(err.Error(), "was not declared by the task result") || !strings.Contains(err.Error(), `producer task "producer"`) {
 		t.Fatalf("undeclared input error = %v", err)
 	}
 }
 
 func TestGeneratedWorksetChildCanViewAssignedInput(t *testing.T) {
 	t.Parallel()
-	workspace, c, producer, store := newWorksetArtifactFixture(t)
+	_, c, producer, store := newWorksetArtifactFixture(t)
 	input, err := store.Put(context.Background(), PutArtifactRequest{Content: []byte("assigned diff\n"), Path: "input", RunID: "run-1", TaskID: producer.ID, Attempt: 4, Agent: "reviewprep"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	expanded := expandWorksetWithInput(t, workspace, c, producer, store, ArtifactRef{ID: input.ID, SHA256: input.SHA256, Bytes: input.Bytes}, true)
+	expanded := expandWorksetWithInput(t, c, producer, store, ArtifactRef{ID: input.ID, SHA256: input.SHA256, Bytes: input.Bytes}, true)
 	child := c.taskTracker.TodoList().AddBatch([]TodoSpec{{PlanTaskID: "generated-child", Agent: "reviewer"}})[0]
 	child.WorksetBinding = cloneWorksetBinding(expanded[0].WorksetBinding)
 	receipts, err := buildWorksetReceipts(expanded, []string{child.ID}, c.executionRunID)
@@ -244,7 +269,7 @@ func TestStructuredFanOutRejectsStaleOccurrencesButAcceptsRepeatedContent(t *tes
 			t.Fatal(err)
 		}
 		c.taskResults[producer.ID] = &TaskResult{TaskID: producer.ID, Agent: "reviewprep", Attempt: 4, Status: TaskResultStatusSuccess, Artifacts: []ArtifactRef{stale.ArtifactRef}}
-		if _, err := c.expandFanOutTasks([]TaskDef{{FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "producer", Artifact: stale.ID}, GoalTemplate: "process {name}"}}}); err == nil || !strings.Contains(err.Error(), "invalid current producer occurrence") {
+		if _, err := c.expandFanOutTasks(t.Context(), []TaskDef{{FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "producer", Artifact: stale.ID}, GoalTemplate: "process {name}"}}}); err == nil || !strings.Contains(err.Error(), "invalid current producer occurrence") {
 			t.Fatalf("stale manifest occurrence error = %v", err)
 		}
 	})
@@ -278,7 +303,7 @@ func TestStructuredFanOutRejectsStaleOccurrencesButAcceptsRepeatedContent(t *tes
 			t.Fatalf("same manifest IDs differ: old=%q current=%q", oldManifest.ID, currentManifest.ID)
 		}
 		c.taskResults[producer.ID] = &TaskResult{TaskID: producer.ID, Agent: "reviewprep", Attempt: 4, Status: TaskResultStatusSuccess, Artifacts: []ArtifactRef{currentManifest.ArtifactRef, currentInput.ArtifactRef}}
-		expanded, err := c.expandFanOutTasks([]TaskDef{{FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "producer", Artifact: currentManifest.ID}, GoalTemplate: "process {name}"}}})
+		expanded, err := c.expandFanOutTasks(t.Context(), []TaskDef{{FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "producer", Artifact: currentManifest.ID}, GoalTemplate: "process {name}"}}})
 		if err != nil || len(expanded) != 1 {
 			t.Fatalf("repeated identical content expansion = %#v err=%v", expanded, err)
 		}
@@ -307,7 +332,7 @@ func TestStructuredFanOutRejectsStaleOccurrencesButAcceptsRepeatedContent(t *tes
 			t.Fatal(err)
 		}
 		c.taskResults[producer.ID] = &TaskResult{TaskID: producer.ID, Agent: "reviewprep", Attempt: 4, Status: TaskResultStatusSuccess, Artifacts: []ArtifactRef{manifest.ArtifactRef, currentInput.ArtifactRef}}
-		if _, err := c.expandFanOutTasks([]TaskDef{{FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "producer", Artifact: manifest.ID}, GoalTemplate: "process {name}"}}}); err == nil || !strings.Contains(err.Error(), "belongs to run") {
+		if _, err := c.expandFanOutTasks(t.Context(), []TaskDef{{FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "producer", Artifact: manifest.ID}, GoalTemplate: "process {name}"}}}); err == nil || !strings.Contains(err.Error(), "belongs to run") {
 			t.Fatalf("stale input occurrence error = %v", err)
 		}
 	})
@@ -339,7 +364,7 @@ func TestStructuredFanOutRejectsMissingCurrentProducerOccurrence(t *testing.T) {
 			result := &TaskResult{TaskID: producer.ID, Attempt: 4, Agent: "reviewprep", Status: TaskResultStatusSuccess, Artifacts: []ArtifactRef{sparse}}
 			c.taskResults[producer.ID] = result
 			producer.TypedResult = result
-			_, err = c.expandFanOutTasks([]TaskDef{{ID: "consumer", Agent: "reviewer", FanOut: &FanOutSpec{
+			_, err = c.expandFanOutTasks(t.Context(), []TaskDef{{ID: "consumer", Agent: "reviewer", FanOut: &FanOutSpec{
 				SourceArtifact: FactRef{TaskID: "producer", Artifact: current.ID}, GoalTemplate: "process {name}",
 			}}})
 			if err == nil || !strings.Contains(err.Error(), "invalid current producer occurrence") {
@@ -365,16 +390,16 @@ func newWorksetArtifactFixture(t *testing.T) (string, *Coordinator, *TodoItem, *
 	return workspace, c, producer, store
 }
 
-func expandWorksetWithInput(t *testing.T, workspace string, c *Coordinator, producer *TodoItem, store *FileArtifactStore, input ArtifactRef, declared bool) []TaskDef {
+func expandWorksetWithInput(t *testing.T, c *Coordinator, producer *TodoItem, store *FileArtifactStore, input ArtifactRef, declared bool) []TaskDef {
 	t.Helper()
-	expanded, err := expandWorksetWithInputResult(workspace, c, producer, store, input, declared)
+	expanded, err := expandWorksetWithInputResult(t.Context(), c, producer, store, input, declared)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return expanded
 }
 
-func expandWorksetWithInputResult(_ string, c *Coordinator, producer *TodoItem, store *FileArtifactStore, input ArtifactRef, declared bool) ([]TaskDef, error) {
+func expandWorksetWithInputResult(ctx context.Context, c *Coordinator, producer *TodoItem, store *FileArtifactStore, input ArtifactRef, declared bool) ([]TaskDef, error) {
 	manifestBytes, err := json.Marshal(WorksetManifest{SchemaVersion: WorksetSchemaVersion, Items: []WorksetItem{{Key: "one", Bindings: map[string]string{"name": "one"}, Inputs: []ArtifactRef{input}}}})
 	if err != nil {
 		return nil, err
@@ -394,12 +419,15 @@ func expandWorksetWithInputResult(_ string, c *Coordinator, producer *TodoItem, 
 	currentResult := &TaskResult{TaskID: producer.ID, Agent: producer.TypedResult.Agent, Attempt: producer.TypedResult.Attempt, Status: TaskResultStatusSuccess, Source: "runtime", Artifacts: artifacts}
 	c.taskResults[producer.ID] = currentResult
 	producer.TypedResult = currentResult
-	return c.expandFanOutTasks([]TaskDef{{ID: "consumer", Agent: "reviewer", FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "producer", Artifact: manifest.ID}, GoalTemplate: "process {name}"}}})
+	return c.expandFanOutTasks(ctx, []TaskDef{{ID: "consumer", Agent: "reviewer", FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "producer", Artifact: manifest.ID}, GoalTemplate: "process {name}"}}})
 }
 
 func TestStructuredFanOutReportsDeclarationConflict(t *testing.T) {
 	t.Parallel()
 	c := newTestCoordinator(t)
+	if _, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace); err != nil {
+		t.Fatal(err)
+	}
 	producers, err := c.CommitTaskCreation(t.Context(), []TodoSpec{{PlanTaskID: "producer", Agent: "producer", Desc: "produce inputs"}})
 	if err != nil {
 		t.Fatal(err)

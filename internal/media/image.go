@@ -11,6 +11,8 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
+	"io/fs"
+	"syscall"
 
 	"golang.org/x/image/webp"
 )
@@ -146,11 +148,17 @@ func ReadFile(ctx context.Context, path string, limits Limits) ([]byte, error) {
 		if classified, ok := errors.AsType[*Error](err); ok {
 			return nil, classified
 		}
-		return nil, Reject(InputMissing, "cannot open a regular image without symlinks")
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.ENOTDIR) {
+			return nil, Reject(InputMissing, "cannot open a regular image without symlinks")
+		}
+		return nil, Reject(DurabilityRequired, "cannot access image storage")
 	}
 	defer func() { _ = f.Close() }()
 	stat, err := f.Stat()
-	if err != nil || !stat.Mode().IsRegular() {
+	if err != nil {
+		return nil, Reject(DurabilityRequired, "cannot inspect image storage")
+	}
+	if !stat.Mode().IsRegular() {
 		return nil, Reject(AccessDenied, "image source must be a regular file")
 	}
 	if stat.Size() <= 0 {
@@ -164,14 +172,14 @@ func ReadFile(ctx context.Context, path string, limits Limits) ([]byte, error) {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, Reject(DecodeInvalid, "image read failed")
+		return nil, Reject(DurabilityRequired, "image storage read failed")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	after, err := f.Stat()
 	if err != nil {
-		return nil, Reject(DecodeInvalid, "image stat failed after read")
+		return nil, Reject(DurabilityRequired, "cannot inspect image storage after read")
 	}
 	if after.Size() > l.MaxBytesPerImage {
 		return nil, Reject(LimitExceeded, "image file grew beyond byte budget")

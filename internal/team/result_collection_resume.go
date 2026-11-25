@@ -48,22 +48,30 @@ func (c *Coordinator) attachCollectedTranscript(ctx context.Context, item *TodoI
 // resumeCollectedTask never dispatches worker work or enters legacy tool
 // repair. It consumes the exact sealed work and the original collector budget.
 func (c *Coordinator) resumeCollectedTask(ctx context.Context, task TaskDef, item *TodoItem) (output string, returnErr error) {
-	checkpoint := currentResultCollection(item)
-	if checkpoint == nil {
-		return "", errResultCollectionStale
-	}
 	if item.Status == TaskDone {
 		return item.Output, nil
 	}
-	if checkpoint.FanoutLeaf && !c.isModelFanoutLeaf(item.ID) {
+	if !c.isModelFanoutLeaf(item.ID) && hasCurrentFanoutCollection(item) {
 		def, _, err := c.AgentPool().ResolveAgentName(item.Agent)
 		if err != nil {
 			return "", err
 		}
 		return c.executeTaskWithExtraModels(ctx, item.Agent, def, task, item.ID)
 	}
+	checkpoint := currentResultCollection(item)
+	if checkpoint == nil {
+		return "", errResultCollectionStale
+	}
 	defer func() {
 		if returnErr != nil {
+			if ctx.Err() == context.Canceled && errors.Is(returnErr, context.Canceled) {
+				detail := c.FailureDetail(returnErr, FailureSourceContextCanceled)
+				returnErr = errors.Join(returnErr, c.PersistFailureWithClassAndStatusError(item.Agent, task.Goal, item.ID, detail, RetryNone, FailureCancelled, TaskError))
+				return
+			}
+			if localResultRejectionReason(returnErr) == RepairFailureCommit {
+				return
+			}
 			c.recordCollectionStopReceipt(item.ID, returnErr)
 			current := c.todoItemByID(item.ID)
 			if current != nil && (current.Status == TaskBlocked || current.Status == TaskError) {
@@ -81,7 +89,7 @@ func (c *Coordinator) resumeCollectedTask(ctx context.Context, task TaskDef, ite
 	}()
 
 	if err := c.ensureExecutionPolicySnapshot(); err != nil {
-		return "", err
+		return "", c.classifyCommittedCollectionRead(item, task, err)
 	}
 	admissionTask := task
 	if checkpoint.FanoutLeaf {
@@ -95,11 +103,11 @@ func (c *Coordinator) resumeCollectedTask(ctx context.Context, task TaskDef, ite
 		admissionTask = taskDefFromTodoItem(item)
 	}
 	if _, _, err := c.validateTaskOccurrenceAdmission(ctx, admissionTask, item.ID, checkpoint.Attempt); err != nil {
-		return "", err
+		return "", c.classifyCommittedCollectionRead(item, task, err)
 	}
 	work, err := c.loadCollectionWork(ctx, item, checkpoint)
 	if err != nil {
-		return "", err
+		return "", c.classifyCommittedCollectionRead(item, task, err)
 	}
 	if item.Status == TaskBlocked && !collectionGrantedForRun(collectionReceipt(item, checkpoint), c.executionRunID) {
 		return "", &resultCollectionFailure{Reason: checkpoint.FailureReason, Checkpoint: checkpoint, Cause: errResultCollectionBlocked}
@@ -125,7 +133,7 @@ func (c *Coordinator) resumeCollectedTask(ctx context.Context, task TaskDef, ite
 	if item.WorkerWorkspace.isolated() {
 		isolated, err = c.reopenCollectedWorld(ctx, item, checkpoint, work)
 		if err != nil {
-			return "", err
+			return "", c.classifyCommittedCollectionRead(item, task, err)
 		}
 		ctx = c.withIsolatedAttempt(ctx, isolated)
 		defer func() {
@@ -136,17 +144,14 @@ func (c *Coordinator) resumeCollectedTask(ctx context.Context, task TaskDef, ite
 		}()
 	}
 	if err := c.collectWorkResult(ctx, def, checkpoint); err != nil {
-		return "", err
+		return "", c.classifyCommittedCollectionRead(item, task, err)
 	}
 	result := c.GetTaskResult(item.ID)
 	if result == nil {
-		return "", &resultCollectionFailure{Reason: RepairFailureCommit, Checkpoint: checkpoint, Cause: fmt.Errorf("accepted collection result was not published")}
+		return "", rejectLocalResultPersistence(errors.New("accepted collection result was not published"))
 	}
 	if err := validateCompletedTaskResult(result); err != nil {
 		return "", withFailureClassOverride(err, FailureExecution)
-	}
-	if err := c.validateRequiredEvidenceDelivery(item.ID, checkpoint.Attempt); err != nil {
-		return "", err
 	}
 	if HasBlockingInvariantAssessment(task.InvariantVerification, result.InvariantVerification) {
 		return "", fmt.Errorf("runtime-attested invariant gate rejected the collected result")
@@ -155,12 +160,83 @@ func (c *Coordinator) resumeCollectedTask(ctx context.Context, task TaskDef, ite
 	if taskUsesVerbatimTranscript(task) {
 		output = formatVerbatimTranscriptManifest(result.RawOutputRef)
 	}
-	if task.AdversarialVerify > 0 && c.AgentPool().Sidecar() != nil {
-		if err := c.adversarialVerify(ctx, task, item.ID, output); err != nil {
-			return "", err
-		}
+	current := c.todoItemByID(item.ID)
+	if err := c.validateCollectedCompletionEvidence(ctx, current, task, checkpoint.Attempt, output); err != nil {
+		return "", err
 	}
-	return c.finishProtocolRepair(ctx, c.todoItemByID(item.ID), task, def.Name, work.Receipt.Model, result, output)
+	return c.finishProtocolRepair(ctx, current, task, def.Name, work.Receipt.Model, result, output)
+}
+
+func (c *Coordinator) validateCollectedCompletionEvidence(ctx context.Context, item *TodoItem, task TaskDef, attempt int, output string) error {
+	if isCommittedNormalizedCollection(item) {
+		return nil
+	}
+	if err := c.validateRequiredEvidenceDelivery(ctx, item.ID, attempt); err != nil {
+		return err
+	}
+	if !c.isCommittedFanoutCollection(item) && task.AdversarialVerify > 0 && c.AgentPool().Sidecar() != nil {
+		return c.adversarialVerify(ctx, task, item.ID, output)
+	}
+	return nil
+}
+
+func (c *Coordinator) isCommittedFanoutCollection(item *TodoItem) bool {
+	cp := currentResultCollection(item)
+	return cp != nil && cp.State == ResultCollectionCommitted && cp.FanoutLeaf && c.isModelFanoutLeaf(item.ID)
+}
+
+func (c *Coordinator) classifyCommittedCollectionRead(item *TodoItem, task TaskDef, err error) error {
+	if !isCommittedNormalizedCollection(item) {
+		if _, ok := errors.AsType[*resultCollectionFailure](err); ok {
+			return err
+		}
+		return rejectNormalizationRecoveryRead(err)
+	}
+	return c.settleNormalizedRecoveryRead(item, task, rejectNormalizationRecoveryRead(err))
+}
+
+func collectionWorkIdentity(cp *ResultCollectionCheckpoint) submitResultRuntimeIdentity {
+	return submitResultRuntimeIdentity{RunID: cp.SourceRunID, TaskID: cp.TaskID, Attempt: cp.Attempt, Agent: cp.Agent,
+		OccurrenceRevision: cp.WorkOccurrenceRevision, DispatchID: cp.WorkDispatchID}
+}
+
+func (c *Coordinator) verifyNormalizedCollectionTerminal(ctx context.Context, item *TodoItem, task TaskDef, output string) error {
+	if c.terminalSessionMgr == nil {
+		return nil
+	}
+	work, err := c.loadCollectionWork(ctx, item, currentResultCollection(item))
+	if err != nil {
+		return c.classifyCommittedCollectionRead(item, task, err)
+	}
+	return c.verifyNormalizedWorkTerminal(ctx, item, task, &work.Receipt, output)
+}
+
+func (c *Coordinator) finalizeNormalizedCollectionResult(ctx context.Context, item *TodoItem, result *TaskResult) (*TaskResult, error) {
+	cp := currentResultCollection(item)
+	receipt := cloneExecutionReceipt(item.ExecutionReceipt)
+	projection, err := c.verifyCollectedWorkEvidence(ctx, cp, result, &receipt)
+	if err != nil {
+		return nil, err
+	}
+	if projection == nil || result.RuntimeMedia != nil && receipt.RuntimeMediaHash == projection.Hash {
+		return result, nil
+	}
+	return c.publishNormalizedWorkMedia(item.ID, projection, &receipt)
+}
+
+func (c *Coordinator) verifyCollectedWorkEvidence(ctx context.Context, cp *ResultCollectionCheckpoint, result *TaskResult, receipt *ExecutionReceipt) (*RuntimeMediaProjection, error) {
+	fanoutModelID := ""
+	if cp.FanoutLeaf {
+		fanoutModelID = cp.ModelExecutionID
+	}
+	projection, err := c.normalizedWorkMedia(ctx, collectionWorkIdentity(cp), fanoutModelID, result, receipt)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.validateRequiredEvidenceDeliveryForResult(ctx, cp.TaskID, cp.Attempt, result, cp.SourceRunID); err != nil {
+		return nil, rejectNormalizationRecoveryRead(err)
+	}
+	return projection, nil
 }
 
 func (c *Coordinator) reopenCollectedWorld(ctx context.Context, item *TodoItem, checkpoint *ResultCollectionCheckpoint, work *resultCollectionWork) (*isolatedAttempt, error) {

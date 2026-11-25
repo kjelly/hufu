@@ -342,15 +342,22 @@ func learnedSecretPattern(value string) *regexp.Regexp {
 	return compiled
 }
 
-// learnSecretValue records a credential value for value-based redaction.
-// It is deliberately conservative: a false positive here silently corrupts
-// unrelated diagnostics, which is worse than missing one bare occurrence.
-func learnSecretValue(raw string) {
+// learnableSecretValue filters candidates for value-based redaction.
+// A false positive can rewrite unrelated diagnostics.
+func learnableSecretValue(raw string) string {
 	// Model prose quotes code with Markdown backticks, so `install.go` or
 	// `1048576` arrives with a backtick stuck to one end. No credential
 	// starts or ends with one, and leaving it on hides the value's shape.
 	value := strings.Trim(unquoteSecretValue(raw), "`")
 	if !isLearnableSecret(value) {
+		return ""
+	}
+	return value
+}
+
+func learnSecretValue(raw string) {
+	value := learnableSecretValue(raw)
+	if value == "" {
 		return
 	}
 	learnedSecrets.Lock()
@@ -484,11 +491,11 @@ func looksLikeSourceText(value string) bool {
 // argument is the full substring captured by urlUserInfoRe (groups: scheme,
 // userinfo-with-trailing-`@`). If the userinfo has no `:`, the URL carries
 // only a username and is left unchanged — username-only URLs are explicitly
-// out of scope. When learn is true, the bare password is recorded so any
+// out of scope. When record is set, it receives the bare password so any
 // later bare re-print is also redacted; isLearnableSecret rejects the full
 // `user:pass@host` substring because it contains `://`, so only the bare
 // password is passed to the learner.
-func redactURLUserinfo(match string, learn bool) string {
+func redactURLUserinfo(match string, record func(string)) string {
 	parts := urlUserInfoRe.FindStringSubmatch(match)
 	if len(parts) != 3 {
 		return match
@@ -505,17 +512,17 @@ func redactURLUserinfo(match string, learn bool) string {
 		// An empty password carries no secret; leave the URL alone.
 		return match
 	}
-	if learn {
-		learnSecretValue(password)
+	if record != nil {
+		record(password)
 	}
 	username := userinfo[:colon]
 	return scheme + "://" + username + ":" + redactedSecret + "@" + match[len(scheme)+len("://")+len(userinfoWithAt):]
 }
 
-// learnSecretsFrom scans content for key/value credential shapes and records
+// scanTextCredentialValues scans content for key/value credential shapes and records
 // their values. The cheap key-name pre-filter keeps this off the hot path for
 // the overwhelming majority of content, which mentions no credential at all.
-func learnSecretsFrom(content string) {
+func scanTextCredentialValues(content string, record func(string)) {
 	if !mayContainSecretKeyName(content) && !strings.Contains(strings.ToLower(content), "authorization") {
 		return
 	}
@@ -534,7 +541,7 @@ func learnSecretsFrom(content string) {
 				if re == secretAuthorizationRe {
 					value, _ = trimTrailingQuote(value)
 				}
-				learnSecretValue(value)
+				record(value)
 			}
 		}
 	}
@@ -582,20 +589,20 @@ func learnedSecretProbe(value string) string {
 // JSONL records, and fenced JSON are redacted structurally before prose rules
 // can rewrite their serialized string delimiters.
 func RedactSecrets(content string) string {
-	return redactSecretsText(content, true)
+	return redactSecretsText(content, true, nil)
 }
 
 // redactSecretsText is RedactSecrets with the learning pass optional. The JSON
 // walk learns from every string in discoverJSONSecrets before it redacts any,
 // so learning again from each string would only repeat that work.
-func redactSecretsText(content string, learn bool) string {
-	if redacted, ok := redactStructuredText(content, learn); ok {
+func redactSecretsText(content string, learn bool, scope *SecretRedactionScope) string {
+	if redacted, ok := redactStructuredText(content, learn, scope); ok {
 		return redacted
 	}
-	return redactSecretsPlainText(content, learn)
+	return redactSecretsPlainText(content, learn, scope)
 }
 
-func redactSecretsPlainText(content string, learn bool) string {
+func redactSecretsPlainText(content string, learn bool, scope *SecretRedactionScope) string {
 	// Every key-based pattern below requires a credential key name, and the
 	// authorization pattern requires its header name. Checking for those
 	// literals once skips the patterns for the ordinary text that has neither.
@@ -606,8 +613,9 @@ func redactSecretsPlainText(content string, learn bool) string {
 	// Learn before redacting: the passes below destroy the very values that a
 	// later bare occurrence has to be matched against.
 	if learn && (hasKeyName || hasAuthorization) {
-		learnSecretsFrom(content)
+		scanTextCredentialValues(content, learnSecretValue)
 	}
+	content = scope.mask(content)
 	if strings.Contains(content, "PRIVATE KEY-----") {
 		content = privateKeyBlockRe.ReplaceAllString(content, redactedSecret)
 	}
@@ -635,7 +643,10 @@ func redactSecretsPlainText(content string, learn bool) string {
 	// rejects text without both `://` and `@` cheaply.
 	if mayContainURLUserinfo(content) {
 		content = urlUserInfoRe.ReplaceAllStringFunc(content, func(match string) string {
-			return redactURLUserinfo(match, learn)
+			if learn {
+				return redactURLUserinfo(match, learnSecretValue)
+			}
+			return redactURLUserinfo(match, nil)
 		})
 	}
 	if hasAuthorization {
@@ -644,7 +655,7 @@ func redactSecretsPlainText(content string, learn bool) string {
 		// group itself is greedy, so without the trim the closing quote is
 		// silently consumed and the surrounding curl/bash line becomes
 		// syntactically broken. trimTrailingQuote is also used by
-		// learnSecretsFrom so the learned value matches the visible one.
+		// scanTextCredentialValues so the learned value matches the visible one.
 		content = secretAuthorizationRe.ReplaceAllStringFunc(content, func(match string) string {
 			parts := secretAuthorizationRe.FindStringSubmatch(match)
 			if len(parts) != 3 {
@@ -682,8 +693,8 @@ func RedactJSON(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	discoverJSONSecrets(value, "")
-	value = redactJSONValue(value, "")
+	discoverJSONSecrets(value, "", learnSecretValue)
+	value = redactJSONValue(value, "", nil)
 	return json.MarshalIndent(value, "", "  ")
 }
 
@@ -693,12 +704,18 @@ func RedactJSON(data []byte) ([]byte, error) {
 // so escaped string values are unescaped before redaction, which text redaction
 // applied to the raw marshaled bytes would miss.
 func RedactJSONCompact(data []byte) ([]byte, error) {
+	return redactJSONCompact(data, nil)
+}
+
+func redactJSONCompact(data []byte, scope *SecretRedactionScope) ([]byte, error) {
 	value, err := decodeRedactionJSON(data)
 	if err != nil {
 		return nil, err
 	}
-	discoverJSONSecrets(value, "")
-	value = redactJSONValue(value, "")
+	if scope == nil {
+		discoverJSONSecrets(value, "", learnSecretValue)
+	}
+	value = redactJSONValue(value, "", scope)
 	return json.Marshal(value)
 }
 
@@ -784,8 +801,12 @@ func jsonSemanticEqual(a, b []byte) bool {
 // discoverJSONSecrets completes the credential-key discovery pass before any
 // string values are redacted. This keeps learned-secret behavior independent
 // of the unspecified iteration order of decoded JSON objects.
-func discoverJSONSecrets(value any, key string) {
-	if key != "" && containsSecretKeyName(key) {
+func discoverJSONSecrets(value any, key string, record func(string)) {
+	discoverJSONSecretValues(value, key, false, record)
+}
+
+func discoverJSONSecretValues(value any, key string, sensitive bool, record func(string)) {
+	if !sensitive && key != "" && containsSecretKeyName(key) {
 		if safeSecretMetadataValue(key, value) {
 			return
 		}
@@ -796,26 +817,25 @@ func discoverJSONSecrets(value any, key string) {
 			return
 		}
 		_, telemetry := numericTelemetryKeys[strings.ToLower(key)]
-		if !telemetry {
-			if text, ok := value.(string); ok {
-				learnSecretValue(text)
-			}
-			return
-		}
-		if _, numeric := value.(json.Number); !numeric {
+		sensitive = !telemetry
+		if _, numeric := value.(json.Number); telemetry && !numeric {
 			return
 		}
 	}
 	switch v := value.(type) {
 	case string:
-		discoverTextSecrets(v)
+		if sensitive {
+			record(v)
+		} else {
+			discoverTextSecrets(v, record)
+		}
 	case []any:
 		for _, item := range v {
-			discoverJSONSecrets(item, "")
+			discoverJSONSecretValues(item, "", sensitive, record)
 		}
 	case map[string]any:
 		for k, item := range v {
-			discoverJSONSecrets(item, k)
+			discoverJSONSecretValues(item, k, sensitive, record)
 		}
 	}
 }
@@ -833,22 +853,25 @@ func IsRedactedJSONKey(key string) bool {
 	return !telemetry && !isPublicTokenBudgetKey(key)
 }
 
-func redactJSONValue(value any, key string) any {
+func redactJSONValue(value any, key string, scope *SecretRedactionScope) any {
+	if scope != nil && scope.matchesJSONScalar(value) {
+		return redactedSecret
+	}
 	if key != "" && containsSecretKeyName(key) {
 		if safeSecretMetadataValue(key, value) {
-			return value
+			return scope.mask(value.(string))
 		}
 		if IsPublicTokenBudget(key, value) {
 			return value
 		}
 		if isNumericTelemetryValue(key, value) {
-			return redactJSONValue(value, "")
+			return redactJSONValue(value, "", scope)
 		}
 		_, telemetry := numericTelemetryKeys[strings.ToLower(key)]
 		if !telemetry {
 			// A credential recognized by its JSON key must stay redacted when
 			// the same value later shows up as bare text in a log or prompt.
-			if text, ok := value.(string); ok {
+			if text, ok := value.(string); ok && scope == nil {
 				learnSecretValue(text)
 			}
 			return redactedSecret
@@ -859,14 +882,26 @@ func redactJSONValue(value any, key string) any {
 	}
 	switch v := value.(type) {
 	case string:
-		return redactSecretsText(v, false)
+		return redactSecretsText(v, false, scope)
 	case []any:
 		for i := range v {
-			v[i] = redactJSONValue(v[i], "")
+			v[i] = redactJSONValue(v[i], "", scope)
 		}
 	case map[string]any:
+		if scope != nil {
+			masked := make(map[string]any, len(v))
+			for k, item := range v {
+				name := scope.mask(k)
+				if _, collision := masked[name]; collision {
+					masked[name] = redactedSecret
+				} else {
+					masked[name] = redactJSONValue(item, k, scope)
+				}
+			}
+			return masked
+		}
 		for k, item := range v {
-			v[k] = redactJSONValue(item, k)
+			v[k] = redactJSONValue(item, k, nil)
 		}
 	}
 	return value

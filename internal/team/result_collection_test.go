@@ -113,7 +113,7 @@ func resultCollectionIdentityFixture(t *testing.T, endpoint string, runtime bool
 	if workRunID != "" {
 		c.executionRunID = workRunID
 	}
-	if err := c.CommitTaskTransition(t.Context(), item.ID, TaskPending, TaskInProgress, "working", "", nil); err != nil {
+	if err := c.CommitTaskTransition(t.Context(), item.ID, TaskPending, TaskInProgress, "working", "", attemptStartMetadata(1)); err != nil {
 		t.Fatal(err)
 	}
 	ctx := occurrenceTestContext(c, item.ID, 1)

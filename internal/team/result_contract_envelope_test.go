@@ -116,8 +116,8 @@ func TestResultCollectionRepairsEnvelopeWithoutRepeatingWork(t *testing.T) {
 	if err := c.validateAcceptedDependencyPayload(item); err != nil {
 		t.Fatal(err)
 	}
-	validated := make(map[string]bool)
-	if err := c.validateAcceptedDependencyPayloadGraph(item, make(map[string]bool), validated); err != nil {
+	validationCtx, _ := withDependencyPayloadValidation(t.Context())
+	if err := c.validateAcceptedDependencyPayloadWithContext(validationCtx, item); err != nil {
 		t.Fatal(err)
 	}
 	events, err := c.EventJournal().ReadEvents(t.Context())
@@ -132,7 +132,7 @@ func TestResultCollectionRepairsEnvelopeWithoutRepeatingWork(t *testing.T) {
 	if err := c.validateAcceptedDependencyPayload(item); err == nil {
 		t.Fatal("dependency accepted inconsistent envelope")
 	}
-	if err := c.validateAcceptedDependencyPayloadGraph(item, make(map[string]bool), validated); err == nil {
+	if err := c.validateAcceptedDependencyPayloadWithContext(validationCtx, item); err == nil {
 		t.Fatal("cached payload validation concealed inconsistent status")
 	}
 }

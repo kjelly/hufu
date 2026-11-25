@@ -373,6 +373,7 @@ func TestSessionBindingUnknownSyncNeverOpensSecondSession(t *testing.T) {
 }
 
 func TestCodexResumeRejectsADifferentThread(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	const cwd = "/workspace/task-1"
 	server := startFakeCodexServer(t, []fakeCodexStep{
 		fakeCodexThreadStartStep("other-thread", cwd, "gpt-5-codex", "workspace-write", t),
@@ -406,6 +407,7 @@ func boundedAttemptContext(t *testing.T) context.Context {
 }
 
 func TestCodexAttemptUsesCanonicalSessionBinding(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	t.Run("a lagging projection resumes the durable session", func(t *testing.T) {
 		workspace := newCodexWorkspace(t)
 		c, provider, item, rawLogPath := newCodexHarness(t, workspace, []fakeCodexStep{

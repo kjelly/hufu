@@ -15,6 +15,8 @@ type terminalTaskPause struct {
 	cancel context.CancelFunc
 }
 
+type workerAttemptStartedAtKey struct{}
+
 func (c *Coordinator) initTerminalControl() {
 	c.terminalControlMu.Lock()
 	defer c.terminalControlMu.Unlock()
@@ -70,6 +72,66 @@ func (c *Coordinator) terminalTaskFailure(ctx context.Context, taskID string) er
 	if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 		runID = c.taskTracker.TodoList().RunID()
 	}
+	return c.terminalFailureForRun(ctx, taskID, runID, nil)
+}
+
+func (a *localResultAdmission) validateTerminalSuccess(ctx context.Context, identity submitResultRuntimeIdentity, status string) error {
+	c := a.coordinator
+	if status != TaskResultStatusSuccess || c.terminalSessionMgr == nil {
+		return nil
+	}
+	work := a.normalizedCollectionWork
+	if item := c.todoItemByID(a.todoID); work == nil && normalizationContract(item) && currentResultCollection(item) == nil {
+		source, historical, err := c.originalNormalizationEvidence(ctx, a.todoID)
+		if err != nil {
+			return rejectResultSourceRead(err)
+		}
+		if historical {
+			recorded, ok := normalizationWorkEvidenceIdentity(item)
+			if !ok || !sameTaskResultOccurrence(source, recorded) {
+				return rejectResultSourceRead(errTaskResultStale)
+			}
+			work = item.ExecutionReceipt
+		} else {
+			started, _ := ctx.Value(workerAttemptStartedAtKey{}).(time.Time)
+			if started.IsZero() {
+				started = item.StartedAt
+			}
+			work = &ExecutionReceipt{RunID: identity.RunID, TaskID: identity.TaskID, StartedAt: started, FinishedAt: time.Now()}
+		}
+	}
+	if work == nil {
+		if err := c.terminalTaskFailure(ctx, a.todoID); err != nil {
+			return fmt.Errorf("success rejected: %w", err)
+		}
+		return nil
+	}
+	if err := c.terminalFailureForRun(ctx, a.todoID, work.RunID, work); err != nil {
+		return rejectNormalizationRecoveryRead(fmt.Errorf("success rejected: %w", err))
+	}
+	return nil
+}
+
+func (c *Coordinator) verifyNormalizedWorkTerminal(ctx context.Context, item *TodoItem, task TaskDef, work *ExecutionReceipt, output string) error {
+	if c.terminalSessionMgr == nil {
+		return nil
+	}
+	if work == nil {
+		return c.settleNormalizedRecoveryRead(item, task, errTaskResultStale)
+	}
+	if err := c.terminalFailureForRun(ctx, item.ID, work.RunID, work); err != nil {
+		blocked := TaskBlocked
+		detail := c.FailureDetail(err, FailureSourceError)
+		failure := withFailureClassOverride(err, FailureVerify)
+		return errors.Join(failure, c.persistFailureWithOutput(item.Agent, task.Goal, item.ID, detail, NeedsHuman, FailureVerify, &blocked, output))
+	}
+	return nil
+}
+
+func (c *Coordinator) terminalFailureForRun(ctx context.Context, taskID, runID string, work *ExecutionReceipt) error {
+	if c.terminalSessionMgr == nil {
+		return nil
+	}
 	sessions, err := c.terminalSessionMgr.List(ctx, runID)
 	if err != nil {
 		return fmt.Errorf("inspect terminal evidence: %w", err)
@@ -80,7 +142,10 @@ func (c *Coordinator) terminalTaskFailure(ctx context.Context, taskID string) er
 		if session.OwnerTaskID != taskID && session.ControllerTaskID != taskID {
 			continue
 		}
-		if latest == nil || session.StartedAt.After(latest.StartedAt) {
+		if work != nil && !terminalBelongsToWork(session, work) {
+			continue
+		}
+		if latest == nil || terminalEvidenceStartedAt(session, work).After(terminalEvidenceStartedAt(latest, work)) {
 			latest = session
 		}
 	}
@@ -92,6 +157,19 @@ func (c *Coordinator) terminalTaskFailure(ctx context.Context, taskID string) er
 		command = latest.ID
 	}
 	return fmt.Errorf("terminal command %q for task %s exited with status %d", command, taskID, *latest.ExitCode)
+}
+
+func terminalBelongsToWork(session *TerminalSession, work *ExecutionReceipt) bool {
+	started := terminalEvidenceStartedAt(session, work)
+	return (work.StartedAt.IsZero() || !started.Before(work.StartedAt)) &&
+		(work.FinishedAt.IsZero() || !started.After(work.FinishedAt))
+}
+
+func terminalEvidenceStartedAt(session *TerminalSession, work *ExecutionReceipt) time.Time {
+	if work != nil && session.OwnerTaskID != work.TaskID && !session.HandedOffAt.IsZero() {
+		return session.HandedOffAt
+	}
+	return session.StartedAt
 }
 
 // TransferTerminal performs the Phase D, operator-authorized task handoff.

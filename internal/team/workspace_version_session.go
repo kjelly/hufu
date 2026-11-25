@@ -56,6 +56,9 @@ func (o *WorkspaceSessionOps) validate(ctx context.Context) (versionstore.Subjec
 	if o.Tree == nil || o.Store == nil || !o.Version.Active() {
 		return versionstore.SubjectState{}, fmt.Errorf("%w: workspace session operation is not configured", versionstore.ErrVersionedWorkspaceUnresolved)
 	}
+	if err := versionstore.CheckSubjectIdentity(o.Version.SubjectRoot, o.Version.SubjectIdentity); err != nil {
+		return versionstore.SubjectState{}, err
+	}
 	return o.Store.EnsureSubjectState(ctx, o.Version.SubjectRoot, o.Version.Mode)
 }
 
@@ -70,6 +73,9 @@ func refuseWhileRecovering(state versionstore.SubjectState) error {
 // commitAndPublish appends the durable commit event and then publishes the
 // snapshot (I3: never the other way round).
 func (o *WorkspaceSessionOps) commitAndPublish(ctx context.Context, snapshot versionstore.Snapshot, stats versionstore.CaptureStats, expectedGeneration int64) (versionstore.Snapshot, error) {
+	if err := versionstore.CheckSubjectIdentity(o.Version.SubjectRoot, o.Version.SubjectIdentity); err != nil {
+		return versionstore.Snapshot{}, err
+	}
 	event, err := appendWorkspaceSnapshotCommitted(ctx, o.Events, snapshot, stats)
 	if err != nil {
 		return versionstore.Snapshot{}, err
@@ -83,9 +89,15 @@ func (o *WorkspaceSessionOps) commitAndPublish(ctx context.Context, snapshot ver
 // saveLiveState makes branchID's head equal the live filesystem: a branch
 // without a head gets a baseline, and drift from the head becomes a new
 // snapshot. saved is the snapshot created by this call, if any.
-func (o *WorkspaceSessionOps) saveLiveState(ctx context.Context, branchID string, reason versionstore.SnapshotReason) (head versionstore.Snapshot, saved *versionstore.Snapshot, err error) {
+func (o *WorkspaceSessionOps) saveLiveState(ctx context.Context, branchID string, reason versionstore.SnapshotReason, recoveryToken string) (head versionstore.Snapshot, saved *versionstore.Snapshot, err error) {
 	current, meta, hasHead, err := o.Store.GetBranchHead(ctx, o.Version.WorkspaceID, branchID)
 	if err != nil {
+		return versionstore.Snapshot{}, nil, err
+	}
+	if err := workspaceStage("live:before_capture"); err != nil {
+		return versionstore.Snapshot{}, nil, err
+	}
+	if err := o.Store.CheckRecoveryToken(ctx, o.Version.SubjectRoot, recoveryToken); err != nil {
 		return versionstore.Snapshot{}, nil, err
 	}
 	if !hasHead {
@@ -97,7 +109,7 @@ func (o *WorkspaceSessionOps) saveLiveState(ctx context.Context, branchID string
 		if captureErr != nil {
 			return versionstore.Snapshot{}, nil, fmt.Errorf("capture baseline of %s: %w", branchID, captureErr)
 		}
-		if head, err = o.commitAndPublish(ctx, baseline, stats, 0); err != nil {
+		if head, err = o.acceptCapturedState(ctx, baseline, stats, 0, recoveryToken); err != nil {
 			return versionstore.Snapshot{}, nil, err
 		}
 		return head, &head, nil
@@ -111,12 +123,22 @@ func (o *WorkspaceSessionOps) saveLiveState(ctx context.Context, branchID string
 		return versionstore.Snapshot{}, nil, fmt.Errorf("capture live state of %s: %w", branchID, err)
 	}
 	if !changed {
-		return current, nil, nil
+		err = o.Store.CheckRecoveryToken(ctx, o.Version.SubjectRoot, recoveryToken)
+		return current, nil, err
 	}
-	if head, err = o.commitAndPublish(ctx, drift, stats, meta.Generation); err != nil {
+	if head, err = o.acceptCapturedState(ctx, drift, stats, meta.Generation, recoveryToken); err != nil {
 		return versionstore.Snapshot{}, nil, err
 	}
 	return head, &head, nil
+}
+
+func (o *WorkspaceSessionOps) acceptCapturedState(ctx context.Context, snapshot versionstore.Snapshot, stats versionstore.CaptureStats, expectedGeneration int64, recoveryToken string) (published versionstore.Snapshot, err error) {
+	err = o.Store.WithRecoveryToken(ctx, o.Version.SubjectRoot, recoveryToken, func() error {
+		var publishErr error
+		published, publishErr = o.commitAndPublish(ctx, snapshot, stats, expectedGeneration)
+		return publishErr
+	})
+	return published, err
 }
 
 func (o *WorkspaceSessionOps) markMaterialized(ctx context.Context, snapshot versionstore.Snapshot) error {
@@ -133,7 +155,8 @@ func (o *WorkspaceSessionOps) materialize(ctx context.Context, target, current v
 		return versionstore.MaterializeResult{}, err
 	}
 	return o.Store.Materialize(ctx, versionstore.MaterializeRequest{
-		Root: o.Version.SubjectRoot, SnapshotID: target, CurrentSnapshotID: current, ExcludeSubtrees: subtrees,
+		Root: o.Version.SubjectRoot, SubjectIdentity: o.Version.SubjectIdentity,
+		SnapshotID: target, CurrentSnapshotID: current, ExcludeSubtrees: subtrees,
 	})
 }
 
@@ -224,7 +247,7 @@ func (o *WorkspaceSessionOps) fork(ctx context.Context, name, target string, new
 	if target != "" {
 		reason = versionstore.SnapshotCheckoutSave
 	}
-	activeHead, _, err := o.saveLiveState(ctx, active, reason)
+	activeHead, _, err := o.saveLiveState(ctx, active, reason, state.RecoveryToken())
 	if err != nil {
 		return WorkspaceForkResult{}, err
 	}
@@ -356,7 +379,7 @@ func (o *WorkspaceSessionOps) Checkout(ctx context.Context, target string) (Work
 	}
 	previous := o.Tree.ActiveBranch
 	SnapshotBranchState(o.Workspace, o.Tree, previous)
-	activeHead, saved, err := o.saveLiveState(ctx, previous, versionstore.SnapshotCheckoutSave)
+	activeHead, saved, err := o.saveLiveState(ctx, previous, versionstore.SnapshotCheckoutSave, state.RecoveryToken())
 	if err != nil {
 		return WorkspaceCheckoutResult{}, err
 	}
@@ -433,13 +456,13 @@ func (o *WorkspaceSessionOps) Restore(ctx context.Context, id versionstore.Snaps
 		return versionstore.Snapshot{}, versionstore.MaterializeResult{}, fmt.Errorf("%w: %s is %s in workspace %s", versionstore.ErrWorkspaceSnapshotUnavailable, id, target.State, target.WorkspaceID)
 	}
 	active := o.Tree.ActiveBranch
-	head, current, forensic, err := o.restoreStartingPoint(ctx, active, state.RecoveryRequired)
+	head, current, err := o.restoreStartingPoint(ctx, active, state)
 	if err != nil {
 		return versionstore.Snapshot{}, versionstore.MaterializeResult{}, err
 	}
 	op, err := o.Store.CreateOperation(ctx, versionstore.Operation{
 		WorkspaceID: o.Version.WorkspaceID, BranchID: active, Kind: versionstore.OperationRestore,
-		FromSnapshotID: current, TargetBranchID: active,
+		FromSnapshotID: current, TargetBranchID: active, RecoveryToken: state.RecoveryToken(),
 	})
 	if err != nil {
 		return versionstore.Snapshot{}, versionstore.MaterializeResult{}, err
@@ -470,43 +493,62 @@ func (o *WorkspaceSessionOps) Restore(ctx context.Context, id versionstore.Snaps
 	if err != nil {
 		return node, materialized, fmt.Errorf("materialize restore: %w", err)
 	}
-	if forensic != "" {
-		if err = o.Store.OrphanSnapshot(ctx, forensic); err != nil {
-			return node, materialized, err
-		}
-	}
-	if err = o.step(ctx, op, versionstore.OperationCompleted, ""); err != nil {
+	if err = o.step(ctx, op, versionstore.OperationMaterialized, ""); err != nil {
 		return node, materialized, err
 	}
-	if err = o.clearRecovery(ctx); err != nil {
-		return node, materialized, err
-	}
-	return node, materialized, o.markMaterialized(ctx, node)
+	recoveryErr, err := o.finishRestore(ctx, op, node)
+	return node, materialized, errors.Join(recoveryErr, err)
 }
 
 // restoreStartingPoint returns the branch head the restore node descends
 // from and the snapshot describing the live managed paths.
-func (o *WorkspaceSessionOps) restoreStartingPoint(ctx context.Context, branchID string, recovering bool) (head versionstore.Snapshot, current, forensic versionstore.SnapshotID, err error) {
-	if !recovering {
-		head, _, err = o.saveLiveState(ctx, branchID, versionstore.SnapshotCheckoutSave)
-		return head, head.ID, "", err
+func (o *WorkspaceSessionOps) restoreStartingPoint(ctx context.Context, branchID string, state versionstore.SubjectState) (head versionstore.Snapshot, current versionstore.SnapshotID, err error) {
+	if !state.RecoveryRequired {
+		head, _, err = o.saveLiveState(ctx, branchID, versionstore.SnapshotCheckoutSave, state.RecoveryToken())
+		return head, head.ID, err
 	}
 	head, _, ok, err := o.Store.GetBranchHead(ctx, o.Version.WorkspaceID, branchID)
 	if err != nil {
-		return versionstore.Snapshot{}, "", "", err
+		return versionstore.Snapshot{}, "", err
 	}
 	if !ok {
-		return versionstore.Snapshot{}, "", "", fmt.Errorf("%w: branch %q has no accepted head to restore from", versionstore.ErrWorkspaceSnapshotUnavailable, branchID)
+		return versionstore.Snapshot{}, "", fmt.Errorf("%w: branch %q has no accepted head to restore from", versionstore.ErrWorkspaceSnapshotUnavailable, branchID)
 	}
 	req, err := o.Version.captureRequest(ctx, branchID, head.ID, versionstore.SnapshotCheckoutSave)
 	if err != nil {
-		return versionstore.Snapshot{}, "", "", err
+		return versionstore.Snapshot{}, "", err
 	}
 	live, _, err := o.Store.Capture(ctx, req)
 	if err != nil {
-		return versionstore.Snapshot{}, "", "", fmt.Errorf("capture unaccepted live state: %w", err)
+		return versionstore.Snapshot{}, "", fmt.Errorf("capture unaccepted live state: %w", err)
 	}
-	return head, live.ID, live.ID, nil
+	return head, live.ID, nil
+}
+
+func (o *WorkspaceSessionOps) finishRestore(ctx context.Context, op versionstore.Operation, node versionstore.Snapshot) (recoveryErr, err error) {
+	previous, err := o.Store.GetSnapshot(ctx, op.FromSnapshotID)
+	if err != nil {
+		return nil, err
+	}
+	if previous.State == versionstore.StatePending {
+		if err := o.Store.OrphanSnapshot(ctx, previous.ID); err != nil {
+			return nil, err
+		}
+	}
+	if err := workspaceStage("restore:materialized"); err != nil {
+		return nil, err
+	}
+	if err := versionstore.CheckSubjectIdentity(o.Version.SubjectRoot, o.Version.SubjectIdentity); err != nil {
+		return nil, err
+	}
+	recoveryErr = o.Store.ClearRecovery(ctx, o.Version.SubjectRoot, op.RecoveryToken)
+	if recoveryErr != nil && !errors.Is(recoveryErr, versionstore.ErrWorkspaceRecoveryChanged) {
+		return nil, recoveryErr
+	}
+	if err := o.markMaterialized(ctx, node); err != nil {
+		return recoveryErr, err
+	}
+	return recoveryErr, o.step(ctx, op, versionstore.OperationCompleted, "")
 }
 
 // Adopt accepts the live state after a recovery-required stop as the active
@@ -528,21 +570,34 @@ func (o *WorkspaceSessionOps) Adopt(ctx context.Context) (versionstore.Snapshot,
 	if err != nil {
 		return versionstore.Snapshot{}, err
 	}
+	if err := workspaceStage("adopt:before_capture"); err != nil {
+		return versionstore.Snapshot{}, err
+	}
+	if err := o.Store.CheckRecoveryToken(ctx, o.Version.SubjectRoot, state.RecoveryToken()); err != nil {
+		return versionstore.Snapshot{}, err
+	}
 	snapshot, stats, err := o.Store.Capture(ctx, req)
 	if err != nil {
 		return versionstore.Snapshot{}, fmt.Errorf("capture adopted state: %w", err)
+	}
+	if err := workspaceStage("adopt:captured"); err != nil {
+		return versionstore.Snapshot{}, err
 	}
 	expected := int64(0)
 	if hasHead {
 		expected = meta.Generation
 	}
-	if snapshot, err = o.commitAndPublish(ctx, snapshot, stats, expected); err != nil {
+	if snapshot, err = o.acceptCapturedState(ctx, snapshot, stats, expected, state.RecoveryToken()); err != nil {
 		return versionstore.Snapshot{}, err
 	}
-	if err = o.clearRecovery(ctx); err != nil {
+	if err := versionstore.CheckSubjectIdentity(o.Version.SubjectRoot, o.Version.SubjectIdentity); err != nil {
 		return snapshot, err
 	}
-	return snapshot, o.markMaterialized(ctx, snapshot)
+	recoveryErr := o.Store.ClearRecovery(ctx, o.Version.SubjectRoot, state.RecoveryToken())
+	if recoveryErr != nil && !errors.Is(recoveryErr, versionstore.ErrWorkspaceRecoveryChanged) {
+		return snapshot, recoveryErr
+	}
+	return snapshot, errors.Join(recoveryErr, o.markMaterialized(ctx, snapshot))
 }
 
 // SnapshotNow records the live state of the active branch (manual snapshot).
@@ -554,15 +609,9 @@ func (o *WorkspaceSessionOps) SnapshotNow(ctx context.Context) (versionstore.Sna
 	if err = refuseWhileRecovering(state); err != nil {
 		return versionstore.Snapshot{}, false, err
 	}
-	head, saved, err := o.saveLiveState(ctx, o.Tree.ActiveBranch, versionstore.SnapshotManual)
+	head, saved, err := o.saveLiveState(ctx, o.Tree.ActiveBranch, versionstore.SnapshotManual, state.RecoveryToken())
 	if err != nil {
 		return versionstore.Snapshot{}, false, err
 	}
 	return head, saved != nil, o.markMaterialized(ctx, head)
-}
-
-func (o *WorkspaceSessionOps) clearRecovery(ctx context.Context) error {
-	return o.Store.UpdateSubjectState(ctx, o.Version.SubjectRoot, func(state *versionstore.SubjectState) {
-		state.RecoveryRequired, state.RecoveryCode, state.RecoveryDetail = false, "", ""
-	})
 }

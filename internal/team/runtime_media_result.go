@@ -138,6 +138,10 @@ func (p *RuntimeMediaProjection) Validate() error {
 }
 
 func (c *Coordinator) runtimeMediaForOccurrence(ctx context.Context, identity submitResultRuntimeIdentity, actionID string) (*RuntimeMediaProjection, error) {
+	return c.runtimeMediaForModelOccurrence(ctx, identity, c.modelExecutionID, actionID)
+}
+
+func (c *Coordinator) runtimeMediaForModelOccurrence(ctx context.Context, identity submitResultRuntimeIdentity, modelExecutionID, actionID string) (*RuntimeMediaProjection, error) {
 	if c.executionPolicy == nil || c.executionPolicy.snapshot == nil || c.executionPolicy.snapshot.Media == nil || !c.hasDurableEventJournal() {
 		return nil, nil
 	}
@@ -145,7 +149,7 @@ func (c *Coordinator) runtimeMediaForOccurrence(ctx context.Context, identity su
 	if err != nil {
 		return nil, err
 	}
-	return runtimeMediaFromLineage(view.events, identity, c.modelExecutionID, actionID)
+	return runtimeMediaFromLineage(view.events, identity, modelExecutionID, actionID)
 }
 
 func runtimeMediaFromLineage(events []RunEvent, identity submitResultRuntimeIdentity, modelExecutionID, actionID string) (*RuntimeMediaProjection, error) {
@@ -293,19 +297,74 @@ func (c *Coordinator) finalizeTaskMedia(ctx context.Context, identity submitResu
 		return err
 	}
 	_, err = c.finalizeTaskResultRuntime(identity, func(result *TaskResult) (string, error) {
-		prior := make(map[string]bool)
-		for _, artifact := range result.RuntimeMedia.artifacts() {
-			prior[artifact.ID] = true
-		}
-		var artifacts []ArtifactRef
-		for _, artifact := range result.Artifacts {
-			if !prior[artifact.ID] {
-				artifacts = append(artifacts, artifact)
-			}
-		}
-		result.RuntimeMedia = projection.clone()
-		result.Artifacts = append(artifacts, projection.artifacts()...)
+		attachTaskRuntimeMedia(result, projection)
 		return "", nil
 	})
 	return err
+}
+
+func (c *Coordinator) directNormalizedWorkMedia(ctx context.Context, item *TodoItem, result *TaskResult, receipt *ExecutionReceipt) (*RuntimeMediaProjection, error) {
+	source, ok := normalizationWorkEvidenceIdentity(item)
+	if !ok {
+		return nil, rejectLocalResult(RepairFailureSource, errTaskResultStale)
+	}
+	fanoutModelID := ""
+	if c.isModelFanoutLeaf(item.ID) {
+		fanoutModelID = receipt.ModelExecutionID
+	}
+	return c.normalizedWorkMedia(ctx, source, fanoutModelID, result, receipt)
+}
+
+func (c *Coordinator) finalizeLiveNormalizedResult(ctx context.Context, item *TodoItem, result *TaskResult, receipt *ExecutionReceipt) (*TaskResult, error) {
+	if taskResultStatusIsSuccessful(result.Status) {
+		if err := c.validateRequiredEvidenceDeliveryForResult(ctx, item.ID, receipt.Attempt, result, receipt.RunID); err != nil {
+			return nil, rejectNormalizationRecoveryRead(err)
+		}
+	}
+	projection, err := c.directNormalizedWorkMedia(ctx, item, result, receipt)
+	if err != nil || projection == nil {
+		return result, err
+	}
+	return c.publishNormalizedWorkMedia(item.ID, projection, receipt)
+}
+
+func (c *Coordinator) publishNormalizedWorkMedia(taskID string, projection *RuntimeMediaProjection, receipt *ExecutionReceipt) (*TaskResult, error) {
+	identity, ok := c.activeTaskResultOccurrence(taskID)
+	if !ok {
+		return nil, rejectLocalResult(RepairFailureSource, errTaskResultStale)
+	}
+	if _, err := c.finalizeTaskResultRuntime(identity, func(finalized *TaskResult) (string, error) {
+		attachTaskRuntimeMedia(finalized, projection)
+		return "", nil
+	}); err != nil {
+		return nil, rejectLocalResultPersistence(err)
+	}
+	result := c.GetTaskResult(taskID)
+	if result == nil {
+		return nil, rejectLocalResult(RepairFailureSource, errTaskResultStale)
+	}
+	receipt.RuntimeMediaHash = projection.Hash
+	receipt.SubmittedResult = cloneTaskResult(result)
+	if receipt.RepairProvenance != nil {
+		receipt.RepairProvenance.SubmittedResult = cloneTaskResult(result)
+	}
+	if err := c.setAttemptReceipt(taskID, receipt); err != nil {
+		return nil, rejectLocalResultPersistence(err)
+	}
+	return result, nil
+}
+
+func attachTaskRuntimeMedia(result *TaskResult, projection *RuntimeMediaProjection) {
+	prior := make(map[string]bool)
+	for _, artifact := range result.RuntimeMedia.artifacts() {
+		prior[artifact.ID] = true
+	}
+	var artifacts []ArtifactRef
+	for _, artifact := range result.Artifacts {
+		if !prior[artifact.ID] {
+			artifacts = append(artifacts, artifact)
+		}
+	}
+	result.RuntimeMedia = projection.clone()
+	result.Artifacts = append(artifacts, projection.artifacts()...)
 }

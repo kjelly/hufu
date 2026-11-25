@@ -12,6 +12,10 @@ import (
 // validateResumeSources runs before any provider boundary. Completed sources
 // must match canonical replay, their frozen inputs, contract and sealed bytes.
 func (c *Coordinator) validateResumeSources(ctx context.Context) error {
+	return c.admitResumeSources(ctx, false)
+}
+
+func (c *Coordinator) admitResumeSources(ctx context.Context, settleActiveCollections bool) error {
 	resume, _ := ctx.Value(sessionResumeKey{}).(bool)
 	if !resume {
 		return nil
@@ -43,7 +47,7 @@ func (c *Coordinator) validateResumeSources(ctx context.Context) error {
 	}) {
 		return fail(fmt.Errorf("frozen inputs have no matching canonical source for this team and branch"))
 	}
-	if err := c.validateInventoryOccurrences(items); err != nil {
+	if err := c.validateInventoryOccurrences(ctx, items); err != nil {
 		return fail(err)
 	}
 	for _, item := range items {
@@ -60,15 +64,11 @@ func (c *Coordinator) validateResumeSources(ctx context.Context) error {
 			return fail(fmt.Errorf("task %s frozen inputs differ from the selected recovery snapshot", item.ID))
 		}
 		if item.Status != TaskDone {
-			if checkpoint := currentResultCollection(item); checkpoint != nil {
-				if _, err := c.loadCollectionWork(ctx, item, checkpoint); err != nil {
-					return fail(fmt.Errorf("task %s collection evidence: %w", item.ID, err))
+			if err := c.validateActiveResumeCollection(ctx, item); err != nil {
+				if settleActiveCollections && isInterruptedStatus(item.Status) && isCommittedNormalizedCollection(item) {
+					return c.classifyCommittedCollectionRead(item, taskDefFromTodoItem(item), err)
 				}
-				if checkpoint.State == ResultCollectionCommitted {
-					if _, err := c.acceptedCollectionResult(ctx, item, checkpoint); err != nil {
-						return fail(fmt.Errorf("task %s accepted collection: %w", item.ID, err))
-					}
-				}
+				return fail(err)
 			}
 
 			if item.ResultCandidate != nil {
@@ -103,6 +103,22 @@ func (c *Coordinator) validateResumeSources(ctx context.Context) error {
 		}
 	}
 
+	return nil
+}
+
+func (c *Coordinator) validateActiveResumeCollection(ctx context.Context, item *TodoItem) error {
+	checkpoint := currentResultCollection(item)
+	if checkpoint == nil {
+		return nil
+	}
+	if _, err := c.loadCollectionWork(ctx, item, checkpoint); err != nil {
+		return fmt.Errorf("task %s collection evidence: %w", item.ID, err)
+	}
+	if checkpoint.State == ResultCollectionCommitted {
+		if _, err := c.acceptedCollectionResult(ctx, item, checkpoint); err != nil {
+			return fmt.Errorf("task %s accepted collection: %w", item.ID, err)
+		}
+	}
 	return nil
 }
 
@@ -169,14 +185,14 @@ func (c *Coordinator) validateCompletedResumeEvidence(ctx context.Context, item 
 	if item.TypedResult == nil || !taskResultStatusIsSuccessful(item.TypedResult.Status) {
 		return fmt.Errorf("task %s has no accepted successful result", item.ID)
 	}
-	if err := c.validateAcceptedDependencyPayload(item); err != nil {
+	if err := c.validateAcceptedDependencyPayloadWithContext(ctx, item); err != nil {
 		return fmt.Errorf("task %s result: %w", item.ID, err)
 	}
 	receipt := recoveredEvidenceReceipt(item, snapshot)
 	if receipt == nil {
 		return fmt.Errorf("task %s has no successful input-bound original receipt", item.ID)
 	}
-	if item.TypedResult.StructuredPayload != nil && receipt.ResultPayloadSHA256 != item.TypedResult.StructuredPayload.SHA256 {
+	if item.TypedResult.StructuredPayload != nil && !receiptMatchesResultPayload(receipt, item.TypedResult.StructuredPayload) {
 		return fmt.Errorf("task %s receipt payload hash differs from its accepted result", item.ID)
 	}
 	if ref := item.ResultContract; ref != nil && (receipt.ResultContractID != ref.ID || receipt.ResultContractSHA256 != ref.SchemaSHA256) && !validContractRevalidation(item, receipt) {
@@ -206,6 +222,10 @@ func sameResumeTaskEvidence(stored, loaded *TodoItem) bool {
 }
 
 func (c *Coordinator) validateResumeTranscript(ctx context.Context, receipt *ExecutionReceipt) error {
+	return c.verifyResumeTranscript(ctx, receipt, "")
+}
+
+func (c *Coordinator) verifyResumeTranscript(ctx context.Context, receipt *ExecutionReceipt, mediaType string) error {
 	store, err := OpenFileArtifactStoreReadOnly(c.artifactStoreRootPath(), c.artifactStoreRootPath())
 	if err != nil {
 		return err
@@ -215,7 +235,7 @@ func (c *Coordinator) validateResumeTranscript(ctx context.Context, receipt *Exe
 		return err
 	}
 	if ref.RunID != receipt.RunID || ref.TaskID != receipt.TaskID || ref.Agent != receipt.ProducerID || ref.Attempt != receipt.Attempt ||
-		ref.Bytes < 0 || ref.Bytes > 16<<20 || receipt.TranscriptRef != "sha256-"+ref.SHA256 {
+		mediaType != "" && (ref.MediaType != mediaType || ref.Bytes != ref.ByteSize) || ref.Bytes < 0 || ref.Bytes > 16<<20 || receipt.TranscriptRef != "sha256-"+ref.SHA256 {
 		return fmt.Errorf("original transcript identity/size/digest does not match receipt")
 	}
 	body, err := store.Open(ctx, receipt.TranscriptRef)
@@ -224,7 +244,7 @@ func (c *Coordinator) validateResumeTranscript(ctx context.Context, receipt *Exe
 	}
 	defer func() { _ = body.Close() }()
 	hash := sha256.New()
-	n, err := io.Copy(hash, io.LimitReader(body, (16<<20)+1))
+	n, err := io.Copy(hash, io.LimitReader(contextArtifactReader{ctx: ctx, reader: body}, (16<<20)+1))
 	if err != nil {
 		return err
 	}
@@ -257,6 +277,11 @@ func (c *Coordinator) validateResumeRepairSources(ctx context.Context, taskID st
 	if err := validateResultRepairTarget(item); err != nil {
 		return fmt.Errorf("task %s: %w", taskID, err)
 	}
+	if canResumeDirectNormalization(item) {
+		if _, err := c.loadDirectNormalizationRecovery(ctx, item); err != nil {
+			return fmt.Errorf("task %s normalization evidence: %w", taskID, err)
+		}
+	}
 	if err := c.validateResumeTranscript(ctx, item.ExecutionReceipt); err != nil {
 		return fmt.Errorf("task %s: %w", taskID, err)
 	}
@@ -270,7 +295,7 @@ func (c *Coordinator) validateResumeRepairSources(ctx context.Context, taskID st
 	if len(results) != len(resultDependencyIDs(item)) {
 		return fmt.Errorf("task %s lacks accepted evidence_from results", taskID)
 	}
-	if err := c.validateDependencyPayloads(results); err != nil {
+	if err := c.validateDependencyPayloads(ctx, taskID, results); err != nil {
 		return err
 	}
 	return nil

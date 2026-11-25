@@ -95,7 +95,7 @@ For completed work submit a `structured_payload` object following
 `schemas/report-v3.json` and the runtime's Fixed Collections submission
 format. Omit outer `status` and `summary`, and omit `audit_complete`,
 `coverage`, `completion`, `scope`, `snapshot_coverage`,
-`test_verification`, `supplement_outcomes` and `input_review` inside
+`test_verification`, `canonical_findings`, `supplement_outcomes` and `input_review` inside
 the payload. Runtime derives completion and counts and binds the complete
 source records, hashes and native outputs. Preserve semantic limitations in
 structured gap decisions or brief `details`. Use actual JSON strings.

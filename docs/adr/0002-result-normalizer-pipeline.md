@@ -23,7 +23,7 @@ LLM workers frequently produce minor formatting deviations, line-number offsets 
 
 ## Decision Outcome
 
-Chosen option: Phased adoption of Option A (Milestone 1) transitioning to Option B (Milestones 2–3). Option A immediately decouples domain normalization in `.agent-teams/` without runtime risk. Option B introduces a team-neutral pre-submission pipeline hook in `result-contract:` where the runtime invokes a team-declared action provider before schema validation.
+Chosen option: Phased adoption of Option A (Milestone 1) transitioning to Option B (Milestones 2–3). Option A immediately decouples domain normalization in `.agent-teams/` without runtime risk. Option B introduces a team-neutral pre-submission pipeline hook in `result-contract:` where the runtime invokes a team-declared action provider before final schema validation. The first implementation admits only registered trusted-static Go providers on Linux and rejects unsupported submission backends during preflight.
 
 ### Consequences
 
@@ -31,6 +31,34 @@ Chosen option: Phased adoption of Option A (Milestone 1) transitioning to Option
 - Good, because dual-receipt hashing records both raw model outputs and canonical normalized forms for auditable provenance.
 - Good, because normalizer failures fail-closed without consuming model retry budgets.
 - Bad, because Option B adds an extra subprocess invocation during `submit_result`.
+
+The child receives the bounded JSON draft on stdin and returns one JSON object
+on stdout. Its environment and Go imports are restricted to data processing.
+The parent applies a 30-second deadline, shortened by the provider timeout
+when applicable. Linux enforces an address-space limit in the child.
+
+The submission occurrence owns the staged output. The runtime durably reserves
+the invocation before starting the child. Prepared commit, read-only recovery
+assessment and replay consume recorded evidence. A reservation with no durable
+output stays blocked. The receipt binds both payload hashes and the hash of
+the action's emitted bytes. Create-only records under the runtime control root
+independently bind the original dispatch, the action output and completed
+verification outcomes. The original bytes and their independent digest are
+published together as one sealed record, so a failed SQLite projection can
+be completed on restart without running the action or verification again.
+Command verification masks credentials before sealing its diagnostics.
+Successful isolated verification also binds the full workspace delta manifest.
+The runtime compares that digest before preparing or replaying an apply.
+The verified manifest and its apply intent are sealed in a single record
+before publication. Recovery checks the sealed records before reusing a
+checkpoint or starting a sibling. Historical dual-hash results remain readable
+when the stored receipt matches the original admitted schema and both payload
+digests.
+
+The runtime rejects any draft that secret redaction would change before
+starting the child. If redaction would change the emitted JSON, the runtime
+records an action failure. Successful replay uses the exact previously sealed
+bytes and verifies their digests, including the original draft's digest.
 
 ### Confirmation
 

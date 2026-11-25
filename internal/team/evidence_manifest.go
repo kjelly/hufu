@@ -7,6 +7,8 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 )
@@ -565,3 +567,99 @@ func (*defaultEvidenceService) FinalizeRunManifest(ctx context.Context, req Evid
 }
 
 func nowUTC() time.Time { return time.Now().UTC() }
+
+func verifyEvidenceBinding(manifest EvidenceManifest, result EvidenceResult) error {
+	if result.Binding == nil {
+		return fmt.Errorf("evidence requirement %q has no sealed execution binding", result.RequirementID)
+	}
+	b := result.Binding
+	wantTask, err := evidenceProducerTask(manifest, result)
+	if err != nil {
+		return err
+	}
+	if (b.RunID != manifest.RunID && !manifest.recoveryBindingMatches(b)) || b.TaskID == "" || b.TaskID != wantTask || b.Attempt <= 0 || b.ModelExecutionID == "" || b.ProducerID == "" || b.TranscriptRef == "" {
+		return fmt.Errorf("evidence requirement %q has conflicting execution binding", result.RequirementID)
+	}
+	if strings.HasPrefix(b.TranscriptRef, "sha256-") && !slices.Contains(b.ArtifactIDs, b.TranscriptRef) {
+		return fmt.Errorf("evidence requirement %q transcript is outside artifact membership", result.RequirementID)
+	}
+	if err := verifyEvidenceInputBinding(result.RequirementID, b); err != nil {
+		return err
+	}
+	if b.ActionInvocationID != "" || b.RuntimeOutputsHash != "" {
+		if strings.TrimSpace(b.ActionInvocationID) == "" || !runInputHashPattern.MatchString(b.RuntimeOutputsHash) {
+			return fmt.Errorf("evidence requirement %q has incomplete runtime output binding", result.RequirementID)
+		}
+	}
+	if b.RuntimeMediaHash != "" && !runInputHashPattern.MatchString(b.RuntimeMediaHash) {
+		return fmt.Errorf("evidence requirement %q has an invalid runtime media binding", result.RequirementID)
+	}
+	wantIDs := make([]string, 0, len(result.ArtifactRefs))
+	if len(result.ArtifactRefs) == 0 {
+		return fmt.Errorf("evidence requirement %q has no transcript/artifact membership", result.RequirementID)
+	}
+	seen := make(map[string]bool, len(result.ArtifactRefs))
+	for _, ref := range result.ArtifactRefs {
+		if ref.ID == "" || seen[ref.ID] {
+			return fmt.Errorf("evidence requirement %q has invalid artifact membership", result.RequirementID)
+		}
+		seen[ref.ID] = true
+		wantIDs = append(wantIDs, ref.ID)
+		found := false
+		for _, manifestRef := range manifest.ArtifactRefs {
+			if manifestRef.ID == ref.ID && manifestRef.RunID == b.RunID && manifestRef.TaskID == b.TaskID && manifestRef.Attempt == b.Attempt && (manifestRef.Agent == "" || manifestRef.Agent == b.ProducerID) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("evidence requirement %q references artifact outside manifest", result.RequirementID)
+		}
+	}
+	gotIDs := append([]string(nil), b.ArtifactIDs...)
+	sort.Strings(wantIDs)
+	sort.Strings(gotIDs)
+	if !slices.Equal(wantIDs, gotIDs) {
+		return fmt.Errorf("evidence requirement %q has incomplete artifact membership", result.RequirementID)
+	}
+	return nil
+}
+
+// VerifiedTaskBinding returns only a binding that passed the manifest's
+// structural checks. It is the sole report-facing task identity accessor.
+func (m EvidenceManifest) VerifiedTaskBinding(taskID string) (*EvidenceBinding, bool) {
+	if taskID == "" {
+		return nil, false
+	}
+	for _, result := range m.EvidenceResults {
+		if result.RequirementID != "task:"+taskID || !strings.EqualFold(result.Status, "passed") || result.Binding == nil {
+			continue
+		}
+		if verifyEvidenceBinding(m, result) != nil {
+			return nil, false
+		}
+		binding := *result.Binding
+		binding.ArtifactIDs = append([]string(nil), result.Binding.ArtifactIDs...)
+		binding.BoundInputs = cloneStringMap(result.Binding.BoundInputs)
+		return &binding, true
+	}
+	return nil, false
+}
+
+func verifyEvidenceInputBinding(requirementID string, b *EvidenceBinding) error {
+	if b.RunInputSnapshotID != "" || b.RunInputSnapshotHash != "" || b.MaterializedActionPayloadHash != "" || len(b.BoundInputs) > 0 {
+		if b.RunInputSnapshotID == "" || !runInputHashPattern.MatchString(b.RunInputSnapshotHash) {
+			return fmt.Errorf("evidence requirement %q has incomplete invocation input binding", requirementID)
+		}
+		if (b.MaterializedActionPayloadHash != "" || len(b.BoundInputs) > 0) &&
+			(!runInputHashPattern.MatchString(b.MaterializedActionPayloadHash) || len(b.BoundInputs) == 0) {
+			return fmt.Errorf("evidence requirement %q has incomplete action input binding", requirementID)
+		}
+		for name, hash := range b.BoundInputs {
+			if strings.TrimSpace(name) == "" || !runInputHashPattern.MatchString(hash) {
+				return fmt.Errorf("evidence requirement %q has invalid bound input", requirementID)
+			}
+		}
+	}
+	return nil
+}

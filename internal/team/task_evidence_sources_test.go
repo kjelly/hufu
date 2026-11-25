@@ -38,7 +38,7 @@ func TestBindEvidenceSources(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			bound, err := c.bindEvidenceSources([]TaskDef{tc.task})
+			bound, err := c.bindEvidenceSources(t.Context(), []TaskDef{tc.task})
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("err = %v, want it to contain %q", err, tc.wantErr)

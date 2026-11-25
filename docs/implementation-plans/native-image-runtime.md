@@ -5,7 +5,9 @@
 > Verified-Commit: `2aea4d23`（M0～M4 已交付程式與離線驗證基準；非所有 backend 的真實視覺準確率驗收）
 > Supersedes: `docs/tmp/spec.md`（原提案，已移入正式計畫）
 > Superseded-By: —
-> **Implementation:** M0～M4 coding／離線驗證已交付；本文件保留設計與驗收要求，實際證據與限制見進度紀錄。Ollama 單次真實模型 smoke acceptance 見封存紀錄；Codex 真實推論仍未驗收。
+> **Implementation:** M0～M4 coding／離線驗證已交付，實際證據與限制見進度紀錄。Ollama 單次真實模型 smoke acceptance 見封存紀錄。
+>
+> **Codex App Server 暫不支援（Unsupported）。** 整合的開發、支援、專屬測試和真實推論驗收均已暫停。下文保留當時的設計與驗收要求。
 > **Target:** `github.com/kjelly/hufu`
 > **Baseline:** `b97ef843f440ab0cca85a8a453892ba2c4eef560`；2026-11-04 重新靜態核對。
 > **Scope:** 通用圖片 I/O runtime；下列工作均可由 coding agent 修改程式、文件與離線測試完成。

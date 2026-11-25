@@ -14,6 +14,7 @@ import (
 )
 
 func TestPreflightExecutionTargetsWorkerCodexChecksExecutableWithoutLaunching(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	calls := 0
 	err := preflightExecutionTargets(&team.TeamSession{Config: agent.TeamConfig{
 		WorkerModel: "codex/gpt-5.6-luna",
@@ -33,6 +34,7 @@ func TestPreflightExecutionTargetsWorkerCodexChecksExecutableWithoutLaunching(t 
 }
 
 func TestPreflightExecutionTargetsRejectsMissingCodexBeforeRuntime(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	err := preflightExecutionTargets(&team.TeamSession{Config: agent.TeamConfig{
 		WorkerModel: "codex/gpt-5.6-luna",
 	}}, &config.Config{}, team.RoleModels{}, func(string) (string, error) {

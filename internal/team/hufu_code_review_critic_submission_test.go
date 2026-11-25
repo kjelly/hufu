@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -121,10 +123,38 @@ func seedEmptyCriticReview(t *testing.T, c *Coordinator) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", ContractID: "review-primary-workset", ResultContract: &ref, WorksetBinding: &WorksetBinding{Bindings: map[string]string{"reference_candidate_ids": "[]"}}}})[0]
+	source := seedReviewSourceWorkset(t, c, TodoSpec{Agent: "worker", ContractID: "review-primary-workset", ResultContract: &ref}, "unit-0000", "frozen", "general")
 	c.storeSubmittedTaskResult(source.ID, &TaskResult{TaskID: source.ID, Agent: source.Agent, Status: TaskResultStatusSuccess, Source: "submitted", StructuredPayload: payload})
 	c.taskTracker.TodoList().UpdateStatus(source.ID, TaskDone, "reviewed")
 	return source.ID
+}
+
+func seedReviewSourceWorkset(t *testing.T, c *Coordinator, spec TodoSpec, key, revision, lens string, paths ...string) *TodoItem {
+	t.Helper()
+	child := c.taskTracker.TodoList().AddBatch([]TodoSpec{spec})[0]
+	parent := "review-source-" + child.ID
+	name := parent + ".json"
+	manifest, err := json.Marshal(WorksetManifest{SchemaVersion: WorksetSchemaVersion, Items: []WorksetItem{{
+		Key: key, TouchedPaths: paths,
+		Bindings: map[string]string{"key": key, "review_revision": revision, "lens": lens, "reference_candidate_ids": "[]", "fixture_task_id": child.ID},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(c.session.Workspace, name), manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := c.expandStructuredFanOutTask(t.Context(), TaskDef{ID: parent, Agent: spec.Agent, FanOut: &FanOutSpec{Source: name, GoalTemplate: "Review {key}"}})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("review workset fixture: %v", err)
+	}
+	receipts, err := buildWorksetReceipts(rows, []string{child.ID}, c.executionRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child.WorksetBinding = rows[0].WorksetBinding
+	child.WorksetReceipt = receipts[child.WorksetBinding.WorksetID]
+	return child
 }
 
 func seedEscalationWorkset(t *testing.T, c *Coordinator, task *TaskDef) string {

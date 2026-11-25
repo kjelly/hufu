@@ -148,7 +148,7 @@ func (c *Coordinator) assessContractResultRepair(ctx context.Context, source *Re
 				if patch.ID == id && patch.ResultContract != nil {
 					compiled := c.session.ResultContracts[patch.ResultContract.ID]
 					var err error
-					currentRuntimeInputs, err = c.resultRuntimeInputValues(compiled, id)
+					currentRuntimeInputs, err = c.resultRuntimeInputValuesWithContext(ctx, compiled, id)
 					return err
 				}
 			}
@@ -222,7 +222,7 @@ func (c *Coordinator) assessCollectionRepairBinding(ctx context.Context, plan *C
 		if compiled == nil {
 			return fmt.Errorf("recovery target result schema is unavailable")
 		}
-		inputs, err := c.resultRuntimeInputValues(compiled, item.ID)
+		inputs, err := c.resultRuntimeInputValuesWithContext(ctx, compiled, item.ID)
 		if err != nil {
 			return fmt.Errorf("recovery target runtime inputs: %w", err)
 		}

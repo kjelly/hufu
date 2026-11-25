@@ -47,6 +47,7 @@ type Operation struct {
 	IdempotencyKey string
 	TargetBranchID string
 	DetailCode     string
+	RecoveryToken  string
 	StartedAt      time.Time
 	UpdatedAt      time.Time
 }
@@ -59,6 +60,13 @@ func (o Operation) Terminal() bool {
 const operationColumns = `id, workspace_id, branch_id, kind, state, from_snapshot_id, to_snapshot_id,
 idempotency_key, target_branch_id, detail_code, started_at, updated_at`
 
+func (s *Store) readOperationColumns() string {
+	if s.legacyOperations {
+		return operationColumns + ", ''"
+	}
+	return operationColumns + ", recovery_token"
+}
+
 func scanOperation(row rowScanner) (Operation, error) {
 	var (
 		op                            Operation
@@ -66,7 +74,7 @@ func scanOperation(row rowScanner) (Operation, error) {
 		kind, state                   string
 		startedAt, updatedAt          int64
 	)
-	if err := row.Scan(&op.ID, &op.WorkspaceID, &branch, &kind, &state, &from, &to, &key, &target, &op.DetailCode, &startedAt, &updatedAt); err != nil {
+	if err := row.Scan(&op.ID, &op.WorkspaceID, &branch, &kind, &state, &from, &to, &key, &target, &op.DetailCode, &startedAt, &updatedAt, &op.RecoveryToken); err != nil {
 		return Operation{}, err
 	}
 	op.BranchID, op.Kind, op.State = branch.String, OperationKind(kind), OperationState(state)
@@ -95,10 +103,10 @@ func (s *Store) CreateOperation(ctx context.Context, op Operation) (Operation, e
 	}
 	now := s.now()
 	op.StartedAt, op.UpdatedAt = now, now
-	_, err = s.db.ExecContext(ctx, `INSERT INTO operations(`+operationColumns+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err = s.db.ExecContext(ctx, `INSERT INTO operations(`+operationColumns+`, recovery_token) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		string(op.ID), op.WorkspaceID, nullString(op.BranchID), string(op.Kind), string(op.State),
 		nullString(string(op.FromSnapshotID)), nullString(string(op.ToSnapshotID)), nullString(op.IdempotencyKey),
-		nullString(op.TargetBranchID), op.DetailCode, now.UnixMilli(), now.UnixMilli())
+		nullString(op.TargetBranchID), op.DetailCode, now.UnixMilli(), now.UnixMilli(), op.RecoveryToken)
 	if err != nil {
 		return Operation{}, fmt.Errorf("create %s operation: %w", op.Kind, err)
 	}
@@ -133,7 +141,7 @@ WHERE id=? AND state NOT IN ('completed','failed')`,
 
 // GetOperation returns one operation.
 func (s *Store) GetOperation(ctx context.Context, id OperationID) (Operation, error) {
-	op, err := scanOperation(s.db.QueryRowContext(ctx, "SELECT "+operationColumns+" FROM operations WHERE id=?", string(id)))
+	op, err := scanOperation(s.db.QueryRowContext(ctx, "SELECT "+s.readOperationColumns()+" FROM operations WHERE id=?", string(id)))
 	if err != nil {
 		return Operation{}, fmt.Errorf("read operation %s: %w", id, err)
 	}
@@ -142,7 +150,7 @@ func (s *Store) GetOperation(ctx context.Context, id OperationID) (Operation, er
 
 // IncompleteOperations lists operations that recovery must finish, oldest first.
 func (s *Store) IncompleteOperations(ctx context.Context) ([]Operation, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+operationColumns+" FROM operations WHERE state NOT IN ('completed','failed') ORDER BY started_at, id")
+	rows, err := s.db.QueryContext(ctx, "SELECT "+s.readOperationColumns()+" FROM operations WHERE state NOT IN ('completed','failed') ORDER BY started_at, id")
 	if err != nil {
 		return nil, fmt.Errorf("list incomplete operations: %w", err)
 	}

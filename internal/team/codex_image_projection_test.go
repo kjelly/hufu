@@ -48,6 +48,7 @@ func codexImageProjectionRequest(t *testing.T, c *Coordinator, ctx context.Conte
 }
 
 func TestCodexImageProjectionRebuildsStablePathsAndRejectsTampering(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	for _, scenario := range []string{"missing", "matching", "changed", "writable", "symlink", "parent symlink"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, ctx, request, hash := codexImageProjectionFixture(t)
@@ -111,6 +112,7 @@ func TestCodexImageProjectionRebuildsStablePathsAndRejectsTampering(t *testing.T
 }
 
 func TestCodexImageProjectionRechecksRevokedLease(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	c, ctx, request, hash := codexImageProjectionFixture(t)
 	if err := c.CommitTaskTransition(ctx, request.TaskID, TaskInProgress, TaskVerifying, "revoke", "", nil); err != nil {
 		t.Fatal(err)
@@ -122,6 +124,7 @@ func TestCodexImageProjectionRechecksRevokedLease(t *testing.T) {
 }
 
 func TestCodexImageProjectionRejectsJournalRevocationWithStaleMemory(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	c, ctx, request, hash := codexImageProjectionFixture(t)
 	item := c.todoItemByID(request.TaskID)
 	payload := taskTransitionPayload(item)
@@ -144,6 +147,7 @@ func TestCodexImageProjectionRejectsJournalRevocationWithStaleMemory(t *testing.
 }
 
 func TestCodexImageProjectionSharesCopiesUntilLastConsumer(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	c, ctx, request, hash := codexImageProjectionFixture(t)
 	first, err := newCodexImageProjection(ctx, c, request, hash)
 	if err != nil {
@@ -181,6 +185,7 @@ func TestCodexImageProjectionSharesCopiesUntilLastConsumer(t *testing.T) {
 }
 
 func TestCodexImageProjectionCopyQuotaWhileConsumersAreActive(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	for _, scenario := range []string{"fits", "blob limit", "byte limit"} {
 		t.Run(scenario, func(t *testing.T) {
 			size := int64(len(mediaStorePNG(t)))
@@ -237,6 +242,7 @@ func TestCodexImageProjectionCopyQuotaWhileConsumersAreActive(t *testing.T) {
 }
 
 func TestCodexImageProjectionCancelledWaitPreservesConsumer(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	c, ctx, request, hash := codexImageProjectionFixture(t)
 	first, err := newCodexImageProjection(ctx, c, request, hash)
 	if err != nil {
@@ -271,8 +277,9 @@ func TestCodexImageProjectionCancelledWaitPreservesConsumer(t *testing.T) {
 
 func TestCodexImageProjectionRetainsCopiesWhenCleanupIsContended(t *testing.T) {
 	if testing.Short() {
-		t.Skip("integration: mise run test-integration")
+		t.Skip(unsupportedCodexIntegrationReason)
 	}
+	skipUnsupportedCodexIntegration(t)
 	c, ctx, request, hash := codexImageProjectionFixture(t)
 	first, err := newCodexImageProjection(ctx, c, request, hash)
 	if err != nil {
@@ -307,6 +314,7 @@ func TestCodexImageProjectionRetainsCopiesWhenCleanupIsContended(t *testing.T) {
 }
 
 func TestCodexImageProjectionConcurrentQuotaAdmission(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	c, ctx, request, hash := codexImageProjectionFixture(t, func(session *TeamSession) { session.MediaPolicy.Image.MaxBranchBlobs = 1 })
 	_, otherCtx, otherRequest, otherHash := codexImageProjectionRequest(t, c, ctx, admittedMediaTask(t, c, ctx, "competing-turn"))
 	requests := []AttemptRequest{request, otherRequest}

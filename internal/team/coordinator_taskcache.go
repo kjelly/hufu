@@ -414,6 +414,9 @@ func cloneVerificationResult(src *VerificationResult) *VerificationResult {
 	}
 	copy := *src
 	copy.Spec = cloneVerificationSpecPtr(src.Spec)
+	if src.EnvironmentFailure != nil {
+		copy.EnvironmentFailure = new(*src.EnvironmentFailure)
+	}
 	copy.TaskOutputAssertions = append([]TaskOutputAssertionResult(nil), src.TaskOutputAssertions...)
 	return &copy
 }

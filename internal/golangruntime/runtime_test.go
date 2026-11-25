@@ -223,3 +223,72 @@ func Run(ctx context.Context, _ io.Reader, out io.Writer) error {
 		t.Fatalf("descendant survived cancellation: %v", err)
 	}
 }
+
+func TestExecuteNormalizerUsesBoundedDataOnlyChild(t *testing.T) {
+	if !NormalizerSupported() {
+		t.Skip("bounded normalizers require Linux")
+	}
+	scratch := t.TempDir()
+	t.Setenv("TMPDIR", scratch)
+	for _, tc := range []struct {
+		name, source, stderr string
+		want                 string
+		limit                int
+		hang, truncated      bool
+	}{
+		{name: "echo", source: strings.Replace(minimalSource("_, err := io.Copy(out, in); return err"), "_ io.Reader", "in io.Reader", 1), want: `{"draft":true}`, limit: 1024},
+		{name: "output limit", source: strings.Replace(minimalSource("_, err := io.Copy(out, in); return err"), "_ io.Reader", "in io.Reader", 1), want: `{"d`, limit: 3, truncated: true},
+		{name: "deadline", source: minimalSource("for {}"), limit: 1024, hang: true},
+		{name: "filesystem import", source: `package main
+import ("context"; "io"; "os")
+func Run(context.Context, io.Reader, io.Writer) error { return os.ErrNotExist }
+`, limit: 1024, stderr: "os"},
+		{name: "parser requires source bytes", source: `package main
+import ("context"; "io"; "go/parser"; "go/token")
+func Run(_ context.Context, _ io.Reader, _ io.Writer) error { _, err := parser.ParseFile(token.NewFileSet(), "sample.go", nil, 0); return err }
+`, limit: 1024, stderr: "must pass source bytes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			source := filepath.Join(root, "action")
+			if err := os.Mkdir(source, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			writeSource(t, source, tc.source)
+			program, err := Prepare(root, "action")
+			if err != nil {
+				t.Fatal(err)
+			}
+			timeout := 5 * time.Second
+			if tc.hang {
+				timeout = 250 * time.Millisecond
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), timeout)
+			defer cancel()
+			result, err := ExecuteNormalizer(ctx, "", program, []byte(`{"draft":true}`), tc.limit)
+			switch {
+			case tc.hang:
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("deadline failure = %v, stderr = %s", err, result.Stderr)
+				}
+			case tc.stderr != "":
+				if err == nil || !strings.Contains(string(result.Stderr), tc.stderr) {
+					t.Fatalf("child allowed unsupported input: %v, stderr = %s", err, result.Stderr)
+				}
+			default:
+				if err != nil || string(result.Stdout) != tc.want || result.StdoutTruncated != tc.truncated {
+					t.Fatalf("child output = %q, truncated = %v, err = %v, stderr = %s", result.Stdout, result.StdoutTruncated, err, result.Stderr)
+				}
+			}
+			entries, err := os.ReadDir(scratch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				if strings.HasPrefix(entry.Name(), "hufu-normalizer-") {
+					t.Fatal("normalizer staging directory leaked")
+				}
+			}
+		})
+	}
+}

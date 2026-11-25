@@ -3,8 +3,11 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -116,6 +119,11 @@ func newCodexEndToEndCoordinator(t *testing.T, workspace string, steps []fakeCod
 // reach a scripted turn at all.
 func admitCodexE2ETask(t *testing.T, c *Coordinator, worker *agent.AgentDef, verify *VerificationSpec, grounded ...bool) *TodoItem {
 	t.Helper()
+	return admitCodexE2ETaskWithSpec(t, c, worker, verify, nil, grounded...)
+}
+
+func admitCodexE2ETaskWithSpec(t *testing.T, c *Coordinator, worker *agent.AgentDef, verify *VerificationSpec, configure func(*TodoSpec), grounded ...bool) *TodoItem {
+	t.Helper()
 	ids := c.taskTracker.TodoList().ReserveIDs(1)
 	resolvedModel := c.resolveAgentModel(worker, "")
 	canonical, err := c.canonicalizeTaskOccurrence(TaskDef{Agent: worker.Name}, worker, resolvedModel)
@@ -135,6 +143,9 @@ func admitCodexE2ETask(t *testing.T, c *Coordinator, worker *agent.AgentDef, ver
 		VerifySpec:       verify,
 		SubagentProvider: canonical.SubagentProvider,
 	}
+	if configure != nil {
+		configure(&spec)
+	}
 	projection, err := taskOccurrenceProjectionFromSpec(spec, ids[0])
 	if err != nil {
 		t.Fatalf("taskOccurrenceProjectionFromSpec: %v", err)
@@ -149,6 +160,385 @@ func admitCodexE2ETask(t *testing.T, c *Coordinator, worker *agent.AgentDef, ver
 	return items[0]
 }
 
+func TestCodexStructuredResultRepairsOnlyAuthenticatedNestedClaims(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
+	const inputPath = "source.go"
+	producer := compileFixtureJSONSchema(t, "codex-accepted-source", `{"type":"object","properties":{"verified":{"type":"boolean"}}}`)
+	schema := strings.Replace(collectionReferenceSchema, `"required":["references"]`, `"required":["references","judgment"]`, 1)
+	schema = strings.Replace(schema, `"properties":{"references":`, `"properties":{"judgment":{"type":"string"},"references":`, 1)
+	compiled := compileFixtureJSONSchema(t, "codex-review", schema)
+	proposal := func(producerID, judgment string) string {
+		raw := fmt.Sprintf(`{"references":[{"producer":%q,"paths":[%q]}],"judgment":%s}`, producerID, inputPath, judgment)
+		return validProposalJSON(fmt.Sprintf(`"files_read":[%q],"structured_payload_json":%q`, inputPath, raw))
+	}
+	badSummary := func(body string) string { return strings.Replace(body, `"summary":"did the work"`, `"summary":""`, 1) }
+	valid := proposal("producer", `"accepted"`)
+	foreign := proposal("outside", "42")
+	foreignAlias := strings.Replace(badSummary(foreign), "structured_payload_json", "Structured_Payload_JSON", 1)
+	fencedForeign := "```json\n" + foreignAlias + "\n```"
+	tooManyReads := badSummary(validProposalJSON(`"Files_Read":[` + strings.Repeat(`"source.go",`, workerResultProposalMaxFilesRead) + `"unobserved.go"]`))
+	readAliases := validProposalJSON(`"files_read":["unobserved.go"],"FILES_READ":["source.go"]`)
+	pathAliases := validProposalJSON(`"proposed_files":[{"path":"unobserved.go","PATH":"source.go"}]`)
+	payloadAliases := strings.TrimSuffix(foreign, "}") + `,"Structured_Payload_JSON":"{\"references\":[]}"}`
+	outerForgedRead := validProposalJSON(`"files_read":["unobserved.go"]`)
+	foreignPayload := `{"references":[{"producer":"outside","paths":["source.go"]}]}`
+	nestedFrames := validProposalJSON(fmt.Sprintf(`"structured_payload_json":%q`, `{"references":[]}`+foreignPayload))
+	wrappedPayload := validProposalJSON(fmt.Sprintf(`"structured_payload_json":%q`, "[["+foreignPayload+"]]"))
+	singletonPayload := validProposalJSON(fmt.Sprintf(`"structured_payload_json":%q`, `{"references":{"producer":"outside","paths":["source.go"]}}`))
+	wrappedReference := validProposalJSON(fmt.Sprintf(`"structured_payload_json":%q`, `{"references":[[{"producer":"outside","paths":["source.go"]}]]}`))
+	wrappedPath := validProposalJSON(fmt.Sprintf(`"structured_payload_json":%q`, `{"references":[{"producer":"producer","paths":[["unobserved.go"]]}]}`))
+	wrappedRead := validProposalJSON(`"files_read":[["unobserved.go"]]`)
+	wrappedArtifact := validProposalJSON(`"proposed_files":[[{"path":"unobserved.go"}]]`)
+	for _, tc := range []struct {
+		name, original, repair, diagnostic string
+		reason, workReason                 RepairFailureReason
+		turns                              int
+	}{
+		{"nested shape repair", proposal("producer", "42"), valid, "judgment", "", "", 2},
+		{"outer shape repair", badSummary(valid), valid, "summary", "", "", 2},
+		{"nested foreign source", foreign, valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"outer foreign source", badSummary(foreign), valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"fenced foreign alias", fencedForeign, valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"single artifact in invalid outer frame", badSummary(validProposalJSON(`"Proposed_Files":{"Path":"unobserved.go"}`)), valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"oversized readable claims", tooManyReads, valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"read alias cannot replace source", readAliases, valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"artifact path alias cannot replace source", pathAliases, valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"payload alias cannot replace source", payloadAliases, valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"unobserved artifact in valid DTO", validProposalJSON(`"proposed_files":[{"path":"unobserved.go"}]`), valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"appended outer source", valid + outerForgedRead, valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"prefixed outer source", "Returned draft: " + outerForgedRead, valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"array wrapped source", "[" + valid + "," + outerForgedRead + "]", valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"appended nested source", nestedFrames, valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"wrapped nested source", wrappedPayload, valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"singleton nested source", singletonPayload, valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"wrapped reference entry", wrappedReference, valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"wrapped reference path", wrappedPath, valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"wrapped physical read", wrappedRead, valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"wrapped physical artifact", wrappedArtifact, valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"unobserved read in valid DTO", validProposalJSON(`"files_read":["unobserved.go"]`), valid, "", RepairFailureSource, RepairFailureSource, 1},
+		{"foreign source in rejected correction", badSummary(valid), badSummary(foreign), "summary", RepairFailureSource, RepairFailureInvalidSchema, 2},
+		{"foreign artifact in rejected correction", badSummary(valid), badSummary(validProposalJSON(`"Proposed_Files":{"Path":"unobserved.go"}`)), "summary", RepairFailureSource, RepairFailureInvalidSchema, 2},
+		{"read alias in correction", badSummary(valid), readAliases, "summary", RepairFailureSource, RepairFailureInvalidSchema, 2},
+		{"artifact path alias in correction", badSummary(valid), pathAliases, "summary", RepairFailureSource, RepairFailureInvalidSchema, 2},
+		{"payload alias in correction", badSummary(valid), payloadAliases, "summary", RepairFailureSource, RepairFailureInvalidSchema, 2},
+		{"appended outer correction source", badSummary(valid), "Returned draft: " + valid + outerForgedRead, "summary", RepairFailureSource, RepairFailureInvalidSchema, 2},
+		{"appended nested correction source", badSummary(valid), nestedFrames, "summary", RepairFailureSource, RepairFailureInvalidSchema, 2},
+		{"wrapped nested correction source", badSummary(valid), wrappedPayload, "summary", RepairFailureSource, RepairFailureInvalidSchema, 2},
+		{"singleton nested correction source", badSummary(valid), singletonPayload, "summary", RepairFailureSource, RepairFailureInvalidSchema, 2},
+		{"wrapped correction reference entry", badSummary(valid), wrappedReference, "summary", RepairFailureSource, RepairFailureInvalidSchema, 2},
+		{"wrapped correction reference path", badSummary(valid), wrappedPath, "summary", RepairFailureSource, RepairFailureInvalidSchema, 2},
+		{"wrapped correction physical read", badSummary(valid), wrappedRead, "summary", RepairFailureSource, RepairFailureInvalidSchema, 2},
+		{"wrapped correction physical artifact", badSummary(valid), wrappedArtifact, "summary", RepairFailureSource, RepairFailureInvalidSchema, 2},
+		{"correction exhausted", proposal("producer", "42"), proposal("producer", "42"), "judgment", RepairFailureInvalidSchema, RepairFailureInvalidSchema, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := newCodexWorkspace(t)
+			if err := os.WriteFile(filepath.Join(workspace, inputPath), []byte("package fixture\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			worker := &agent.AgentDef{
+				Name: "worker", Role: "worker", SubagentProvider: "codex", MaxRetries: 2,
+				Generation: agent.GenerationParams{Model: "gpt-5-codex"},
+			}
+			steps := codexRepairScript(t, workspace, "nested-result", tc.original, tc.repair, fakeCodexStep{}, fakeCodexStep{})
+			c := newCodexE2ECoordinatorBase(t, workspace, steps, worker)
+			c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled, producer.ID: producer}
+			appendEvidenceSiblingProducer(t, c, producer, inputPath)
+			item := admitCodexE2ETaskWithSpec(t, c, worker, nil, func(spec *TodoSpec) {
+				spec.ResultContract = new(compiled.ref(true))
+				spec.EvidenceFrom = []string{"producer"}
+			}, true)
+			_, err := c.executeTask(t.Context(), taskDefFromTodoItem(item), item.ID)
+			got := c.todoItemByID(item.ID)
+			if tc.reason == "" {
+				if err != nil || got.Status != TaskDone || got.TypedResult == nil || got.TypedResult.StructuredPayload == nil ||
+					!strings.Contains(string(got.TypedResult.StructuredPayload.Value), `"judgment":"accepted"`) {
+					t.Fatalf("corrected result status=%s err=%v", got.Status, err)
+				}
+				receipt := got.ExecutionReceipt
+				if receipt == nil || receipt.WorkSubmissionFailure != RepairFailureInvalidSchema || receipt.ProviderTurnID != "turn-repair" {
+					t.Fatalf("corrected result lost its original rejection: %+v", receipt)
+				}
+				proof := receipt.RepairProvenance
+				if proof == nil || !proof.Attempted || !proof.Success || proof.RepairAttempts != 1 || proof.ProviderWorkTurnID != "turn-original" ||
+					proof.ProviderWorkTranscriptRef == "" || proof.ProviderCorrectionTurnID != "turn-repair" || proof.SubmittedResult == nil {
+					t.Fatalf("corrected result lost its provenance: %+v", proof)
+				}
+			} else if err == nil || localResultRejectionReason(err) != tc.reason || got.Status != TaskBlocked ||
+				got.ExecutionReceipt == nil || got.ExecutionReceipt.WorkSubmissionFailure != tc.workReason || got.TypedResult != nil {
+				t.Fatalf("wrong blocked result status=%s reason=%s err=%v", got.Status, localResultRejectionReason(err), err)
+			}
+			rawLog := filepath.Join(filepath.Dir(os.Getenv(fakeCodexServerScriptEnvVar)), "raw_calls.log")
+			calls := readRawCalls(t, rawLog)
+			methods := rawCallMethods(t, calls)
+			counts := make(map[string]int)
+			var lastTurn json.RawMessage
+			for index, method := range methods {
+				counts[method]++
+				if method == codexMethodTurnStart {
+					lastTurn = calls[index]["params"]
+				}
+			}
+			if counts[codexMethodTurnStart] != tc.turns || counts[codexMethodThreadStart] != 1 {
+				t.Fatalf("worker replay or wrong correction count: %v", methods)
+			}
+			if tc.turns == 2 {
+				resume := findRawCall(t, calls, codexMethodThreadResume)
+				if !strings.Contains(string(resume["params"]), codexSandboxReadOnly) ||
+					!strings.Contains(string(lastTurn), tc.diagnostic) {
+					t.Fatalf("repair lost sandbox or validation diagnostic: %v", methods)
+				}
+			}
+		})
+	}
+}
+
+func TestCodexAuthenticatesSourcesBeforeRepairingRuntimeCompletion(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
+	const inputPath = "source.go"
+	producer := compileFixtureJSONSchema(t, "completion-evidence", `{"type":"object","properties":{"verified":{"type":"boolean"}}}`)
+	schema := strings.Replace(collectionReferenceSchema, `"properties":{"references":`,
+		`"x-hufu-runtime-completion":"/completion","x-hufu-runtime-inputs":[{"target":"/completion","source_kind":"const"}],`+
+			`"properties":{"completion":{"type":"object","required":["status","summary"],"properties":{"status":{"type":"string"},`+
+			`"summary":{"type":"string"}},"const":{"status":"success","summary":"Verified completion"}},"references":`, 1)
+	compiled := compileFixtureJSONSchema(t, "codex-native-completion", schema)
+	foreignPayload := fmt.Sprintf(`"structured_payload_json":%q`, `{"references":[{"producer":"outside","paths":["source.go"]}]}`)
+	for _, tc := range []struct{ name, proposal string }{
+		{"unverified file with successful override", validProposalJSON(`"files_read":["unobserved.go"]`)},
+		{"foreign producer with successful override", validProposalJSON(foreignPayload)},
+		{"foreign producer with unsuccessful payload", `{"status":"blocked","summary":"Incomplete",` + foreignPayload + `}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := newCodexWorkspace(t)
+			if err := os.WriteFile(filepath.Join(workspace, inputPath), []byte("package fixture\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			steps := codexRepairScript(t, workspace, "completion-source", tc.proposal,
+				`{"structured_payload_json":"{\"references\":[]}"}`, fakeCodexStep{}, fakeCodexStep{})
+			worker := &agent.AgentDef{Name: "worker", Role: "worker", SubagentProvider: "codex", MaxRetries: 2, Generation: agent.GenerationParams{Model: "gpt-5-codex"}}
+			c := newCodexE2ECoordinatorBase(t, workspace, steps, worker)
+			c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled, producer.ID: producer}
+			appendEvidenceSiblingProducer(t, c, producer, inputPath)
+			item := admitCodexE2ETaskWithSpec(t, c, worker, nil, func(spec *TodoSpec) {
+				spec.ResultContract = new(compiled.ref(true))
+				spec.EvidenceFrom = []string{"producer"}
+			}, true)
+			_, err := c.executeTask(t.Context(), taskDefFromTodoItem(item), item.ID)
+			got := c.todoItemByID(item.ID)
+			if localResultRejectionReason(err) != RepairFailureSource || got.Status != TaskBlocked ||
+				got.ExecutionReceipt == nil || got.ExecutionReceipt.WorkSubmissionFailure != RepairFailureSource || got.TypedResult != nil {
+				t.Fatalf("unverified source became correctable: status=%s error=%v", got.Status, err)
+			}
+			if proof := got.ExecutionReceipt.RepairProvenance; proof != nil && proof.Attempted {
+				t.Fatal("source failure consumed a correction allowance")
+			}
+			methods := rawCallMethods(t, readRawCalls(t, filepath.Join(filepath.Dir(os.Getenv(fakeCodexServerScriptEnvVar)), "raw_calls.log")))
+			if len(methods) != 3 || methods[2] != codexMethodTurnStart {
+				t.Fatalf("source failure opened another provider turn: %v", methods)
+			}
+		})
+	}
+}
+
+func TestCodexContextualResultShapeRequiresVerifiedSources(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
+	const invariants = `"invariant_assessments":[]`
+	const payload = `"structured_payload_json":"{}"`
+	const unknownRead = `"files_read":["unobserved.go"]`
+	for _, tc := range []struct {
+		name, original, correction string
+		reason, originalReason     RepairFailureReason
+		turns                      int
+	}{
+		{"invariants without verification", invariants, "", "", RepairFailureInvalidSchema, 2},
+		{"payload without contract", payload, "", "", RepairFailureInvalidSchema, 2},
+		{"empty payload without contract", `"structured_payload_json":""`, "", "", RepairFailureInvalidSchema, 2},
+		{"invariants and unverified read", invariants + "," + unknownRead, "", RepairFailureSource, RepairFailureSource, 1},
+		{"payload and unverified read", payload + "," + unknownRead, "", RepairFailureSource, RepairFailureSource, 1},
+		{"unverified read in correction", payload, invariants + "," + unknownRead, RepairFailureSource, RepairFailureInvalidSchema, 2},
+		{"contextual rejection in both turns", invariants, payload, RepairFailureInvalidSchema, RepairFailureInvalidSchema, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := newCodexWorkspace(t)
+			steps := codexRepairScript(t, workspace, "contextual-shape", validProposalJSON(tc.original),
+				validProposalJSON(tc.correction), fakeCodexStep{}, fakeCodexStep{})
+			worker := &agent.AgentDef{Name: "worker", Role: "worker", SubagentProvider: "codex", MaxRetries: 2,
+				Generation: agent.GenerationParams{Model: "gpt-5-codex"}}
+			c := newCodexE2ECoordinatorBase(t, workspace, steps, worker)
+			item := admitCodexE2ETaskWithSpec(t, c, worker, nil, func(*TodoSpec) {}, true)
+			_, err := c.executeTask(t.Context(), taskDefFromTodoItem(item), item.ID)
+			got := c.todoItemByID(item.ID)
+			if tc.reason == "" {
+				if err != nil || got.Status != TaskDone || got.TypedResult == nil {
+					t.Fatalf("result correction failed: status=%s error=%v", got.Status, err)
+				}
+			} else if err == nil || localResultRejectionReason(err) != tc.reason || got.Status != TaskBlocked || got.TypedResult != nil {
+				t.Fatalf("unexpected rejection: status=%s error=%v", got.Status, err)
+			}
+			if got.ExecutionReceipt == nil || got.ExecutionReceipt.WorkSubmissionFailure != tc.originalReason {
+				t.Fatalf("missing classified work receipt: %+v", got.ExecutionReceipt)
+			}
+			if proof := got.ExecutionReceipt.RepairProvenance; tc.turns == 2 && (proof == nil || !proof.Attempted || proof.RepairAttempts != 1) {
+				t.Fatalf("unexpected correction evidence: %+v", proof)
+			}
+			rawLog := filepath.Join(filepath.Dir(os.Getenv(fakeCodexServerScriptEnvVar)), "raw_calls.log")
+			methods := rawCallMethods(t, readRawCalls(t, rawLog))
+			var turns, workStarts int
+			for _, method := range methods {
+				switch method {
+				case codexMethodTurnStart:
+					turns++
+				case codexMethodThreadStart:
+					workStarts++
+				}
+			}
+			if turns != tc.turns || workStarts != 1 {
+				t.Fatalf("unexpected work replay or correction count: %v", methods)
+			}
+		})
+	}
+}
+
+func TestCodexRepairsOnlyTheResultEnvelope(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
+	const credential = "fake-live-correction-credential-82103"
+	withPayload := compileFixtureJSONSchema(t, "external-envelope", resultEnvelopeTestSchema)
+	withoutPayload := compileFixtureJSONSchema(t, "external-required-envelope", `{"type":"object","x-hufu-result-envelope":{"type":"object","properties":{"structured_payload":{"type":"object"}}}}`)
+	for _, tc := range []struct {
+		name, original, correction string
+		contract                   *CompiledResultContract
+		requirePayload             bool
+		status                     string
+	}{
+		{"status disagrees with payload", validProposalJSON(`"structured_payload_json":"{\"decisions\":[{\"verdict\":\"unverified\"}]}"`),
+			`{"status":"completed_with_gaps","summary":"did the work","structured_payload_json":"{\"decisions\":[{\"verdict\":\"unverified\"}]}"}`,
+			withPayload, true, TaskResultStatusCompletedWithGaps},
+		{"optional payload required by envelope", validProposalJSON(""), validProposalJSON(`"structured_payload_json":"{}"`), withoutPayload, false, TaskResultStatusSuccess},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := newCodexWorkspace(t)
+			correction := strings.TrimSuffix(tc.correction, "}") + fmt.Sprintf(`,"details":"api_token=%s","facts":{"api_token":%q}}`, credential, credential)
+			steps := codexRepairScript(t, workspace, "external-envelope", tc.original, correction, fakeCodexStep{}, fakeCodexStep{})
+			worker := &agent.AgentDef{Name: "worker", Role: "worker", SubagentProvider: "codex", MaxRetries: 2, Generation: agent.GenerationParams{Model: "gpt-5-codex"}}
+			c := newCodexE2ECoordinatorBase(t, workspace, steps, worker)
+			c.session.ResultContracts = map[string]*CompiledResultContract{tc.contract.ID: tc.contract}
+			item := admitCodexE2ETaskWithSpec(t, c, worker, nil, func(spec *TodoSpec) {
+				spec.ResultContract = new(tc.contract.ref(tc.requirePayload))
+			})
+			_, err := c.executeTask(t.Context(), taskDefFromTodoItem(item), item.ID)
+			got := c.todoItemByID(item.ID)
+			if err != nil || got.Status != TaskDone || got.TypedResult == nil || got.TypedResult.Status != tc.status {
+				t.Fatalf("envelope was not corrected: status=%s error=%v", got.Status, err)
+			}
+			proof := got.ExecutionReceipt.RepairProvenance
+			if proof == nil || proof.SubmittedResult == nil || got.TypedResult.Facts["api_token"] == credential ||
+				strings.Contains(got.TypedResult.Details, credential) || proof.SubmittedResult.Details != got.TypedResult.Details {
+				t.Fatal("live handoff did not use the redacted correction candidate")
+			}
+			if digest, err := collectionDigest(proof.SubmittedResult); err != nil || digest != proof.PreparedCandidateSHA256 {
+				t.Fatal("live receipt did not retain the digest of its redacted candidate")
+			}
+			calls := readRawCalls(t, filepath.Join(filepath.Dir(os.Getenv(fakeCodexServerScriptEnvVar)), "raw_calls.log"))
+			resume := findRawCall(t, calls, codexMethodThreadResume)
+			if methods := rawCallMethods(t, calls); len(methods) != len(steps) || !strings.Contains(string(resume["params"]), codexSandboxReadOnly) {
+				t.Fatalf("expected one read-only correction in the same session, calls=%v", methods)
+			}
+		})
+	}
+}
+
+func TestCodexPersistsRepairInterruptionWithoutRedispatch(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
+	compiled := compileFixtureJSONSchema(t, "external-repair-shape", `{"type":"object","properties":{"judgment":{"type":"string"}}}`)
+	for _, tc := range []struct {
+		name   string
+		class  TaskFailureClass
+		status TaskStatus
+		cause  error
+	}{
+		{"cancelled", FailureCancelled, TaskError, context.Canceled},
+		{"resume refused", FailureProtocol, TaskBlocked, nil},
+		{"initialization timed out", FailureTimeout, TaskBlocked, context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := newCodexWorkspace(t)
+			steps := codexRepairScript(t, workspace, "interrupted-repair",
+				validProposalJSON(`"structured_payload_json":"{\"judgment\":42}"`), validProposalJSON(""), fakeCodexStep{}, fakeCodexStep{})
+			switch tc.class {
+			case FailureCancelled:
+				steps[5] = fakeCodexStep{NoResponse: true}
+			case FailureProtocol:
+				steps[4] = fakeCodexStep{ErrorMessage: "cannot resume thread"}
+			case FailureTimeout:
+				steps[3] = fakeCodexStep{NoResponse: true}
+			}
+			worker := &agent.AgentDef{Name: "worker", Role: "worker", SubagentProvider: "codex", MaxRetries: 2, Generation: agent.GenerationParams{Model: "gpt-5-codex"}}
+			c := newCodexE2ECoordinatorBase(t, workspace, steps, worker)
+			if tc.class == FailureTimeout {
+				providers := c.session.Config.SubagentProviders
+				provider := providers["codex"]
+				provider.StartupTimeout = "1s"
+				providers["codex"] = provider
+			}
+			c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
+			item := admitCodexE2ETaskWithSpec(t, c, worker, nil, func(spec *TodoSpec) {
+				spec.ResultContract = new(compiled.ref(true))
+			})
+			logPath := filepath.Join(filepath.Dir(os.Getenv(fakeCodexServerScriptEnvVar)), "raw_calls.log")
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tc.class == FailureCancelled {
+				go func() {
+					for {
+						if raw, err := os.ReadFile(logPath); err == nil && strings.Count(string(raw), `"method":"turn/start"`) == 2 {
+							cancel()
+							return
+						}
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(5 * time.Millisecond):
+						}
+					}
+				}()
+			}
+			_, err := c.executeTask(ctx, taskDefFromTodoItem(item), item.ID)
+			got := c.todoItemByID(item.ID)
+			if err == nil || tc.cause != nil && !errors.Is(err, tc.cause) || got.Status != tc.status ||
+				got.FailureEvent == nil || got.FailureEvent.FailureClass != tc.class || got.TypedResult != nil {
+				t.Fatalf("lost correction outcome: status=%s event=%+v error=%v", got.Status, got.FailureEvent, err)
+			}
+			receipt := got.ExecutionReceipt
+			if receipt == nil || receipt.WorkSubmissionFailure != RepairFailureInvalidSchema || receipt.RepairProvenance == nil ||
+				!receipt.RepairProvenance.Attempted || receipt.RepairProvenance.FailureReason != "" ||
+				receipt.ProviderTurnID != "turn-original" || receipt.RepairProvenance.ProviderWorkTurnID != "turn-original" {
+				t.Fatalf("original schema failure and interrupted correction conflated: %+v", receipt)
+			}
+			store, err := OpenEventStoreReadOnly(workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			events, err := store.ReadEvents()
+			if err != nil {
+				t.Fatal(err)
+			}
+			items := ReduceToTodoList(events)
+			index := slices.IndexFunc(items, func(candidate *TodoItem) bool { return candidate.ID == item.ID })
+			if index < 0 || items[index].FailureEvent == nil || items[index].FailureEvent.FailureClass != tc.class ||
+				items[index].ExecutionReceipt == nil || items[index].ExecutionReceipt.WorkSubmissionFailure != RepairFailureInvalidSchema ||
+				items[index].ExecutionReceipt.RepairProvenance == nil || !items[index].ExecutionReceipt.RepairProvenance.Attempted ||
+				items[index].ExecutionReceipt.RepairProvenance.FailureReason != "" {
+				t.Fatalf("SQLite replay lost the actual correction outcome: %v", items)
+			}
+			methods := rawCallMethods(t, readRawCalls(t, logPath))
+			if strings.Count(strings.Join(methods, " "), codexMethodThreadStart) != 1 {
+				t.Fatalf("interrupted correction redispatched the worker: %v", methods)
+			}
+		})
+	}
+}
+
 // TestCodexSuccessStillNeedsCompletionGate proves §21/§40: even when Codex's
 // own proposal claims success, a task only reaches TaskDone if it also
 // passes Hufu's own objective verification — Codex's self-report is never a
@@ -156,6 +546,7 @@ func admitCodexE2ETask(t *testing.T, c *Coordinator, worker *agent.AgentDef, ver
 // this (MaxRetries: 0), since the point is that Hufu's own gate ran at all,
 // not what happens after it fails.
 func TestCodexSuccessStillNeedsCompletionGate(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	worker := &agent.AgentDef{
 		Name: "worker", Role: "worker", SubagentProvider: "codex", MaxRetries: 0,
@@ -186,6 +577,7 @@ func TestCodexSuccessStillNeedsCompletionGate(t *testing.T) {
 // reaches the Hufu task transcript, failure projection, and the distinct
 // provider transcript reference on the terminal receipt.
 func TestCodexRejectedProposalPersistsFailureEvidence(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	worker := &agent.AgentDef{
 		Name: "worker", Role: "worker", SubagentProvider: "codex", MaxRetries: 0,
@@ -249,6 +641,7 @@ func TestCodexRejectedProposalPersistsFailureEvidence(t *testing.T) {
 // fresh (§22.2), and only the retry's own passing verification result must
 // reach TaskDone.
 func TestFailedCodexVerificationRetriesThroughHufu(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	worker := &agent.AgentDef{
 		Name: "worker", Role: "worker", SubagentProvider: "codex", MaxRetries: 1,
@@ -299,6 +692,7 @@ func TestFailedCodexVerificationRetriesThroughHufu(t *testing.T) {
 // status check never runs for a Codex-driven attempt at all, and a
 // "partial" would have silently reached TaskDone on the first attempt.
 func TestCodexPartialStatusStaysIncompleteWithoutVerifySpec(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	worker := &agent.AgentDef{
 		Name: "worker", Role: "worker", SubagentProvider: "codex", MaxRetries: 1,
@@ -340,6 +734,7 @@ func TestCodexPartialStatusStaysIncompleteWithoutVerifySpec(t *testing.T) {
 // app-server subprocess through that escalated path to prove it end to end,
 // not just that the escalation branch is reached.
 func TestDirectCodexWorkerPreservesNormalTaskSemantics(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	worker := &agent.AgentDef{
 		Name: "worker", Role: "worker", SubagentProvider: "codex", SideEffect: "workspace_write",
@@ -385,6 +780,7 @@ func TestDirectCodexWorkerPreservesNormalTaskSemantics(t *testing.T) {
 // TaskDone through a Codex-routed attempt, driven through the full
 // production dispatch path (not just the canonicalizer in isolation).
 func TestCodexReviewWorksetStyleTaskSatisfiesFilesReadVerifySpec(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	workspace := newCodexWorkspace(t)
 	worker := &agent.AgentDef{
 		Name: "worker", Role: "worker", SubagentProvider: "codex", MaxRetries: 0,

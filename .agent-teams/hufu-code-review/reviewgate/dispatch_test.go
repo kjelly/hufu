@@ -267,6 +267,16 @@ func testPrepareDispatch(t *testing.T, failing, largeSnapshot bool) {
 		t.Fatal("PREPARE omitted test receipt or routed workset artifacts")
 	}
 	if largeSnapshot {
+		var tests struct {
+			Packages []string `json:"packages"`
+			Passed   bool     `json:"passed"`
+		}
+		if err := json.Unmarshal(raw(t, items[1].TypedResult.RuntimeOutputs["targeted_go_tests"]), &tests); err != nil {
+			t.Fatal(err)
+		}
+		if !tests.Passed || len(tests.Packages) != 1 || tests.Packages[0] != "./calc" {
+			t.Fatalf("PREPARE did not verify the selected snapshot packages: %+v", tests)
+		}
 		var scope snapshotAttestation
 		if err := json.Unmarshal(raw(t, items[0].TypedResult.RuntimeOutputs["scope"]), &scope); err != nil {
 			t.Fatal(err)

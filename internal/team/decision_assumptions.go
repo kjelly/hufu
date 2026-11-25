@@ -2,7 +2,9 @@ package team
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -29,6 +31,11 @@ type AssumptionCheck struct {
 	Note         string   `json:"note,omitempty"`
 }
 
+type assumptionCheckPersistenceError struct{ cause error }
+
+func (e *assumptionCheckPersistenceError) Error() string { return e.cause.Error() }
+func (e *assumptionCheckPersistenceError) Unwrap() error { return e.cause }
+
 // ValidCheckStatus reports whether a reporter may assert this status.
 //
 // Only supported and contradicted are reportable. `unknown` is the absence of a
@@ -49,8 +56,6 @@ func ValidCheckStatus(status string) bool {
 // A check naming an assumption the decision never declared is rejected: a
 // reporter may report on the assumptions the decision rests on, not invent new
 // ones after the fact.
-//
-//nolint:gocyclo // lifecycle validation and recovery must remain one atomic boundary.
 func (c *Coordinator) ApplyAssumptionChecks(ctx context.Context, todoID string, checks []AssumptionCheck, source string) (int, error) {
 	if c == nil || len(checks) == 0 {
 		return 0, nil
@@ -63,64 +68,26 @@ func (c *Coordinator) ApplyAssumptionChecks(ctx context.Context, todoID string, 
 	if !ValidAssumptionSource(source) {
 		return 0, fmt.Errorf("%q is not a source that may change assumption status", source)
 	}
-	discipline.mu.Lock()
-	stale := discipline.staleMarked
-	checkpointErr := discipline.checkpointErr
-	assumptions := append([]DecisionAssumption(nil), discipline.assumptions...)
-	discipline.mu.Unlock()
-	if stale && checkpointErr == "" {
-		return 0, fmt.Errorf("decision %s is stale and cannot accept assumption checks", discipline.decisionID)
+	ordered, err := c.validateAssumptionCheckBatch(ctx, discipline, checks)
+	if err != nil {
+		return 0, err
 	}
-	journal := c.decisionJournalOrNil()
+	applied, err := c.persistAssumptionChecks(ctx, discipline, ordered, source)
+	if err != nil {
+		return applied, &assumptionCheckPersistenceError{cause: err}
+	}
+	return applied, nil
+}
+
+//nolint:gocyclo // persistence and same-status recovery share the decision state transition.
+func (c *Coordinator) persistAssumptionChecks(ctx context.Context, discipline *taskDiscipline, ordered []AssumptionCheck, source string) (int, error) {
+	journal, err := c.decisionJournalFor()
+	if err != nil {
+		return 0, err
+	}
 	if journal == nil {
-		return 0, fmt.Errorf("assumption transition cannot be persisted: canonical event journal is unavailable")
+		return 0, errors.New("assumption transition cannot be persisted: canonical event journal is unavailable")
 	}
-
-	// Validate the entire batch before persisting anything. A malformed later
-	// claim must not leave an earlier transition durable.
-	ordered := append([]AssumptionCheck(nil), checks...)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].AssumptionID < ordered[j].AssumptionID })
-	seen := make(map[string]struct{}, len(ordered))
-	for _, check := range ordered {
-		id := strings.TrimSpace(check.AssumptionID)
-		if id == "" {
-			return 0, fmt.Errorf("assumption id cannot be blank")
-		}
-		if _, exists := seen[id]; exists {
-			return 0, fmt.Errorf("assumption %s is reported more than once", id)
-		}
-		seen[id] = struct{}{}
-		if !ValidCheckStatus(check.Status) {
-			return 0, fmt.Errorf("assumption %s: %q is not a reportable status (want supported or contradicted)", id, check.Status)
-		}
-		declared := false
-		for _, assumption := range assumptions {
-			if assumption.ID == id {
-				declared = true
-				break
-			}
-		}
-		if !declared {
-			return 0, fmt.Errorf("assumption %q is not declared on this decision", id)
-		}
-		if stale && checkpointErr != "" && assumptionStatusBefore(assumptions, id) != check.Status {
-			return 0, fmt.Errorf("decision %s is stale; only exact same-status projection recovery is allowed", discipline.decisionID)
-		}
-		for _, digest := range check.Evidence {
-			if strings.TrimSpace(digest) == "" {
-				return 0, fmt.Errorf("assumption %s has a blank evidence reference", id)
-			}
-		}
-	}
-	for _, check := range ordered {
-		if len(check.Evidence) > 0 {
-			if err := c.validateAssumptionEvidence(ctx, ordered); err != nil {
-				return 0, err
-			}
-			break
-		}
-	}
-
 	applied := 0
 	for _, check := range ordered {
 		id := strings.TrimSpace(check.AssumptionID)
@@ -275,6 +242,103 @@ func (c *Coordinator) projectAssumptionIndex(discipline *taskDiscipline) error {
 	}
 	entry.IndexedAt = time.Time{}
 	return index.Append(entry)
+}
+
+// readSubmissionAssumptions supplies the declared checks before schema repair,
+// including when collection recovery has no live task discipline yet.
+func (c *Coordinator) readSubmissionAssumptions(ctx context.Context, taskID string, cp *ResultCollectionCheckpoint) ([]DecisionAssumption, bool, error) {
+	if discipline := c.disciplineFor(taskID); discipline != nil && discipline.decisionID != "" {
+		discipline.mu.Lock()
+		defer discipline.mu.Unlock()
+		if discipline.staleMarked && discipline.checkpointErr == "" {
+			return nil, true, fmt.Errorf("decision %s is stale and cannot accept assumption checks", discipline.decisionID)
+		}
+		return append([]DecisionAssumption(nil), discipline.assumptions...), true, nil
+	}
+	if cp == nil {
+		cp, _ = ctx.Value(resultCollectionReadCheckpointKey{}).(*ResultCollectionCheckpoint)
+	}
+	if cp == nil || cp.TaskID != taskID {
+		return nil, false, nil
+	}
+	id, err := c.decisionForTaskOccurrence(ctx, taskID, cp.Attempt)
+	if err != nil || id == "" {
+		return nil, false, err
+	}
+	journal, err := c.decisionJournalFor()
+	if err != nil {
+		return nil, true, err
+	}
+	state, err := projectDecision(ctx, journal, id)
+	if err != nil {
+		return nil, true, err
+	}
+	if state.Record == nil || state.Record.TaskID != taskID {
+		return nil, true, fmt.Errorf("decision %s has no matching finalized assumption authority", id)
+	}
+	if err := validateFinalizedDecisionState(ctx, c.decisionArtifactStore(), state); err != nil {
+		return nil, true, err
+	}
+	return state.Record.Assumptions, true, nil
+}
+
+// Only ApplyAssumptionChecks advances decision state.
+func (c *Coordinator) validateAssumptionCheckBatch(ctx context.Context, discipline *taskDiscipline, checks []AssumptionCheck) ([]AssumptionCheck, error) {
+	if discipline == nil || discipline.decisionID == "" || len(checks) == 0 {
+		return nil, nil
+	}
+	discipline.mu.Lock()
+	stale := discipline.staleMarked
+	checkpointErr := discipline.checkpointErr
+	assumptions := append([]DecisionAssumption(nil), discipline.assumptions...)
+	discipline.mu.Unlock()
+	if stale && checkpointErr == "" {
+		return nil, fmt.Errorf("decision %s is stale and cannot accept assumption checks", discipline.decisionID)
+	}
+
+	// Validate the entire batch before persisting anything. A malformed later
+	// claim must not leave an earlier transition durable.
+	ordered := append([]AssumptionCheck(nil), checks...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].AssumptionID < ordered[j].AssumptionID })
+	seen := make(map[string]struct{}, len(ordered))
+	for _, check := range ordered {
+		id := strings.TrimSpace(check.AssumptionID)
+		if id == "" {
+			return nil, fmt.Errorf("assumption id cannot be blank")
+		}
+		if _, exists := seen[id]; exists {
+			return nil, fmt.Errorf("assumption %s is reported more than once", id)
+		}
+		seen[id] = struct{}{}
+		if !ValidCheckStatus(check.Status) {
+			return nil, fmt.Errorf("assumption %s: %q is not a reportable status (want supported or contradicted)", id, check.Status)
+		}
+		if !declaredAssumption(assumptions, id) {
+			return nil, fmt.Errorf("assumption %q is not declared on this decision", id)
+		}
+		if stale && checkpointErr != "" && assumptionStatusBefore(assumptions, id) != check.Status {
+			return nil, fmt.Errorf("decision %s is stale; only exact same-status projection recovery is allowed", discipline.decisionID)
+		}
+		for _, digest := range check.Evidence {
+			if strings.TrimSpace(digest) == "" {
+				return nil, fmt.Errorf("assumption %s has a blank evidence reference", id)
+			}
+		}
+	}
+	for _, check := range ordered {
+		if len(check.Evidence) > 0 {
+			if err := c.validateAssumptionEvidence(ctx, ordered); err != nil {
+				return nil, err
+			}
+			break
+		}
+	}
+
+	return ordered, nil
+}
+
+func declaredAssumption(assumptions []DecisionAssumption, id string) bool {
+	return slices.ContainsFunc(assumptions, func(assumption DecisionAssumption) bool { return assumption.ID == id })
 }
 
 func (c *Coordinator) validateAssumptionEvidence(ctx context.Context, checks []AssumptionCheck) error {

@@ -38,7 +38,7 @@ func TestReportCompletionMatchesFinalAudit(t *testing.T) {
 	current.Tasks = append(current.Tasks, native)
 	report := &current.Tasks[4]
 	report.Result.Summary = derived.Summary
-	replacePayload(t, report, func(p *payload) { p.Completion = &derived })
+	replacePayload(t, report, func(p *payload) { p.Completion = &derived; p.CanonicalFindings = action.Outputs["canonical_findings"] })
 	if _, _, err := fixtureVerify(current, "run-1"); err != nil {
 		t.Fatal(err)
 	}

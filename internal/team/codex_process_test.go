@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -23,6 +25,7 @@ import (
 // sequence — executable validation, ProcessSupervisor-managed pipes, and the
 // initialize gate — succeeds end to end against the fake server fixture.
 func TestStartCodexAppServerInitializesOverRealProcess(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("ProcessSupervisor has no Windows implementation yet (§16.2)")
 	}
@@ -57,6 +60,7 @@ func TestStartCodexAppServerInitializesOverRealProcess(t *testing.T) {
 // executable fails preflight before any process, pipe, or model interaction
 // (§13.2 step 1).
 func TestStartCodexAppServerRejectsMissingExecutable(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("ProcessSupervisor has no Windows implementation yet (§16.2)")
 	}
@@ -87,7 +91,12 @@ type initializeFailureSupervisor struct {
 	killCalls   atomic.Int32
 	stdinClosed chan struct{}
 	exit        func()
+	stderr      string
+	reply       jsonRPCError
+	killError   error
 }
+
+const initializeFixtureCredential = "opaque-initialize-fixture-65201"
 
 func newInitializeFailureSupervisor() *initializeFailureSupervisor {
 	supervisor := &initializeFailureSupervisor{
@@ -107,7 +116,8 @@ func (s *initializeFailureSupervisor) Start(_ context.Context, spec ProcessSpec)
 				ID int64 `json:"id"`
 			}
 			if json.Unmarshal(line, &request) == nil {
-				_, _ = fmt.Fprintf(spec.Stdout, "{\"jsonrpc\":\"2.0\",\"id\":%d,\"error\":{\"code\":-32000,\"message\":\"injected initialize failure\"}}\n", request.ID)
+				_, _ = fmt.Fprintln(spec.Stderr, s.stderr)
+				_ = json.NewEncoder(spec.Stdout).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "error": s.reply})
 			}
 		}
 		_, _ = io.Copy(io.Discard, reader)
@@ -122,28 +132,156 @@ func (s *initializeFailureSupervisor) TerminateTree(context.Context, ProcessHand
 
 func (s *initializeFailureSupervisor) KillTree(context.Context, ProcessHandle) error {
 	s.killCalls.Add(1)
+	if s.killError != nil {
+		return s.killError
+	}
 	s.exit()
 	return nil
 }
 
 func TestStartCodexAppServerInitializeFailureClosesKillsAndReaps(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
+	for _, source := range []string{"stderr", "RPC data", "inherited environment"} {
+		t.Run(source, func(t *testing.T) {
+			sup := newInitializeFailureSupervisor()
+			credential := initializeFixtureCredential
+			var env []string
+			if source == "inherited environment" {
+				credential = "a plain inherited startup passphrase"
+				env = []string{"TEST_CREDENTIAL=" + credential}
+			}
+			sup.reply = jsonRPCError{Code: -32000, Message: "injected initialize failure " + credential}
+			sup.stderr = "startup detail API_TOKEN=" + credential
+			switch source {
+			case "RPC data":
+				sup.stderr = "startup detail " + initializeFixtureCredential
+				sup.reply.Data = rawJSON(t, map[string]string{"api_token": initializeFixtureCredential})
+			case "inherited environment":
+				sup.stderr = "startup detail " + credential
+			}
+			proc, err := StartCodexAppServer(t.Context(), sup, CodexProcessConfig{
+				Argv:           []string{os.Args[0]},
+				Env:            env,
+				StartupTimeout: time.Second,
+			})
+			rpc, ok := errors.AsType[*jsonRPCError](err)
+			initialization, typed := errors.AsType[*codexInitializationFailure](err)
+			if !ok || rpc.Code != sup.reply.Code || len(rpc.Data) != 0 || proc != nil || !typed || !initialization.settled {
+				t.Fatalf("startup = (%v, %v), want nil process and typed initialize error", proc, err)
+			}
+			if body := err.Error(); !strings.Contains(body, "injected initialize failure [REDACTED]") ||
+				!strings.Contains(body, "startup detail") || strings.Count(body, "[REDACTED]") < 2 || strings.Contains(body, credential) {
+				t.Fatal("initialize failure did not retain its redacted message and stderr")
+			}
+			if sup.killCalls.Load() != 1 || sup.handle.waitCalls.Load() != 1 {
+				t.Fatal("failed initialization was not terminated and synchronously reaped")
+			}
+			select {
+			case <-sup.stdinClosed:
+			case <-time.After(time.Second):
+				t.Fatal("Codex client stdin remained open after initialize failure")
+			}
+		})
+	}
+}
+
+type codexStartupSnapshotProbe struct {
+	ExecutionWorld
+	calls int
+}
+
+func (w *codexStartupSnapshotProbe) Snapshot(context.Context, *PreparedExecutionWorld) (WorkspaceSnapshot, error) {
+	w.calls++
+	return WorkspaceSnapshot{}, errors.New("injected snapshot probe")
+}
+
+func TestCodexUnsettledInitializationBlocksWorkspaceEvidence(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
+	f := newVersionFixture(t)
+	c := runtimeCoordinator(t, f)
+	if err := c.admitWorkspaceVersion(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	_, provider, item, _ := newCodexHarness(t, f.subject, nil)
+	provider.coordinator = c
 	sup := newInitializeFailureSupervisor()
-	proc, err := StartCodexAppServer(t.Context(), sup, CodexProcessConfig{
-		Argv:           []string{os.Args[0]},
-		StartupTimeout: time.Second,
+	sup.reply = jsonRPCError{Code: -32000, Message: "injected initialize failure"}
+	sup.killError = errors.New("injected process group cleanup failure")
+	t.Cleanup(sup.exit)
+	world := &codexStartupSnapshotProbe{}
+	request := codexAttemptRequest(item, "correct result")
+	local := NewLocalExecutionWorld()
+	prepared, err := local.Prepare(t.Context(), ExecutionWorldSpec{
+		Root: f.subject, CWD: f.subject, SideEffect: SideEffectWorkspaceWrite,
 	})
-	if err == nil || proc != nil {
-		t.Fatalf("StartCodexAppServer = (%v, %v), want nil process and initialize error", proc, err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if sup.killCalls.Load() != 1 {
-		t.Fatalf("KillTree calls = %d, want 1", sup.killCalls.Load())
+	t.Cleanup(func() { _ = local.Release(context.Background(), prepared) })
+	canonical, claims, _, _, err := provider.attemptResultRepair(t.Context(), sup, request, world, "original-thread",
+		prepared, WorkspaceDelta{}, errors.New("invalid proposal"), &codexTranscript{}, nil, nil,
+		time.Second, time.Second, time.Second, nil)
+	initialization, typed := errors.AsType[*codexInitializationFailure](err)
+	providerFailure, failed := errors.AsType[*CodexProviderError](err)
+	if !typed || initialization.settled || !failed || providerFailure.Class != CodexFailureWorkspaceViolation || sup.killCalls.Load() != 1 {
+		t.Fatalf("unsettled initialization did not reach settlement boundary: %v", err)
 	}
-	if sup.handle.waitCalls.Load() != 1 {
-		t.Fatalf("Wait calls = %d, want 1 synchronous reap", sup.handle.waitCalls.Load())
+	if canonical != nil || claims != nil || world.calls != 0 {
+		t.Fatalf("unsettled initialization produced result or attempted %d workspace snapshots", world.calls)
 	}
-	select {
-	case <-sup.stdinClosed:
-	case <-time.After(time.Second):
-		t.Fatal("Codex client stdin remained open after initialize failure")
+	f.reopen()
+	if state := subjectState(t, f); !state.RecoveryRequired || state.RecoveryCode != "provider_process_unsettled" {
+		t.Fatalf("reopened workspace recovery state = %+v", state)
+	}
+}
+
+func TestStartCodexAppServerSettlesFramesWrittenBeforeExit(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a Unix process supervisor")
+	}
+	for _, terminalBeforeReply := range []bool{false, true} {
+		t.Run(fmt.Sprintf("terminal before reply %t", terminalBeforeReply), func(t *testing.T) {
+			const threadID, turnID = "thread", "exit-turn"
+			step := fakeCodexTurnCompletedStep(t, turnID, validProposalJSON(""))
+			if !terminalBeforeReply {
+				step.AfterResponse, step.Notifications = step.Notifications, nil
+			}
+			step.CloseAfterResponse = true
+			initialize := codexInitializeStep(t)
+			initialize.Notifications = []fakeCodexNotification{{
+				Method: codexNotificationTurnCompleted,
+				Params: rawJSON(t, map[string]any{"turn": map[string]string{"status": "failed"}}),
+			}}
+			script := filepath.Join(t.TempDir(), "script.json")
+			if err := os.WriteFile(script, rawJSON(t, fakeCodexScript{
+				Steps: []fakeCodexStep{initialize, step},
+			}), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			proc, err := StartCodexAppServer(ctx, NewProcessSupervisor(), CodexProcessConfig{
+				Argv: []string{os.Args[0]},
+				Env:  append(os.Environ(), fakeCodexServerScriptEnvVar+"="+script),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_ = proc.Client.Close()
+				_ = proc.forceStop(defaultCodexProcessReapTimeout)
+			})
+			var ackID string
+			result, err := codexRunTurn(ctx, proc.Client, threadID, "work", codexTurnOptions{
+				OnTurnStarted: func(id string) error { ackID = id; return nil },
+			})
+			if err != nil || ackID != turnID || result.TurnID != turnID || result.Proposal == nil {
+				t.Fatalf("settlement after process exit: ack %q, terminal %q, error %v", ackID, result.TurnID, err)
+			}
+			if !proc.waitForExit(time.Second) {
+				t.Fatal("app-server did not exit")
+			}
+		})
 	}
 }

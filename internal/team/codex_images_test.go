@@ -109,6 +109,7 @@ func codexImageWireCalls(t *testing.T, path string) []struct {
 }
 
 func TestCodexNativeImagesReachAppServer(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	for _, direct := range []bool{false, true} {
 		t.Run(fmt.Sprintf("direct=%t", direct), func(t *testing.T) { testCodexNativeImageWire(t, direct) })
 	}
@@ -233,6 +234,7 @@ func testCodexNativeImageWire(t *testing.T, direct bool) {
 }
 
 func TestCodexNativeImagesRejectUnknownVersionBeforeAppServer(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	c, logPath := newCodexImageCoordinator(t, "0.167.0", func(root string) []fakeCodexStep { return codexImageSteps(t, root, validProposalJSON(""), nil) })
 	path := filepath.Join(c.projectDir, "input.png")
 	if err := os.WriteFile(path, mediaStorePNG(t), 0o600); err != nil {
@@ -257,6 +259,7 @@ func TestCodexNativeImagesRejectUnknownVersionBeforeAppServer(t *testing.T) {
 }
 
 func TestCodexImageInputUnionRejectsMixedVariants(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	for _, input := range []codexUserInput{{Type: "text", Text: "x", Path: "/image"}, {Type: "localImage", Path: "/image", Text: "x"}, {Type: "localImage", Path: "relative"}, {Type: "image", Path: "/image"}} {
 		if _, err := json.Marshal(input); err == nil {
 			t.Fatalf("invalid input serialized: %+v", input)
@@ -265,6 +268,7 @@ func TestCodexImageInputUnionRejectsMixedVariants(t *testing.T) {
 }
 
 func TestCodexNativeImageResultRepairSendsOnlyText(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	data := mediaStorePNG(t)
 	digest := sha256.Sum256(data)
 	hash := hex.EncodeToString(digest[:])
@@ -302,8 +306,9 @@ func TestCodexNativeImageResultRepairSendsOnlyText(t *testing.T) {
 
 func TestCodexNativeImagesTimeoutDrainsBeforeCleanup(t *testing.T) {
 	if testing.Short() {
-		t.Skip("integration: mise run test-integration")
+		t.Skip(unsupportedCodexIntegrationReason)
 	}
+	skipUnsupportedCodexIntegration(t)
 	data := mediaStorePNG(t)
 	digest := sha256.Sum256(data)
 	hash := hex.EncodeToString(digest[:])
@@ -343,6 +348,7 @@ func TestCodexNativeImagesTimeoutDrainsBeforeCleanup(t *testing.T) {
 }
 
 func TestCodexNativeImagesRetainEffectiveWorldChecks(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	for _, kind := range []string{"cwd", "model", "sandbox"} {
 		t.Run(kind, func(t *testing.T) {
 			c, logPath := newCodexImageCoordinator(t, codexImageProtocolVersion, func(root string) []fakeCodexStep {
@@ -388,6 +394,7 @@ func TestCodexNativeImagesRetainEffectiveWorldChecks(t *testing.T) {
 }
 
 func TestCodexNativeImagesRequireExplicitCapacity(t *testing.T) {
+	skipUnsupportedCodexIntegration(t)
 	for _, scenario := range []string{"unknown", "too small"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, logPath := newCodexImageCoordinator(t, codexImageProtocolVersion, func(root string) []fakeCodexStep { return codexImageSteps(t, root, validProposalJSON(""), nil) }, func(session *TeamSession) {

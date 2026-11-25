@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"slices"
 	"strings"
 
@@ -28,6 +27,11 @@ type SubmitArtifactInput struct {
 // claims and descriptive handoff data; runtime-owned TaskResult identity,
 // outputs, and transcript references cannot be decoded through this boundary.
 type SubmitResultInput struct {
+	normalizerDraft          json.RawMessage
+	normalizerSubmission     string
+	resultNormalization      *resultNormalization
+	normalizedArtifactRefs   []ArtifactRef
+	normalizationBound       bool
 	projectionBound          bool
 	completionFieldsSupplied bool
 	collectionSourcesBound   bool
@@ -497,13 +501,51 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 	return info
 }
 
+const submitResultSuccessText = "Task result submitted successfully."
+
+type submitResultCallIDKey struct{}
+
 func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (response fantasy.ToolResponse, runErr error) {
-	reason := RepairFailureInvalidSchema
-	defer func() { response = tagSubmissionFailure(response, reason) }()
+	var inspectPayload *CompiledResultContract
+	original, ok := ctx.Value(originalSubmitResultInputKey{}).(string)
+	if !ok {
+		original = call.Input
+	}
+	defer func() {
+		response = tagSubmissionFailure(response, RepairFailureInvalidSchema)
+		if inspectPayload != nil && submissionFailureMetadata(response.Metadata) == RepairFailureInvalidSchema {
+			if err := t.coordinator.validateReadablePayloadSources(ctx, t.todoID, inspectPayload, original, true); err != nil {
+				response = submissionRejectionResponse(err)
+			}
+		}
+	}()
 	contract := t.submissionContract()
+	var draft json.RawMessage
+	var normalizationSubmission string
 	if t.coordinator != nil {
-		if _, _, err := t.coordinator.boundResultContract(t.todoID); err != nil {
+		ref, compiled, err := t.coordinator.boundResultContract(t.todoID)
+		if err != nil {
 			return submissionFailureResponse(RepairFailureContract, err.Error()), nil
+		}
+		if ref != nil && ref.Normalizer == "" {
+			inspectPayload = compiled
+		}
+		workspace := ""
+		if t.coordinator.session != nil {
+			workspace = t.coordinator.session.Workspace
+		}
+		if err := t.coordinator.validateSubmissionSourceEnvelope(ctx, t.todoID, workspace, call.Input, nil, compiled); err != nil {
+			return sourceSubmissionFailure(err), nil
+		}
+		if err := t.coordinator.validateIndependentSubmissionSources(ctx, t.todoID, compiled, submissionSourceOmissions(compiled, call.Input, true)); err != nil {
+			return sourceSubmissionFailure(err), nil
+		}
+		if ref != nil && ref.Normalizer != "" {
+			draft, err = submittedNormalizerDraft([]byte(original), true)
+			if err != nil {
+				return fantasy.NewTextErrorResponse(err.Error()), nil
+			}
+			normalizationSubmission = original
 		}
 		if err := t.coordinator.validateFixedCollectionInputJSON(t.todoID, call.Input); err != nil {
 			return fantasy.NewTextErrorResponse(err.Error()), nil
@@ -517,7 +559,7 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 		}
 	}
 	if t.coordinator != nil {
-		normalized, err := t.coordinator.resolveResultEvidenceKeys(ctx, t.todoID, call.Input)
+		normalized, err := t.coordinator.resolveSubmissionEvidenceKeys(ctx, t.todoID, call.Input, draft)
 		if err != nil {
 			err = t.coordinator.localEvidenceRejection(ctx, t.todoID, call.Input, err)
 			return submissionFailureResponse(localResultRejectionReason(err), "invalid evidence key: "+err.Error()), nil
@@ -554,6 +596,8 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 		}
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid submit_result arguments: %v. %s", err, buildToolSchemaValidationPrompt(submitResultToolName, violation, info))), nil
 	}
+	input.normalizerDraft = draft
+	input.normalizerSubmission = normalizationSubmission
 	validationInfo := t.fullInfo()
 	// Top-level presence has task-specific semantic handling below (including
 	// stable result-contract error codes and runtime defaults). Validate the
@@ -568,19 +612,20 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 		return fantasy.NewTextErrorResponse(buildToolSchemaValidationPrompt(submitResultToolName, validationErr, t.fullInfo())), nil
 	}
 	admission := localResultAdmission{coordinator: t.coordinator, todoID: t.todoID, sink: t.sink}
+	ctx = context.WithValue(ctx, submitResultCallIDKey{}, call.ID)
 	err = admission.admit(ctx, input, contract, func() RepairFailureReason {
 		return t.payloadRejectionReason(call.Input)
 	})
 	if err != nil {
 		if missing, ok := errors.AsType[*artifactReadCoverageIncomplete](err); ok {
-			return fantasy.NewTextErrorResponse(missing.Error()), nil
+			return sourceSubmissionFailure(missing), nil
 		}
-		if _, selection := errors.AsType[*resultEvidenceChoiceError](err); selection && t.coordinator != nil {
+		if isResultReferenceChoiceError(err) && t.coordinator != nil {
 			err = t.coordinator.localEvidenceRejection(ctx, t.todoID, call.Input, err)
 		}
-		return submissionFailureResponse(localResultRejectionReason(err), err.Error()), nil
+		return submissionRejectionResponse(err), nil
 	}
-	return fantasy.NewTextResponse("Task result submitted successfully."), nil
+	return fantasy.NewTextResponse(submitResultSuccessText), nil
 }
 
 // normalizeSubmitResultInput preserves the typed result contract while being
@@ -736,63 +781,4 @@ type submitResultRuntimeIdentity struct {
 	Agent              string
 	OccurrenceRevision int
 	DispatchID         string
-}
-
-func (c *Coordinator) stageSubmittedArtifacts(identity submitResultRuntimeIdentity, refs []ArtifactRef) {
-	if c == nil || len(refs) == 0 {
-		return
-	}
-	identity = c.completeOccurrenceLease(identity)
-	if !validSubmitResultIdentity(identity) {
-		return
-	}
-	controller := c.occurrenceController(identity.TaskID)
-	controller.mu.Lock()
-	if controller.opened && sameTaskResultOccurrence(controller.identity, identity) && !controller.reserved && controller.result == nil {
-		controller.pending = append([]ArtifactRef(nil), refs...)
-	}
-	controller.mu.Unlock()
-}
-
-func validateSubmittedArtifactClaims(ctx context.Context, workspace string, artifacts []ArtifactRef) error {
-	for i, artifact := range artifacts {
-		if artifact.ID != "" {
-			return fmt.Errorf("artifacts[%d] %q: artifact ids are runtime-owned", i, artifact.Path)
-		}
-		if artifact.SHA256 != "" || artifact.Bytes != 0 || artifact.ByteSize != 0 || artifact.RunID != "" || artifact.TaskID != "" || artifact.Attempt != 0 || artifact.Agent != "" || artifact.Provider != "" || artifact.ToolCallID != "" || !artifact.CreatedAt.IsZero() {
-			return fmt.Errorf("artifacts[%d] %q: artifact provenance is runtime-owned", i, artifact.Path)
-		}
-		if strings.TrimSpace(artifact.Path) == "" {
-			return fmt.Errorf("artifacts[%d] path is required", i)
-		}
-		path, err := resolveArtifactSourcePath(workspace, artifact.Path)
-		if err != nil {
-			return fmt.Errorf("artifacts[%d] %q: %w", i, artifact.Path, err)
-		}
-		if policy, ok := ctx.Value(tools.ArtifactPathPolicyKey).(tools.ArtifactPathPolicy); ok {
-			if err := tools.EnforceArtifactPathPolicy(path, &policy); err != nil {
-				return fmt.Errorf("artifacts[%d] %q: %w", i, artifact.Path, err)
-			}
-		}
-		info, err := os.Stat(path)
-		if err != nil {
-			return fmt.Errorf("artifacts[%d] %q: %w", i, artifact.Path, err)
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("artifacts[%d] %q must be a regular file", i, artifact.Path)
-		}
-	}
-	return nil
-}
-
-func putSubmittedArtifact(ctx context.Context, store *FileArtifactStore, identity submitResultRuntimeIdentity, artifact ArtifactRef) (ArtifactRef, error) {
-	_, err := resolveArtifactSourcePath(store.sourceDir, artifact.Path)
-	if err != nil {
-		return ArtifactRef{}, err
-	}
-	putResult, err := store.Put(ctx, PutArtifactRequest{
-		Kind: artifact.Kind, Path: artifact.Path, Description: artifact.Description, MediaType: artifact.MediaType,
-		SourcePath: artifact.Path, RunID: identity.RunID, TaskID: identity.TaskID, Attempt: identity.Attempt, Agent: identity.Agent,
-	})
-	return putResult.ArtifactRef, err
 }

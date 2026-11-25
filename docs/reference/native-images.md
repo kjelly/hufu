@@ -20,7 +20,7 @@ context 與資源限額。歷史 ref 或已知 artifact ID 本身不授予送圖
 | MCP direct／dynamic gateway | text／image blocks 保留順序；下一模型回合以原生圖片送出 |
 | MCP native action | 完整 Outputs 先驗證，再發布圖片與收據綁定的 media projection |
 | `results images` | 列出已選歷史 task 結果的工具圖片；可匯出原始 bytes |
-| Codex App Server | 原生 localImage 輸入；限已驗證 schema／binary version 的 0.166.0，見下節 |
+| Codex App Server | 暫不支援（Unsupported）。見下節的實作紀錄 |
 
 支援靜態 PNG、JPEG、WebP，檔案內容與 MIME 必須一致。其他 binary content、
 未授權目標或不明圖片能力會被拒絕。離線 fake-provider 測試證明封包與 runtime
@@ -105,6 +105,8 @@ MCP `structuredContent` 存在時，Outputs 保持該完整 object；沒有 stru
 
 ## Codex App Server 圖片接入
 
+Hufu 的 Codex App Server 整合暫不支援。開發、支援及專屬測試均已暫停。下列內容記錄既有實作。
+
 此階段的 adapter 使用 pinned `codex-cli 0.166.0` schema 的 `text`／`localImage` union。
 圖片工作會執行受限的 `--version` probe，核對實際 executable 的 SHA-256，
 不依 `userAgent` 推測能力。較新、較舊或未驗證版本都在圖片 turn 前拒絕；
@@ -116,7 +118,7 @@ operator capacity 優先，否則採 agent／team 的 `context-window`；無容�
 無法容納文字、每次圖片、輸出預留與 safety margin 時拒絕。token 計量包含
 已知的 input JSON、受控路徑、developer instructions 與結果 schema，屬保守估計。
 
-例如，已設定好 `example` team 的 Codex worker 後，可使用既有 CLI 語法：
+開發期間的 CLI 範例使用已設定 Codex worker 的 `example` team。
 
 ```bash
 hufu --agent-team example --context-window "$CONTEXT_WINDOW" --image ./photo.png '@worker 分析這張圖片'

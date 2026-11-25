@@ -667,12 +667,12 @@ func TestResultCollectionTextRequestCompatibility(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			checkpoint, err = c.reserveResultCollection(ctx, checkpoint, frozen.InvocationID, data)
+			checkpoint, err = c.executeFrozenCollectionTurn(ctx, invocation, c.session.Agents["worker"], checkpoint, frozen.InvocationID, data)
 			if err != nil {
 				t.Fatal(err)
 			}
-			actual, _, err := c.runCollectionInvocation(invocation, c.session.Agents["worker"], checkpoint)
-			if err != nil || actual != claims {
+			actual, err := c.readCollectionBlob(ctx, checkpoint, "response", checkpoint.Response)
+			if err != nil || string(actual) != claims {
 				t.Fatalf("legacy output changed: %q %v", actual, err)
 			}
 		})

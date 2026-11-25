@@ -47,6 +47,14 @@ func assembleRuntimeEvidenceInputs(raw []byte, spec *resultEvidenceInputsSpec, i
 	if spec == nil || !spec.runtimeOwned() {
 		return raw, nil
 	}
+	entries, err := runtimeBoundEvidenceEntries(spec, ids, results)
+	if err != nil {
+		return nil, err
+	}
+	return bindRuntimeEvidenceEntries(raw, spec, entries)
+}
+
+func bindRuntimeEvidenceEntries(raw []byte, spec *resultEvidenceInputsSpec, entries []any) ([]byte, error) {
 	if len(raw) > resultPayloadMaxBytes {
 		return nil, fmt.Errorf("runtime_bind payload exceeds the byte limit")
 	}
@@ -55,25 +63,21 @@ func assembleRuntimeEvidenceInputs(raw []byte, spec *resultEvidenceInputsSpec, i
 		return nil, err
 	}
 	if _, err := resolveJSONPointer(value, spec.ItemsPointer); err == nil {
-		return nil, fmt.Errorf("omit runtime-owned evidence inputs %s; submit decisions only", spec.ItemsPointer)
+		return nil, &resultBindingShapeError{fmt.Errorf("omit runtime-owned evidence inputs %s; submit decisions only", spec.ItemsPointer)}
 	}
 	if spec.RuntimeComplete {
 		if _, err := resolveJSONPointer(value, spec.CompletePointer); err == nil {
-			return nil, fmt.Errorf("%s is runtime-owned; omit the completion field", spec.CompletePointer)
+			return nil, &resultBindingShapeError{fmt.Errorf("%s is runtime-owned; omit the completion field", spec.CompletePointer)}
 		}
 	}
-	entries, err := runtimeBoundEvidenceEntries(spec, ids, results)
-	if err != nil {
-		return nil, err
-	}
 	if err := setFixedCollectionValue(value, spec.ItemsPointer, entries); err != nil {
-		return nil, err
+		return nil, &resultBindingShapeError{err}
 	}
 	if spec.RuntimeComplete {
 		// This is still an assembled candidate. The runtime publishes it only
 		// after fixed rows, decisions, evidence and the canonical schema pass.
 		if err := setFixedCollectionValue(value, spec.CompletePointer, true); err != nil {
-			return nil, err
+			return nil, &resultBindingShapeError{err}
 		}
 	}
 	encoded, err := json.Marshal(value)

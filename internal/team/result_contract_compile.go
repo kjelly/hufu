@@ -199,6 +199,7 @@ func compileResultContractDocument(id string, raw []byte) (*CompiledResultContra
 	}
 	bindFixedCollectionSchemas(collections, schema)
 	bindRuntimeInputSchemas(runtimeInputs, schema)
+	references.bindConditionSchema(schema)
 	if inputs != nil && inputs.runtimeOwned() {
 		inputs.arraySchema = schema
 		for _, token := range fixedCollectionPointerTokens(inputs.ItemsPointer) {
@@ -341,11 +342,17 @@ func compileTeamResultContracts(session *TeamSession) error {
 			schemas[compiled.ID] = compiled
 		}
 		ref := compiled.ref(spec.RequireStructured)
-		ref.Normalizer = strings.TrimSpace(spec.Normalizer)
+		ref.Normalizer = normalizeCapability(spec.Normalizer)
+		if ref.Normalizer != "" {
+			_, ref.NormalizerSHA256, err = resultNormalizerBinding(session, ref.Normalizer)
+			if err != nil {
+				return ResultContractRef{}, nil, fmt.Errorf("%s: %s: %w", resultContractUnsupportedCode, owner, err)
+			}
+		}
 		return ref, compiled, nil
 	}
 	decisionAgents := decisionRoleEligibleAgents(session)
-	checkBinding := func(owner string, def *agent.AgentDef, compiled *CompiledResultContract) error {
+	checkBinding := func(owner string, def *agent.AgentDef, ref ResultContractRef, compiled *CompiledResultContract) error {
 		if def == nil {
 			return nil
 		}
@@ -360,6 +367,9 @@ func compileTeamResultContracts(session *TeamSession) error {
 		}
 		if reason, ok := decisionAgents[strings.ToLower(def.Name)]; ok {
 			return fmt.Errorf("%s: %s: agent %q may be bound to the %s and cannot declare a result contract", resultContractUnsupportedCode, owner, def.Name, reason)
+		}
+		if ref.Normalizer != "" && agentUsesExternalBackend(session, def) {
+			return fmt.Errorf("%s: %s: result normalizers require a local worker backend", resultContractUnsupportedCode, owner)
 		}
 		if agentUsesExternalBackend(session, def) && len(compiled.CanonicalSchema) > resultContractExternalSchemaMaxBytes {
 			return fmt.Errorf("%s: %s: schema %q is %d canonical bytes, above the %d byte limit for an external agent backend", resultContractUnsupportedCode, owner, compiled.ID, len(compiled.CanonicalSchema), resultContractExternalSchemaMaxBytes)
@@ -377,7 +387,7 @@ func compileTeamResultContracts(session *TeamSession) error {
 		if err != nil {
 			return err
 		}
-		if err := checkBinding(owner, def, compiled); err != nil {
+		if err := checkBinding(owner, def, ref, compiled); err != nil {
 			return err
 		}
 		agentRefs[strings.ToLower(def.Name)] = ref
@@ -392,7 +402,7 @@ func compileTeamResultContracts(session *TeamSession) error {
 		if err != nil {
 			return err
 		}
-		if err := checkBinding(owner, sessionAgentDef(session, task.Agent), compiled); err != nil {
+		if err := checkBinding(owner, sessionAgentDef(session, task.Agent), ref, compiled); err != nil {
 			return err
 		}
 		task.ResultContract = &ref

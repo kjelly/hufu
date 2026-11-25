@@ -12,26 +12,31 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/workspace/versionstore"
 )
 
 type contractCollectionFixtureOptions struct {
-	Accepted         bool
-	Verbatim         bool
-	ValidAccepted    bool
-	Dependents       bool
-	StringEnvelope   bool
-	PriorGrant       bool
-	Endpoint         string
-	ArtifactKeys     bool
-	LongOutput       bool
-	Exhausted        bool
-	FrozenPaths      []string
-	FrozenLineSpans  string
-	PendingPeer      bool
-	PreserveContract bool
+	Accepted           bool
+	Verbatim           bool
+	ValidAccepted      bool
+	Dependents         bool
+	StringEnvelope     bool
+	PriorGrant         bool
+	Endpoint           string
+	ArtifactKeys       bool
+	LongOutput         bool
+	Exhausted          bool
+	FrozenPaths        []string
+	FrozenLineSpans    string
+	FrozenRuntimeInput bool
+	PendingPeer        bool
+	PreserveContract   bool
+	AttributableMemory bool
+	IncompleteReceipts bool
 }
 
 func contractCollectionFixture(t *testing.T, response string, effect SideEffectClass, options ...contractCollectionFixtureOptions) (*Coordinator, *ResumeSource, string) {
@@ -88,6 +93,9 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 	if fixture.Verbatim {
 		definition.OutputMode = TaskOutputModeVerbatim
 	}
+	if fixture.IncompleteReceipts {
+		definition.Execution.Steps = collectionFixtureReceiptSteps()
+	}
 	hash, err := effectiveContractHash(definition.ID, definition.Agent, definition.Execution, definition.OutputMode, definition.SideEffect, definition.Recovery, definition.MaxRetries, definition.Action, definition.FanOut, definition.Optional, definition)
 	if err != nil {
 		t.Fatal(err)
@@ -101,6 +109,7 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 	c, item, ctx, receipt := resultCollectionIdentityFixture(t, cmp.Or(fixture.Endpoint, "http://127.0.0.1:1/v1"), fixture.Endpoint != "", "", func(spec *TodoSpec) {
 		spec.ContractID, spec.ContractHash, spec.Phase = definition.ID, hash, definition.Phase
 		spec.OutputMode = definition.OutputMode
+		spec.Execution = definition.Execution
 		spec.VerifySpec = definition.VerifySpec
 		spec.SideEffect, spec.Recovery, spec.ResultContract = effect, RecoveryManual, &ref
 		spec.RunInputSnapshotID, spec.RunInputSnapshotHash = snapshot.ID, snapshot.SnapshotHash
@@ -120,6 +129,9 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 		}
 		spec.WorksetReceipt = receipts[frozenBinding.WorksetID]
 	}, func(c *Coordinator) {
+		if fixture.AttributableMemory {
+			c.session.Config.MemoryLearning.Mode = agent.MemoryLearningObserve
+		}
 		if fixture.ArtifactKeys {
 			c.session.Agents["worker"].Tools = "view"
 			observedSource = contractCollectionArtifact(t, c)
@@ -167,31 +179,29 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 		workOutput = strings.Repeat(workOutput+"\n", 200)
 		completedOutput = workOutput
 	}
+	request := []byte(`{"tools":[]}`)
+	if fixture.AttributableMemory || fixture.IncompleteReceipts {
+		request = []byte(`{"tools":[],"bound_source_fields":true}`)
+	}
+	if fixture.AttributableMemory {
+		bindCollectionFixtureMemory(t, c, item, receipt)
+	}
+	if fixture.IncompleteReceipts {
+		if err := c.recordActualToolReceipt(ctx, item.ID, receipt.Attempt, "first-read", "view", "{}", "observed", false, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	cp, err := c.beginResultCollection(ctx, item.ID, receipt, workOutput)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cp, err = c.reserveResultCollection(ctx, cp, "original-collector", []byte(`{"tools":[]}`))
+	cp, err = c.reserveResultCollection(ctx, cp, "original-collector", request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cp, err = c.recordCollectionResponse(ctx, cp, []byte(response))
 	if err != nil {
 		t.Fatal(err)
-	}
-	if fixture.PriorGrant {
-		cp, err = c.recordCollectionFormatFailure(ctx, cp, rejectLocalResult(RepairFailureInvalidSchema, errors.New("original canonical schema rejects findings count")))
-		if err != nil {
-			t.Fatal(err)
-		}
-		cp, err = c.reserveResultCollection(ctx, cp, "second-original-collector", []byte(`{"tools":[]}`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		cp, err = c.recordCollectionResponse(ctx, cp, []byte(response))
-		if err != nil {
-			t.Fatal(err)
-		}
 	}
 	if fixture.Accepted {
 		if fixture.PriorGrant {
@@ -317,6 +327,10 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 	} else if fixture.FrozenPaths != nil {
 		nextDocument = strings.TrimSuffix(nextDocument, "}") + `,"x-hufu-workset-paths":{"pointers":["/locations/*"],"format":"path_line"}}`
 	}
+	if fixture.FrozenRuntimeInput {
+		nextDocument = strings.Replace(nextDocument, `"properties":{`, `"properties":{"identity":{"type":"string"},`, 1)
+		nextDocument = strings.TrimSuffix(nextDocument, "}") + `,"x-hufu-runtime-inputs":[{"target":"/identity","source_kind":"workset_binding","output":"identity"}]}`
+	}
 	next, err := CompileResultContractDocument("research.json", []byte(nextDocument))
 	if err != nil {
 		t.Fatal(err)
@@ -437,6 +451,54 @@ func TestContractRecoveryRepairsCompletedCollectionWithoutWorkerReplay(t *testin
 	}
 }
 
+func TestContractRecoveryRuntimeInputsShareReadBudget(t *testing.T) {
+	response := strings.Replace(researchCollectionResponse(t, 14), `"structured_payload":{`, `"structured_payload":{"locations":["dir/source.go:7"],`, 1)
+	c, source, id := contractCollectionFixture(t, response, SideEffectNone, contractCollectionFixtureOptions{
+		FrozenPaths: []string{"dir/source.go"}, FrozenRuntimeInput: true,
+	})
+	ctx := contractCollectionContext(t, id)
+	const maximum = 1 << 20
+	measure, budget := WithArtifactReadBudget(ctx, maximum)
+	plan, err := c.AssessContractRecovery(measure, source)
+	if err != nil || plan.Repaired != 1 {
+		t.Fatalf("authenticated collection preview failed: %v", err)
+	}
+	limit := maximum - budget.remaining - 1
+	before := mustReadEvents(t, c.eventStore)
+	tree, err := LoadSessionTree(c.session.Workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []string{"preview", "apply", "cancelled apply"} {
+		t.Run(operation, func(t *testing.T) {
+			bounded, _ := WithArtifactReadBudget(ctx, limit)
+			switch operation {
+			case "preview":
+				result, err := c.AssessContractRecovery(bounded, source)
+				if result != nil || !errors.Is(err, ErrReadLimit) || !strings.Contains(err.Error(), "recovery target runtime inputs") {
+					t.Fatalf("runtime input bypassed preview budget: plan=%t err=%v", result != nil, err)
+				}
+			case "apply":
+				branch, err := c.ApplyContractRecovery(bounded, source, "over-budget", plan.SHA256)
+				if branch != "" || !errors.Is(err, ErrReadLimit) || !strings.Contains(err.Error(), "recovery target runtime inputs") {
+					t.Fatalf("runtime input bypassed apply budget: branch=%q err=%v", branch, err)
+				}
+			case "cancelled apply":
+				cancelled, cancel := context.WithCancel(ctx)
+				cancel()
+				branch, err := c.ApplyContractRecovery(cancelled, source, "cancelled", plan.SHA256)
+				if branch != "" || !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancelled recovery: branch=%q err=%v", branch, err)
+				}
+			}
+			after, err := LoadSessionTree(c.session.Workspace)
+			if err != nil || !reflect.DeepEqual(tree, after) || !reflect.DeepEqual(before, mustReadEvents(t, c.eventStore)) {
+				t.Fatalf("denied recovery changed branch or event history: %v", err)
+			}
+		})
+	}
+}
+
 func TestContractRecoveryRejectsUnsafeCollectionUpgrade(t *testing.T) {
 	for _, scenario := range []string{"missing_selection", "wrong_task", "partial_effects", "unknown_effects", "unrelated_external_effect", "model_drift", "changed_source", "stale_plan"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -518,7 +580,7 @@ func TestContractRecoveryBoundsCollectorRepairAfterUpgrade(t *testing.T) {
 					return
 				}
 				assertCollectorResponseChannel(t, request)
-				if calls.Add(1) > 2 {
+				if calls.Add(1) > 1 {
 					t.Error("collector exceeded bounded repair grant")
 					http.Error(w, "extra turn", 400)
 					return
@@ -548,7 +610,7 @@ func TestContractRecoveryBoundsCollectorRepairAfterUpgrade(t *testing.T) {
 			}
 			c = reopenContractCollection(t, c, child)
 			a, err := c.AssessResultCollectionRecovery(t.Context(), id)
-			if err != nil || a.Disposition != RecoveryRepairClaims || a.AdditionalTurns != 2 {
+			if err != nil || a.Disposition != RecoveryRepairClaims || a.AdditionalTurns != 0 || a.RemainingTurns != 1 {
 				t.Fatalf("assessment=%+v err=%v", a, err)
 			}
 			worker := scriptWorker(textTurn("never replay"))
@@ -558,7 +620,7 @@ func TestContractRecoveryBoundsCollectorRepairAfterUpgrade(t *testing.T) {
 			}
 			_, err = c.executeTask(WithSessionResume(t.Context()), taskDefFromTodoItem(c.todoItemByID(id)), id)
 			item := c.todoItemByID(id)
-			if worker.Calls() != 0 || valid && (err != nil || item.Status != TaskDone || calls.Load() != 1) || !valid && (err == nil || item.Status != TaskBlocked || calls.Load() != 2) {
+			if worker.Calls() != 0 || valid && (err != nil || item.Status != TaskDone || calls.Load() != 1) || !valid && (err == nil || item.Status != TaskBlocked || calls.Load() != 1) {
 				t.Fatalf("valid=%t calls=%d worker=%d status=%s err=%v", valid, calls.Load(), worker.Calls(), item.Status, err)
 			}
 			if currentResultCollection(item).TurnsUsed != a.TurnsUsed+int(calls.Load()) {

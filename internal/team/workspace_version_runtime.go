@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/kjelly/hufu/internal/utils"
 	"github.com/kjelly/hufu/internal/workspace/versionstore"
 )
 
@@ -75,6 +76,11 @@ func (c *Coordinator) admitWorkspaceVersion(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
+	c.workspaceRecoveryMu.Lock()
+	defer c.workspaceRecoveryMu.Unlock()
+	if err := c.flushWorkspaceProviderRecovery(); err != nil {
+		return errors.Join(versionstore.ErrWorkspaceRecoveryRequired, err)
+	}
 	skipped, err := run.withOps(ctx, "admission", func(ops *WorkspaceSessionOps) error {
 		return ops.admitRun(ctx, run.branchID)
 	})
@@ -98,9 +104,7 @@ func (c *Coordinator) checkpointWorkspaceVersion(ctx context.Context, result *Ru
 	if !ok {
 		return
 	}
-	_, err := run.withOps(ctx, "run checkpoint", func(ops *WorkspaceSessionOps) error {
-		return ops.checkpointRun(ctx, run.branchID)
-	})
+	err := c.checkpointWithWorkspaceRecovery(ctx, run)
 	if err == nil {
 		return
 	}
@@ -108,6 +112,18 @@ func (c *Coordinator) checkpointWorkspaceVersion(ctx context.Context, result *Ru
 	if result != nil {
 		c.appendRunWarning(result, "workspace run checkpoint deferred", err)
 	}
+}
+
+func (c *Coordinator) checkpointWithWorkspaceRecovery(ctx context.Context, run workspaceRunVersioning) error {
+	c.workspaceRecoveryMu.Lock()
+	defer c.workspaceRecoveryMu.Unlock()
+	if c.pendingWorkspaceRecovery != nil {
+		return errors.Join(versionstore.ErrWorkspaceRecoveryRequired, c.flushWorkspaceProviderRecovery())
+	}
+	_, err := run.withOps(ctx, "run checkpoint", func(ops *WorkspaceSessionOps) error {
+		return ops.checkpointRun(ctx, run.branchID)
+	})
+	return err
 }
 
 // deferWorkspaceCheckpoint records that the files of this run were not
@@ -123,21 +139,61 @@ func (c *Coordinator) deferWorkspaceCheckpoint(ctx context.Context, cause error)
 }
 
 // markWorkspaceUnauthorizedMutation records the §22.3 recovery marker after
-// an external provider changed paths outside its writable roots. Only paths
-// are recorded, never content.
-func (c *Coordinator) markWorkspaceUnauthorizedMutation(ctx context.Context, request AttemptRequest, delta WorkspaceDelta, cause error) {
+// an external provider changed paths outside its writable roots. The
+// diagnostic path list is redacted before it enters the version store.
+func (c *Coordinator) markWorkspaceUnauthorizedMutation(request AttemptRequest, delta WorkspaceDelta, cause error, secrets *utils.SecretRedactionScope) {
 	run, ok := c.workspaceRun()
 	if !ok {
 		return
 	}
 	detail := fmt.Sprintf("run %s task %s attempt %d: %s; paths: %s", request.RunID, request.TaskID, request.Attempt,
 		cause, strings.Join(deltaPaths(delta, 10), ", "))
-	err := updateSubjectMarker(ctx, run.version, func(state *versionstore.SubjectState) {
-		state.RecoveryRequired, state.RecoveryCode, state.RecoveryDetail = true, "unauthorized_mutation", detail
-	})
-	if err != nil {
+	detail = secrets.RedactText(detail)
+	c.markWorkspaceProviderRecovery(run.version, "unauthorized_mutation", detail)
+}
+
+func (c *Coordinator) markWorkspaceProviderUnsettled(request AttemptRequest) {
+	if run, ok := c.workspaceRun(); ok {
+		detail := fmt.Sprintf("run %s task %s attempt %d: could not confirm provider process group exit", request.RunID, request.TaskID, request.Attempt)
+		c.markWorkspaceProviderRecovery(run.version, "provider_process_unsettled", utils.RedactSecrets(detail))
+	}
+}
+
+func (c *Coordinator) markWorkspaceProviderEffectsUnverified(request AttemptRequest, cause error, secrets *utils.SecretRedactionScope) {
+	if run, ok := c.workspaceRun(); ok {
+		detail := fmt.Sprintf("run %s task %s attempt %d: could not verify provider workspace effects: %v", request.RunID, request.TaskID, request.Attempt, cause)
+		c.markWorkspaceProviderRecovery(run.version, "provider_effects_unverified", secrets.RedactText(detail))
+	}
+}
+
+type workspaceProviderRecovery struct {
+	version      WorkspaceVersionContext
+	code, detail string
+}
+
+func (c *Coordinator) markWorkspaceProviderRecovery(version WorkspaceVersionContext, code, detail string) {
+	c = c.canonicalJournalOwner()
+	c.workspaceRecoveryMu.Lock()
+	defer c.workspaceRecoveryMu.Unlock()
+	detail = utils.TruncateRunes(detail, 4096)
+	c.pendingWorkspaceRecovery = &workspaceProviderRecovery{version: version, code: code, detail: detail}
+	if err := c.flushWorkspaceProviderRecovery(); err != nil {
 		log.Printf("warning: record workspace recovery marker: %v", err)
 	}
+}
+
+// The caller holds workspaceRecoveryMu. Clearing the pending marker requires
+// a durable write before either run admission or checkpointing can proceed.
+func (c *Coordinator) flushWorkspaceProviderRecovery() error {
+	marker := c.pendingWorkspaceRecovery
+	if marker == nil {
+		return nil
+	}
+	if err := versionstore.RecordProviderRecovery(marker.version.StateDir, marker.version.SubjectRoot, marker.code, marker.detail); err != nil {
+		return err
+	}
+	c.pendingWorkspaceRecovery = nil
+	return nil
 }
 
 func deltaPaths(delta WorkspaceDelta, limit int) []string {
@@ -201,7 +257,7 @@ func (o *WorkspaceSessionOps) admitRun(ctx context.Context, branchID string) err
 		log.Printf("warning: workspace versioning: %s is not a Git work tree and has no %s; every file is captured",
 			o.Version.SubjectRoot, versionstore.HufuignoreFile)
 	}
-	head, _, err := o.saveLiveState(ctx, branchID, versionstore.SnapshotExternalDrift)
+	head, _, err := o.saveLiveState(ctx, branchID, versionstore.SnapshotExternalDrift, state.RecoveryToken())
 	if err != nil {
 		return err
 	}
@@ -222,7 +278,7 @@ func (o *WorkspaceSessionOps) checkpointRun(ctx context.Context, branchID string
 	if state.RecoveryRequired {
 		return nil
 	}
-	head, _, err := o.saveLiveState(ctx, branchID, versionstore.SnapshotRunCheckpoint)
+	head, _, err := o.saveLiveState(ctx, branchID, versionstore.SnapshotRunCheckpoint, state.RecoveryToken())
 	if err != nil {
 		return err
 	}

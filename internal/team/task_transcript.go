@@ -318,12 +318,16 @@ func (t *taskTranscript) append(record taskTranscriptRecord) error {
 }
 
 func (t *taskTranscript) Manifest() (*ArtifactRef, error) {
+	return t.manifest(false, "")
+}
+
+func (t *taskTranscript) manifest(submissionInProgress bool, acceptedCallID string) (*ArtifactRef, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.f == nil {
 		return nil, fmt.Errorf("create task transcript manifest: closed")
 	}
-	if t.toolResults == 0 && !t.assistantOutput {
+	if t.toolResults == 0 && !t.assistantOutput && !submissionInProgress {
 		return nil, fmt.Errorf("task produced no tool results or assistant output")
 	}
 	if err := t.f.Sync(); err != nil {
@@ -333,7 +337,7 @@ func (t *taskTranscript) Manifest() (*ArtifactRef, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open task transcript artifact store: %w", err)
 	}
-	putResult, err := store.Put(context.Background(), PutArtifactRequest{
+	request := PutArtifactRequest{
 		Kind:        taskTranscriptMediaType,
 		Path:        t.path,
 		Description: "Complete tool-call transcript captured by hufu",
@@ -343,7 +347,28 @@ func (t *taskTranscript) Manifest() (*ArtifactRef, error) {
 		TaskID:      t.todoID,
 		Agent:       t.agent,
 		Attempt:     t.attempt,
-	})
+	}
+	if acceptedCallID != "" {
+		// Seal the acknowledgment in the accepted snapshot. The streaming
+		// callback records it in the live transcript after the handoff commits.
+		path, err := resolveArtifactSourcePath(t.workspace, t.path)
+		if err != nil {
+			return nil, err
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read transcript for accepted submission: %w", err)
+		}
+		acknowledgment, err := json.Marshal(taskTranscriptRecord{
+			Timestamp: time.Now().Format(time.RFC3339Nano), Event: "tool_result", ToolCallID: acceptedCallID,
+			Tool: submitResultToolName, Output: submitResultSuccessText,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("encode accepted submission acknowledgment: %w", err)
+		}
+		request.Content, request.SourcePath = append(append(body, acknowledgment...), '\n'), ""
+	}
+	putResult, err := store.Put(context.Background(), request)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot task transcript: %w", err)
 	}

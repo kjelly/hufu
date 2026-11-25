@@ -45,15 +45,17 @@ func blockedRecoveryFixture(t *testing.T, body string, prepared bool, reason Rep
 func TestResultCollectionRecoveryGrantsTurnsForLostExhaustedResponse(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name    string
-		used    int
-		durable bool
-		added   int
+		name           string
+		used           int
+		durable        bool
+		priorRejection bool
+		added          int
 	}{
-		{"pending", 0, false, 0},
-		{"lost_with_remaining_turn", 1, false, 0},
-		{"lost_exhausted", 2, false, 2},
-		{"durable_response_exhausted", 2, true, 0},
+		{"pending", 0, false, false, 0},
+		{"lost_with_remaining_turn", 1, false, false, 0},
+		{"lost_exhausted", 2, false, false, 2},
+		{"lost_correction", 2, false, true, 0},
+		{"durable_response_exhausted", 2, true, true, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, item, ctx, cp := beginCollectionFixture(t)
@@ -63,7 +65,13 @@ func TestResultCollectionRecoveryGrantsTurnsForLostExhaustedResponse(t *testing.
 				if err != nil {
 					t.Fatal(err)
 				}
-				if turn+1 < tc.used {
+				if turn+1 == tc.used {
+					continue
+				}
+				if !tc.priorRejection {
+					c.executionRunID = "resume-lost-collector"
+					ctx = WithSessionResume(ctx)
+				} else {
 					cp, err = c.recordCollectionResponse(ctx, cp, []byte(`{"status":`))
 					if err == nil {
 						cp, err = c.recordCollectionSchemaFailure(ctx, cp)
@@ -83,6 +91,12 @@ func TestResultCollectionRecoveryGrantsTurnsForLostExhaustedResponse(t *testing.
 			c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "collection interrupted", NeedsHuman, FailureProtocol, TaskBlocked, "original report")
 			c = reopenRecoveryCoordinator(t, c)
 			a, err := c.AssessResultCollectionRecovery(t.Context(), item.ID)
+			if tc.priorRejection && !tc.durable {
+				if err != nil || a.Disposition != RecoveryBlocked || a.AdditionalTurns != 0 || a.TurnsUsed != tc.used {
+					t.Fatalf("lost correction earned another turn: %+v, %v", a, err)
+				}
+				return
+			}
 			if err != nil || validateRecoveryAssessment(a) != nil || a.AdditionalTurns != tc.added || a.TurnsUsed != tc.used || a.Checkpoint.Work != cp.Work {
 				t.Fatalf("assessment=%+v err=%v", a, err)
 			}
@@ -254,7 +268,7 @@ func TestResultCollectionRecoveryNormalizesOnlyVerifiedJSONFrames(t *testing.T) 
 				t.Fatalf("assessment=%+v error=%v", a, err)
 			}
 			if tc.disposition == RecoveryRepairClaims {
-				if _, err := c.decodeCollectionClaims(item.ID, []byte(tc.body)); err == nil || a.AdditionalTurns != 2 || validateRecoveryAssessment(a) != nil {
+				if _, err := c.decodeCollectionClaims(item.ID, []byte(tc.body)); err == nil || a.AdditionalTurns != 0 || a.RemainingTurns != 1 || validateRecoveryAssessment(a) != nil {
 					t.Fatal("inspection accepted the wrapper or lost bounded repair authority")
 				}
 			}
@@ -306,8 +320,23 @@ func TestResultCollectionRecoveryRepairsHistoricalCanonicalSchemaFailure(t *test
 				t.Fatal(err)
 			}
 			assessment, err := c.AssessResultCollectionRecovery(t.Context(), item.ID)
-			if err != nil || assessment.Disposition != RecoveryRepairClaims || assessment.AdditionalTurns != 2 || assessment.TurnsUsed != 1 || assessment.RemainingTurns != 1 || assessment.OriginalReason != originalReason {
+			if err != nil || assessment.Disposition != RecoveryRepairClaims || assessment.AdditionalTurns != 0 || assessment.TurnsUsed != 1 || assessment.RemainingTurns != 1 || assessment.OriginalReason != originalReason {
 				t.Fatalf("assessment=%+v error=%v", assessment, err)
+			}
+			historical := cloneRecoveryAssessment(assessment)
+			historical.ValidatorRevision = resultRecoveryStrandedVerifierRevision
+			historical.AdditionalTurns = 2
+			historical.Checks = slices.DeleteFunc(historical.Checks, func(check ResultCollectionRecoveryCheck) bool {
+				return check.Code == collectionSchemaBudgetCheck
+			})
+			historical.Fingerprint, err = recoveryAssessmentFingerprint(historical)
+			if err != nil || validateRecoveryAssessment(historical) != nil {
+				t.Fatalf("saved legacy grant lost its original proof rules: %v", err)
+			}
+			historical.ValidatorRevision = resultRecoveryValidatorRevision
+			historical.Fingerprint, err = recoveryAssessmentFingerprint(historical)
+			if err != nil || !errors.Is(validateRecoveryAssessment(historical), errResultCollectionStale) {
+				t.Fatalf("new grants can claim the previous schema allowance: %v", err)
 			}
 			eventsAfter, err := c.EventJournal().ReadEvents(t.Context())
 			if err != nil || !reflect.DeepEqual(eventsBefore, eventsAfter) || !reflect.DeepEqual(before, c.todoItemByID(item.ID)) || len(c.resultValidationFailures) != 0 {
@@ -342,7 +371,7 @@ func TestResultCollectionRecoveryRepairsHistoricalCanonicalSchemaFailure(t *test
 			}
 			done := c.todoItemByID(item.ID)
 			current := currentResultCollection(done)
-			if worker.Calls() != 0 || done.Status != TaskDone || current.State != ResultCollectionCommitted || current.TurnsUsed != 2 || current.TurnLimit != 3 || current.Work != cp.Work || done.TypedResult == nil || done.TypedResult.Summary != "original uncertainty retained" {
+			if worker.Calls() != 0 || done.Status != TaskDone || current.State != ResultCollectionCommitted || current.TurnsUsed != 2 || current.TurnLimit != cp.TurnLimit || current.Work != cp.Work || done.TypedResult == nil || done.TypedResult.Summary != "original uncertainty retained" {
 				t.Fatal("recovery replayed work, reset the budget, or changed original evidence")
 			}
 			replayed, err := c.EventJournal().ReadEvents(t.Context())
@@ -366,7 +395,11 @@ func TestResultCollectionRecoverySchemaFailureCannotHideInvalidSources(t *testin
 			if scenario == "receipt" {
 				body = strings.Replace(body, `"status":"success"`, `"status":"success","receipt_ids":["forged-receipt"]`, 1)
 			}
-			c, item, ctx, cp := preparedCollectionClaimsFixture(t, collectedConditionalFindingSchema, body)
+			fixture := preparedCollectionClaimsFixture
+			if scenario == "receipt" {
+				fixture = receivedCollectionClaimsFixture
+			}
+			c, item, ctx, cp := fixture(t, collectedConditionalFindingSchema, body)
 			cp, err := c.blockResultCollection(ctx, cp, RepairFailureSource)
 			if err != nil {
 				t.Fatal(err)
@@ -410,7 +443,7 @@ func TestResultCollectionRecoveryAssessmentPreservesEvidence(t *testing.T) {
 		{"valid prepared previously source invalid", `{"status":"success","summary":"limitations retained in original report"}`, true, RepairFailureSource, RecoveryCommitLocal, 0},
 		{"valid received", `{"status":"success","summary":"complete"}`, false, RepairFailureSource, RecoveryCommitLocal, 0},
 		{"inert assumption report", `{"status":"success","summary":"original report","assumption_checks":[{"assumption_id":"observed","status":"supported"}]}`, true, RepairFailureSource, RecoveryCommitLocal, 0},
-		{"malformed response", `{"status":`, false, RepairFailureSource, RecoveryRepairClaims, 2},
+		{"malformed response", `{"status":`, false, RepairFailureSource, RecoveryRepairClaims, 0},
 		{"missing response unavailable", "", false, repairFailureCollectionUnavailable, RecoveryResumeCollection, 2},
 		{"missing source claims", "", false, RepairFailureSource, RecoveryBlocked, 0},
 		{"storage only", "", false, RepairFailureCommit, RecoveryResumeCollection, 0},
@@ -624,7 +657,7 @@ func TestResultCollectionRecoveryPreviewUsesReadOnlySource(t *testing.T) {
 	}
 }
 
-func TestResultCollectionRecoveryKeepsReservedTurnsAfterInterruption(t *testing.T) {
+func TestResultCollectionRecoveryDoesNotRefundAnInterruptedCorrection(t *testing.T) {
 	t.Parallel()
 	c, id, cp := blockedRecoveryFixture(t, `{"status":`, false, RepairFailureSource)
 	c.executionRunID = "first-recovery"
@@ -653,15 +686,15 @@ func TestResultCollectionRecoveryKeepsReservedTurnsAfterInterruption(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Disposition != RecoveryResumeCollection || a.TurnsUsed != cp.TurnsUsed+1 {
-		t.Fatalf("assessment refunded reserved turn: %+v", a)
+	if a.Disposition != RecoveryBlocked || a.TurnsUsed != cp.TurnsUsed+1 || a.AdditionalTurns != 0 {
+		t.Fatalf("assessment refunded reserved correction: %+v", a)
 	}
-	if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), id)); err != nil {
-		t.Fatal(err)
+	if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), id)); err == nil {
+		t.Fatal("recovery granted another correction after losing the prior response")
 	}
 	current := c.todoItemByID(id).ExecutionReceipt.ResultCollection
-	if current.TurnsUsed != reserved.TurnsUsed || current.TurnLimit != reserved.TurnsUsed+2 {
-		t.Fatal("grant reset or over-extended the budget")
+	if current.TurnsUsed != reserved.TurnsUsed || current.TurnLimit != reserved.TurnLimit {
+		t.Fatal("rejected grant changed the collector budget")
 	}
 }
 

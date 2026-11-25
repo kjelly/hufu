@@ -30,7 +30,7 @@ func evidenceSourceLimit(contract ExecutionContract) (int, error) {
 // one: a critic sent only goal prose has no finding or diff to check, and in
 // the 2026-10-01 review run it spent its turns searching memory and runtime
 // logs and ended without a result.
-func (c *Coordinator) bindEvidenceSources(tasks []TaskDef) ([]TaskDef, error) {
+func (c *Coordinator) bindEvidenceSources(ctx context.Context, tasks []TaskDef) ([]TaskDef, error) {
 	bound := append([]TaskDef(nil), tasks...)
 	for index := range bound {
 		task := &bound[index]
@@ -55,7 +55,7 @@ func (c *Coordinator) bindEvidenceSources(tasks []TaskDef) ([]TaskDef, error) {
 			if source.Status != TaskDone || source.TypedResult == nil || !taskResultStatusIsSuccessful(source.TypedResult.Status) {
 				return nil, fmt.Errorf("tasks[%d] evidence_from %q is %s, not a completed task with a successful result", index, id, source.Status)
 			}
-			if err := c.validateAcceptedDependencyPayload(source); err != nil {
+			if err := c.validateAcceptedDependencyPayloadWithContext(ctx, source); err != nil {
 				return nil, fmt.Errorf("tasks[%d] evidence_from %q: %w", index, id, err)
 			}
 		}
@@ -104,6 +104,7 @@ func (c *Coordinator) dependencyResultsForBinding(todoID string) []TaskResult {
 }
 
 func (c *Coordinator) dependencyResultViews(ctx context.Context, todoID string, includeReviewedInputs bool) []TaskResult {
+	c = c.dependencyViewOwner(todoID)
 	if c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return nil
 	}
@@ -156,11 +157,11 @@ func (c *Coordinator) dependencyResultViews(ctx context.Context, todoID string, 
 // receipt. An unbound dependent that checks the dependency's result, such as a
 // critic, needs the diff and source it reviewed, which are not part of the
 // dependency's own result.
-func (c *Coordinator) dependencyReviewedInputs(dependency *TodoItem) []ArtifactRef {
+func (c *Coordinator) dependencyReviewedInputs(ctx context.Context, dependency *TodoItem) []ArtifactRef {
 	if c == nil || c.taskTracker == nil || dependency == nil || dependency.WorksetBinding == nil {
 		return nil
 	}
-	return c.newArtifactInputAuthorizer(context.Background(), c.taskTracker.TodoList().Items()).reviewedInputs(dependency)
+	return c.newArtifactInputAuthorizer(ctx, c.taskTracker.TodoList().Items()).reviewedInputs(dependency)
 }
 
 func (v *artifactInputAuthorizer) reviewedInputs(dependency *TodoItem) []ArtifactRef {

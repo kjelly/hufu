@@ -252,7 +252,18 @@ The static workset contract also requires `structured_payload.record`:
   `record`. Runtime sets the kind from the schema and binds the remaining
   fields from the receipt-verified frozen workset.
 - `findings`: the sole findings array, with `summary`, `detail`, source
-  `location`, observed opaque `evidence` refs, and `requires_critique`;
+  `location`, observed opaque `evidence` refs, and `requires_critique`. Use
+  `repository/path.go:line` for code locations. In primary and supplemental
+  reviews, include `source_excerpt` with one exact source line from the
+  assigned Go fragment when citing code. The report gate resolves a unique nearby match
+  and preserves this draft. Set `source_side: head` for coordinates in the
+  frozen source. A HEAD finding without an excerpt must cite an exact line in
+  the assigned span. In a primary review of removed code, set `source_side: old`, use its original
+  line number in the assigned diff, and cite that diff. Use the full ID from
+  the matching `hufu-old-revision` line as `source_revision` when the diff
+  supplies one. Quote the exact Go source text after the minus marker when
+  including an old-side excerpt. Supplemental findings use the frozen HEAD
+  source and omit `source_revision`.
 - `requires_critique: true` for every `error` or `warning`, and for an `info`
   that raises a security concern or material disagreement requiring review;
 - `invariant_assessments`: submit each claim once here, ordered by

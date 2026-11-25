@@ -1,6 +1,7 @@
 package team
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json/v2"
@@ -77,6 +78,9 @@ func projectClaimsInput(input SubmitResultInput, compiled *CompiledResultContrac
 	}
 	if spec.Findings != "" && input.Findings != nil || spec.Invariants != "" && input.InvariantAssessments != nil {
 		return input, fmt.Errorf("projected envelope fields are runtime-owned; submit claims only in structured_payload")
+	}
+	if len(bytes.TrimSpace(input.StructuredPayload)) == 0 {
+		return input, nil
 	}
 	value, err := decodeUniqueJSON(input.StructuredPayload)
 	if err != nil {
@@ -170,6 +174,9 @@ func (c *Coordinator) projectResultClaimsWithRecovery(ctx context.Context, id st
 		if err != nil {
 			return input, err
 		}
+		if !probe.projectionBound {
+			return probe, nil
+		}
 		claims, err := normalizedInvariantAssessmentClaims(probe.InvariantAssessments)
 		if err != nil {
 			return input, err
@@ -221,7 +228,7 @@ func (c *Coordinator) projectResultClaimsWithRecovery(ctx context.Context, id st
 				}
 				return input, rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("invariant %q was outside the frozen work context; omit only its out-of-scope attestation and retain findings", claim.InvariantID))
 			}
-			return input, rejectLocalResult(RepairFailureContract, fmt.Errorf("invariant %q was not included in the work context", claim.InvariantID))
+			return input, rejectLocalResult(RepairFailureSource, fmt.Errorf("invariant %q was not included in the work context", claim.InvariantID))
 		}
 		claims = eligible
 		value, err := decodeUniqueJSON(input.StructuredPayload)

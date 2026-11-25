@@ -117,7 +117,7 @@ func TestContractDataflowResearchAcceptsEmptyAndMixedFindings(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := c.validateSubmittedEvidenceInputs(synthesis.ID, payload); err != nil {
+				if err := c.validateSubmittedEvidenceInputs(t.Context(), synthesis.ID, payload); err != nil {
 					t.Fatal(err)
 				}
 				accept(synthesis, payload)

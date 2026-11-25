@@ -32,8 +32,11 @@ func validateResultRepairTarget(item *TodoItem) error {
 	if item == nil || item.Status != TaskBlocked || item.FailureEvent == nil || item.FailureEvent.FailureClass != FailureProtocol {
 		return fmt.Errorf("result-only repair requires an existing blocked protocol task")
 	}
+	if canResumeDirectNormalization(item) {
+		return nil
+	}
 	if item.WorkerWorkspace.isolated() {
-		return fmt.Errorf("operator result-only repair does not support isolated workspaces")
+		return fmt.Errorf("operator result-only repair requires a sealed submission for isolated workspaces")
 	}
 	if item.ExecutionReceipt == nil || item.ExecutionReceipt.RepairProvenance == nil || !item.ExecutionReceipt.RepairProvenance.Attempted || item.ExecutionReceipt.RepairProvenance.Success {
 		return fmt.Errorf("result-only repair requires the original failed submission receipt")
@@ -70,6 +73,10 @@ func validateResultRepairTarget(item *TodoItem) error {
 	if reason != RepairFailureNoToolCall && reason != RepairFailureInvalidSchema && reason != repairFailurePreparation &&
 		(reason != RepairFailureCommit || item.ResultCandidate == nil || !item.ResultCandidate.Prepared) {
 		return fmt.Errorf("result-only repair cannot repair execution failure %q", reason)
+	}
+	if hasBoundProtocolSchemaRepair(item.ExecutionReceipt) && (item.ResultCandidate == nil || !item.ResultCandidate.Prepared) &&
+		item.ExecutionReceipt.RepairProvenance.RepairAttempts >= protocolRepairLimit(item.ExecutionReceipt.WorkSubmissionFailure, protocolRepairHistory(item.ExecutionReceipt)) {
+		return fmt.Errorf("result-only repair already consumed the schema correction")
 	}
 	return nil
 }
@@ -132,10 +139,17 @@ func (c *Coordinator) authorizeOperatorResultRepair(ctx context.Context) error {
 		AfterAttempts:      item.ExecutionReceipt.RepairProvenance.RepairAttempts,
 		AdditionalAttempts: 2, TranscriptRef: item.ExecutionReceipt.TranscriptRef,
 	}
-	if item.ResultCandidate != nil && item.ResultCandidate.Prepared {
+	if canResumeDirectNormalization(item) {
+		if _, err := c.loadDirectNormalizationRecovery(ctx, item); err != nil {
+			return err
+		}
+		grant.AdditionalAttempts = 0
+	} else if item.ResultCandidate != nil && item.ResultCandidate.Prepared {
 		if _, err := c.loadResultCandidate(ctx, item, item.ResultCandidate); err != nil {
 			return err
 		}
+		grant.AdditionalAttempts = 0
+	} else if hasBoundProtocolSchemaRepair(item.ExecutionReceipt) {
 		grant.AdditionalAttempts = 0
 	} else if model, _ := ctx.Value(resultRepairModelKey{}).(string); model != "" {
 		if _, err := c.resultRepairTarget(model); err != nil {
@@ -205,7 +219,7 @@ func (c *Coordinator) validateResultRepairGrant(ctx context.Context, item *TodoI
 	if item.ExecutionReceipt.ResultCollection != nil {
 		return fmt.Errorf("collection grant requires a verified assessment: %w", errResultCollectionStale)
 	}
-	if item.ResultCandidate != nil && item.ResultCandidate.Prepared {
+	if canResumeDirectNormalization(item) || item.ResultCandidate != nil && item.ResultCandidate.Prepared || hasBoundProtocolSchemaRepair(item.ExecutionReceipt) {
 		if grant.AdditionalAttempts == 0 && grant.Model == "" {
 			return nil
 		}

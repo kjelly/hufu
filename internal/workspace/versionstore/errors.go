@@ -1,6 +1,9 @@
 package versionstore
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Typed errors. Every correctness-sensitive path fails closed with one of
 // these (wrapped with context) instead of falling back to live state.
@@ -19,6 +22,7 @@ var (
 	ErrUnsupportedPathName              = errors.New("workspace path name is not valid UTF-8")
 	ErrHufuignoreRequired               = errors.New(".hufuignore is required for a non-Git workspace in required mode")
 	ErrWorkspaceRecoveryRequired        = errors.New("workspace versioning requires operator recovery")
+	ErrWorkspaceRecoveryChanged         = fmt.Errorf("%w: recovery disposition changed during the operation", ErrWorkspaceRecoveryRequired)
 	ErrModeDowngradeRefused             = errors.New("workspace versioning mode is below the recorded mode floor")
 	ErrUnsupportedPlatform              = errors.New("workspace versioning is only supported on linux")
 	ErrCaptureLimitExceeded             = errors.New("workspace capture limit exceeded")

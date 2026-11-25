@@ -74,11 +74,13 @@ func runOfflineReviewReport(t *testing.T, blocker string, primaryCount int) {
 		if !strings.Contains(fmt.Sprint(request["messages"]), resultCollectorSystem) {
 			t.Error("provider did not receive a collector request")
 		}
-		collections.Add(1)
+		turn := collections.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
 		arguments := `{"result":{"structured_payload":{"gap_resolutions":{}}}}`
 		if blocker != "" {
 			arguments = fmt.Sprintf(`{"result":{"status":"blocked","summary":%q}}`, blocker)
+		} else if turn == 1 {
+			arguments = `{"result":{"structured_payload":{"audit_complete":true,"gap_resolutions":{}}}}`
 		}
 		_, _ = fmt.Fprintf(w, "data: {\"id\":\"report\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"return\",\"type\":\"function\",\"function\":{\"name\":\"return_result\",\"arguments\":%q}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"report\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n", arguments)
 	}))
@@ -222,11 +224,30 @@ func runOfflineReviewReport(t *testing.T, blocker string, primaryCount int) {
 	}
 	report := inventoryWorkflowOccurrences(c, "synthesize-review")[0]
 	checkpoint := currentResultCollection(report)
-	if decisions.Load() != int32(primaryCount) || collections.Load() != 1 || checkpoint == nil || checkpoint.State != ResultCollectionCommitted ||
+	if decisions.Load() != int32(primaryCount) || collections.Load() != 2 || checkpoint == nil || checkpoint.State != ResultCollectionCommitted || checkpoint.TurnsUsed != 2 ||
 		report.TypedResult.Status != "success" || len(report.EvidenceFrom) != 2*primaryCount+2 ||
 		!strings.Contains(string(report.TypedResult.StructuredPayload.Value), `"audit_complete":true`) ||
 		!strings.Contains(report.TypedResult.Summary, fmt.Sprintf("%d sources with %d independent critiques", primaryCount+2, primaryCount)) {
 		t.Fatalf("incorrect v3 report completion, evidence, or transport: %s (%v, calls %d/%d)", report.Detail, report.EvidenceFrom, decisions.Load(), collections.Load())
+	}
+	var canonical struct {
+		Findings []struct {
+			Location string `json:"location"`
+			Side     string `json:"source_side"`
+		} `json:"canonical_findings"`
+	}
+	if err := json.Unmarshal(report.TypedResult.StructuredPayload.Value, &canonical); err != nil {
+		t.Fatal(err)
+	}
+	sides := map[string]bool{}
+	for _, finding := range canonical.Findings {
+		if finding.Location != "fixture.go:1" {
+			t.Fatalf("unexpected canonical finding: %+v", finding)
+		}
+		sides[finding.Side] = true
+	}
+	if len(canonical.Findings) != 2 || !sides["head"] || !sides["old"] {
+		t.Fatalf("report combined the two sides of the change: %+v", canonical.Findings)
 	}
 	for _, critic := range critics {
 		if !slices.Contains(report.EvidenceFrom, critic.ID) {
@@ -282,16 +303,28 @@ func (p offlineReviewPreparation) Execute(ctx context.Context, action Action) (a
 		tests := map[string]any{"completed": true, "passed": true, "reviewed_revision": "head", "base_revision": "base", "packages": []string{"./example"},
 			"command": []string{"go", "test", "./example"}, "requested_input_hash": inputHash, "exit_code": 0, "timed_out": false, "output_truncated": false,
 			"artifact_id": "sha256-" + hash, "artifact_sha256": hash, "output_artifact_id": "sha256-" + hash}
-		return offlineReviewActionResult(map[string]any{"scope": scope, "targeted_go_tests": tests, "targeted_go_test_status": "completed", "test_execution_completed": true},
+		return offlineReviewActionResult(map[string]any{"scope": scope, "targeted_go_tests": tests, "targeted_go_test_status": "completed", "test_execution_completed": true, "test_evidence_sealed": true},
 			[]ArtifactRef{{Path: "tests.txt", Kind: "test_output"}})
 	}
 	content := []byte("diff --git a/fixture.go b/fixture.go\n--- a/fixture.go\n+++ b/fixture.go\n@@ -1 +1 @@\n-return err\n+return nil\n")
-	path := "source.diff"
-	if err := os.WriteFile(filepath.Join(env.Workspace, path), content, 0o600); err != nil {
-		return nil, err
+	source := []byte("return nil\n")
+	inventory := fmt.Appendf(nil, `{"review_revision":"head","sources":[{"path":"fixture.go","role":"primary","available_spans":[{"bundle_start":0,"bundle_end":%d,"start_line":1,"end_line":1,"go_syntax_lines":[1],"first_full_line":1,"last_full_line":1}]}]}`, len(source))
+	var artifacts, inputs []ArtifactRef
+	for _, evidence := range []struct {
+		path, kind string
+		data       []byte
+	}{
+		{"source.diff", "review_diff", content},
+		{"source.md", "review_source_snapshot", source},
+		{"evidence.json", "review_evidence_inventory", inventory},
+	} {
+		if err := os.WriteFile(filepath.Join(env.Workspace, evidence.path), evidence.data, 0o600); err != nil {
+			return nil, err
+		}
+		hash := fmt.Sprintf("%x", sha256.Sum256(evidence.data))
+		artifacts = append(artifacts, ArtifactRef{Path: evidence.path, Kind: evidence.kind})
+		inputs = append(inputs, ArtifactRef{ID: "sha256-" + hash, SHA256: hash, Path: evidence.path, Kind: evidence.kind, ByteSize: int64(len(evidence.data))})
 	}
-	hash := fmt.Sprintf("%x", sha256.Sum256(content))
-	artifacts := []ArtifactRef{{Path: path, Kind: "diff"}}
 	for index, name := range []string{"primary review workset manifest", "documentation review workset manifest", "documentation escalation workset manifest"} {
 		count, base, lens := 1, p.primaryCount+index-1, "documentation-risk"
 		if index == 0 {
@@ -302,7 +335,7 @@ func (p offlineReviewPreparation) Execute(ctx context.Context, action Action) (a
 			key := fmt.Sprintf("unit-%04d", base+offset)
 			manifest.Items = append(manifest.Items, WorksetItem{
 				Key: key, Bindings: map[string]string{"key": key, "review_revision": "head", "lens": lens, "reference_candidate_ids": "[]"},
-				Inputs:       []ArtifactRef{{ID: "sha256-" + hash, SHA256: hash, Path: path, Kind: "diff"}},
+				Inputs:       inputs,
 				TouchedPaths: []string{"fixture.go"},
 			})
 		}
@@ -337,14 +370,19 @@ func returnOfflineReviewWork(ctx context.Context, c *Coordinator) (*fantasy.Agen
 			}
 		}
 	}
-	if refs == nil || len(refs.Inputs) != 1 {
+	if refs == nil || len(refs.Inputs) == 0 {
 		return nil, fmt.Errorf("%s lacks its source artifact", todo.ContractID)
 	}
 	artifact := refs.Inputs[0].ID
 	view := c.gatePolicyTools([]fantasy.AgentTool{tools.NewViewTool(tools.WithArtifactOpener(c.openArtifactRef))})[0]
-	response, err := view.Run(ctx, fantasy.ToolCall{ID: "read-source", Name: "view", Input: fmt.Sprintf(`{"artifact_ref":%q,"byte_limit":1024}`, artifact)})
-	if err != nil || response.IsError {
-		return nil, fmt.Errorf("view %s: %s (%v)", todo.ContractID, response.Content, err)
+	for _, ref := range refs.Inputs {
+		if todo.WorksetBinding == nil && ref.ID != artifact {
+			continue
+		}
+		response, err := view.Run(ctx, fantasy.ToolCall{ID: "read-" + ref.Kind, Name: "view", Input: fmt.Sprintf(`{"artifact_ref":%q,"byte_limit":1024}`, ref.ID)})
+		if err != nil || response.IsError {
+			return nil, fmt.Errorf("view %s: %s (%v)", todo.ContractID, response.Content, err)
+		}
 	}
 	if todo.ContractID == "synthesize-review" {
 		return textAgentResult("Reviewed the source records and the confirmed finding. There are no source gaps to resolve."), nil
@@ -367,8 +405,12 @@ func returnOfflineReviewWork(ctx context.Context, c *Coordinator) (*fantasy.Agen
 	} else {
 		findings := []any{}
 		if todo.ContractID == "review-primary-workset" {
+			side, excerpt, location := "head", "return nil", " ./fixture.go: 3 "
+			if todo.WorksetBinding.ItemKey == "unit-0001" {
+				side, excerpt, location = "old", "return err", "/checkout/fixture.go:2"
+			}
 			findings = append(findings, map[string]any{"summary": "Dropped error", "detail": "The changed branch drops its original error.", "severity": "error",
-				"location": "fixture.go:1", "evidence": []string{artifact}, "requires_critique": true})
+				"location": location, "source_side": side, "source_excerpt": " " + excerpt + " ", "evidence": []string{artifact}, "requires_critique": true})
 		}
 		record = map[string]any{"findings": findings, "gaps": []any{}, "reference_assessments": []any{}, "invariant_assessments": []any{}}
 	}

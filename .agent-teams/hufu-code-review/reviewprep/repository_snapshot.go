@@ -32,16 +32,17 @@ type snapshotFile struct {
 }
 
 type repositorySnapshotManifest struct {
-	ID               string         `json:"snapshot_id"`
-	Revision         string         `json:"revision"`
-	ContentSHA256    string         `json:"content_sha256"`
-	Files            []snapshotFile `json:"files"`
-	Batch            int            `json:"batch"`
-	BatchCount       int            `json:"batch_count"`
-	WorksetsPerBatch int            `json:"worksets_per_batch"`
-	FileCount        int            `json:"file_count"`
-	Plan             *snapshotPlan  `json:"workset_plan,omitempty"`
-	Inventory        *artifact      `json:"inventory,omitempty"`
+	ID                    string         `json:"snapshot_id"`
+	Revision              string         `json:"revision"`
+	ContentSHA256         string         `json:"content_sha256"`
+	Files                 []snapshotFile `json:"files"`
+	Batch                 int            `json:"batch"`
+	BatchCount            int            `json:"batch_count"`
+	WorksetsPerBatch      int            `json:"worksets_per_batch"`
+	FileCount             int            `json:"file_count"`
+	Plan                  *snapshotPlan  `json:"workset_plan,omitempty"`
+	Inventory             *artifact      `json:"inventory,omitempty"`
+	artifactDataDirectory string
 }
 
 // The full plan lives in the receipt-bound inventory artifact. Source hashes
@@ -228,16 +229,6 @@ func generatedSnapshotSource(prefix []byte) bool {
 	return false
 }
 
-func eligibleSnapshotPaths(identity *repositorySnapshotManifest) []string {
-	paths := []string{}
-	for _, file := range identity.Files {
-		if file.Disposition != "excluded" {
-			paths = append(paths, file.Path)
-		}
-	}
-	return paths
-}
-
 // Every inventory unit is grouped by package/directory and lens. The payload is
 // a file list. Assigned source ranges are carried by the source bundle.
 func buildSnapshotBatches(files []snapshotFile, config Config) []*batch {
@@ -255,8 +246,8 @@ func buildSnapshotBatches(files []snapshotFile, config Config) []*batch {
 			lens = "documentation-risk"
 		}
 		nextGroup := filepath.ToSlash(filepath.Dir(name)) + "/" + lens
-		projected := sourceBytes + file.Bytes + 96*1024
-		if current == nil || group != nextGroup || len(current.paths) >= config.MaxPaths || projected > int64(config.MaxSourceSnapshotBytes) || estimateReviewInputTokens(int(projected)) > config.MaxReviewInputTokens {
+		projected := sourceBytes + file.Bytes + 4096
+		if current == nil || group != nextGroup || len(current.paths) >= config.MaxPaths || projected > int64(config.MaxSourceSnapshotBytes) || reviewInputFramingTokens+estimateReviewInputTokens(int(projected)) > config.MaxReviewInputTokens {
 			current = &batch{lens: lens, pathSeen: make(map[string]struct{})}
 			batches = append(batches, current)
 			group, sourceBytes = nextGroup, 0
@@ -457,8 +448,9 @@ func frozenRepositorySnapshot(ctx context.Context, requested resolverScope) (*re
 		return nil, err
 	}
 	var current struct {
-		Version int              `json:"version"`
-		Tasks   []supplementTask `json:"tasks"`
+		Version               int              `json:"version"`
+		Tasks                 []supplementTask `json:"tasks"`
+		ArtifactDataDirectory string           `json:"artifact_data_directory"`
 	}
 	if err := json.Unmarshal(data, &current); err != nil {
 		return nil, err
@@ -483,9 +475,99 @@ func frozenRepositorySnapshot(ctx context.Context, requested resolverScope) (*re
 			return nil, fmt.Errorf("producer snapshot scope mismatch")
 		}
 		frozen = scope.RepositorySnapshot
+		frozen.artifactDataDirectory = current.ArtifactDataDirectory
 	}
 	if frozen == nil {
 		return nil, fmt.Errorf("accepted producer snapshot missing")
 	}
 	return frozen, nil
+}
+
+// Read the selected page from the producer's authenticated inventory and
+// compare its file identities with the verifier's immutable archive.
+func snapshotSelectedTestPaths(frozen, observed *repositorySnapshotManifest) ([]string, error) {
+	if frozen.ID != observed.ID || frozen.ContentSHA256 != observed.ContentSHA256 || frozen.Revision != observed.Revision {
+		return nil, fmt.Errorf("snapshot_mismatch: verifier source differs from workset source")
+	}
+	ref := frozen.Inventory
+	if frozen.artifactDataDirectory == "" || ref == nil || ref.Kind != "repository_snapshot_inventory" ||
+		ref.ID != "sha256-"+ref.SHA256 || len(ref.SHA256) != 64 || ref.Bytes < 1 || ref.Bytes > maxSnapshotInventoryBytes {
+		return nil, fmt.Errorf("invalid verified snapshot inventory reference")
+	}
+	if _, err := hex.DecodeString(ref.SHA256); err != nil {
+		return nil, fmt.Errorf("invalid verified snapshot inventory digest: %w", err)
+	}
+	name := filepath.Join(frozen.artifactDataDirectory, ref.ID)
+	info, err := os.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() != ref.Bytes {
+		return nil, fmt.Errorf("invalid verified snapshot inventory file")
+	}
+	file, err := os.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, ref.Bytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) != ref.Bytes || sha256Hex(data) != ref.SHA256 {
+		return nil, fmt.Errorf("verified snapshot inventory size or digest mismatch")
+	}
+	var full repositorySnapshotManifest
+	if err := json.Unmarshal(data, &full); err != nil {
+		return nil, err
+	}
+	return selectVerifiedSnapshotPaths(frozen, observed, &full)
+}
+
+func selectVerifiedSnapshotPaths(frozen, observed, full *repositorySnapshotManifest) ([]string, error) {
+	if full.ID != frozen.ID || full.Revision != frozen.Revision || full.ContentSHA256 != frozen.ContentSHA256 ||
+		full.FileCount != frozen.FileCount || len(full.Files) != len(observed.Files) || full.Batch != frozen.Batch ||
+		full.BatchCount != frozen.BatchCount || full.WorksetsPerBatch != frozen.WorksetsPerBatch || full.Plan == nil {
+		return nil, fmt.Errorf("verified snapshot inventory differs from the producer receipt")
+	}
+	perBatch, count := full.WorksetsPerBatch, len(full.Plan.Worksets)
+	if full.Batch < 1 || full.Batch > full.BatchCount || perBatch < 1 || perBatch > 30 {
+		return nil, fmt.Errorf("invalid verified snapshot pagination")
+	}
+	batches := (count + perBatch - 1) / perBatch
+	if batches == 0 {
+		batches = 1
+	}
+	if full.BatchCount != batches {
+		return nil, fmt.Errorf("invalid verified snapshot batch count")
+	}
+	start, end := (full.Batch-1)*perBatch, full.Batch*perBatch
+	if end > count {
+		end = count
+	}
+	if len(full.Plan.BatchSourceSHA256) != end-start {
+		return nil, fmt.Errorf("verified snapshot plan is missing selected worksets")
+	}
+	selected := make(map[string]bool)
+	for _, workset := range full.Plan.Worksets[start:end] {
+		for _, source := range workset.Sources {
+			selected[source.Path] = true
+		}
+	}
+	paths := []string{}
+	for i, file := range full.Files {
+		archived := observed.Files[i]
+		if file.Path != archived.Path || file.Mode != archived.Mode || file.SHA256 != archived.SHA256 ||
+			file.Bytes != archived.Bytes || file.Lines != archived.Lines ||
+			(file.Disposition == "selected") != selected[file.Path] || archived.Disposition == "excluded" && selected[file.Path] {
+			return nil, fmt.Errorf("snapshot workset disagrees with immutable source %q", file.Path)
+		}
+		if selected[file.Path] {
+			paths = append(paths, file.Path)
+		}
+	}
+	if len(paths) != len(selected) {
+		return nil, fmt.Errorf("snapshot workset contains untracked paths")
+	}
+	return paths, nil
 }

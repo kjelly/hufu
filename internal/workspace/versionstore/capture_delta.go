@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -41,6 +40,12 @@ func (s *Store) CaptureFromDelta(ctx context.Context, req CaptureRequest, delta 
 	if err != nil {
 		return Snapshot{}, CaptureStats{}, err
 	}
+	subject, err := openSubjectDirectory(plan.root, req.SubjectIdentity)
+	if err != nil {
+		return Snapshot{}, CaptureStats{}, err
+	}
+	defer func() { _ = subject.close() }()
+	plan.subject = subject
 	parent, err := s.GetSnapshot(ctx, req.Parent)
 	if err != nil {
 		return Snapshot{}, CaptureStats{}, err
@@ -56,16 +61,11 @@ func (s *Store) CaptureFromDelta(ctx context.Context, req CaptureRequest, delta 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	root, err := os.OpenRoot(plan.root)
-	if err != nil {
-		return Snapshot{}, CaptureStats{}, fmt.Errorf("open workspace root: %w", err)
-	}
-	defer func() { _ = root.Close() }()
 	tree, err := s.decodeDeltaTree(parent.RootTreeHash)
 	if err != nil {
 		return Snapshot{}, CaptureStats{}, fmt.Errorf("load parent tree: %w", err)
 	}
-	run := &captureRun{store: s, plan: plan, root: root}
+	run := &captureRun{store: s, plan: plan, root: subject.root}
 	if err = run.applyDeletions(tree, filter, delta.Deleted); err != nil {
 		return Snapshot{}, CaptureStats{}, err
 	}
@@ -81,6 +81,9 @@ func (s *Store) CaptureFromDelta(ctx context.Context, req CaptureRequest, delta 
 	}
 	leaves, err := s.summarizeTree(ctx, plan, rootHash)
 	if err != nil {
+		return Snapshot{}, CaptureStats{}, err
+	}
+	if err = subject.verify(); err != nil {
 		return Snapshot{}, CaptureStats{}, err
 	}
 	snapshot, err := s.pendingSnapshot(plan, rootHash, leaves)
@@ -218,23 +221,24 @@ type deltaFilter struct {
 }
 
 func newDeltaFilter(ctx context.Context, plan capturePlan, changed []ObservedFile) (deltaFilter, error) {
-	filter := deltaFilter{policy: plan.policy, gitMode: isGitWorkTree(ctx, plan.root)}
+	root := plan.subject.discoveryPath()
+	filter := deltaFilter{policy: plan.policy, gitMode: isGitWorkTree(ctx, root)}
 	if !filter.gitMode {
-		ignore, err := loadHufuignore(plan.root, plan.policy.requireHufuignore)
+		ignore, err := loadHufuignore(root, plan.policy.requireHufuignore)
 		if err != nil {
 			return deltaFilter{}, err
 		}
 		filter.ignore = ignore
 		return filter, nil
 	}
-	filter.nested = nestedRepoFinder{root: plan.root, known: map[string]bool{}}
+	filter.nested = nestedRepoFinder{root: root, known: map[string]bool{}}
 	var candidates []string
 	for _, observed := range changed {
 		if _, err := deltaPathSegments(observed.Path); err == nil && !filter.structurallyExcluded(observed.Path) {
 			candidates = append(candidates, observed.Path)
 		}
 	}
-	ignored, err := gitIgnored(ctx, plan.root, candidates)
+	ignored, err := gitIgnored(ctx, root, candidates)
 	if err != nil {
 		return deltaFilter{}, err
 	}

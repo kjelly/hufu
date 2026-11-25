@@ -94,7 +94,7 @@ func TestContractDataflowPreservesResearchBeyondPresentationLimits(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := c.validateSubmittedEvidenceInputs(audit.ID, payload); err != nil {
+			if err := c.validateSubmittedEvidenceInputs(t.Context(), audit.ID, payload); err != nil {
 				t.Fatal(err)
 			}
 			// Carry the complete accepted binding and its original source scope.
@@ -146,7 +146,7 @@ func TestContractDataflowPreservesResearchBeyondPresentationLimits(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := c.validateSubmittedEvidenceInputs(synthesis.ID, payload); err != nil {
+			if err := c.validateSubmittedEvidenceInputs(t.Context(), synthesis.ID, payload); err != nil {
 				t.Fatal(err)
 			}
 			stored, err := decodeResultContractJSON(payload.Value)

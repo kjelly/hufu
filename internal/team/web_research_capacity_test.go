@@ -81,7 +81,7 @@ func TestWebResearchReportCoversBothResearchTracksWithinItsBudget(t *testing.T) 
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := c.validateSubmittedEvidenceInputs(item.ID, payload); err != nil {
+				if err := c.validateSubmittedEvidenceInputs(t.Context(), item.ID, payload); err != nil {
 					t.Fatal(err)
 				}
 				stored, err := decodeResultContractJSON(payload.Value)

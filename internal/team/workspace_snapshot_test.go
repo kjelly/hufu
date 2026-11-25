@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,6 +71,54 @@ func TestWorkspaceDeltaAddedModifiedDeleted(t *testing.T) {
 	}
 	if len(delta.Added) != 0 || len(delta.Modified) != 0 {
 		t.Fatalf("delta = %#v, want only a deletion", delta)
+	}
+}
+
+func TestWorkspaceSnapshotGitTracksLinksWithoutFollowingIndexedDescendants(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("requires git")
+	}
+	root := t.TempDir()
+	const directory, child = "tracked", "tracked/child"
+	for _, args := range [][]string{{"init", "-q"}, {"add", "tracked", ".gitignore"}} {
+		if args[0] == "add" {
+			if err := os.Mkdir(filepath.Join(root, directory), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for name, contents := range map[string]string{child: "original", ".gitignore": "tracked\n"} {
+				if err := os.WriteFile(filepath.Join(root, name), []byte(contents), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			args = append([]string{"add", "-f"}, args[1:]...)
+		}
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v, %s", args, err, out)
+		}
+	}
+	snapshotter := NewWorkspaceSnapshotter()
+	before := mustSnapshot(t, snapshotter, root)
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "child"), []byte("target bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dirPath := filepath.Join(root, directory)
+	if err := os.Remove(filepath.Join(root, child)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(dirPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, dirPath); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	after := mustSnapshot(t, snapshotter, root)
+	delta, err := snapshotter.Diff(t.Context(), before, after)
+	if err != nil || len(delta.Added) != 1 || delta.Added[0].Path != directory ||
+		fs.FileMode(delta.Added[0].Mode)&fs.ModeSymlink == 0 || len(delta.Deleted) != 1 || delta.Deleted[0] != child {
+		t.Fatalf("directory replacement lost link identity or included target content: %+v, %v", delta, err)
 	}
 }
 

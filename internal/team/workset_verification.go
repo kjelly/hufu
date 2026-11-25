@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -131,39 +132,52 @@ func (c *Coordinator) findWorksetReceipt(sourceTask string) (*WorksetExpansionRe
 }
 
 func (c *Coordinator) verifyWorksetSource(ctx context.Context, receipt *WorksetExpansionReceipt) error {
+	_, _, err := c.verifiedWorksetSource(ctx, receipt)
+	return err
+}
+
+func (c *Coordinator) verifiedWorksetSource(ctx context.Context, receipt *WorksetExpansionReceipt) (ArtifactRef, string, error) {
 	if receipt == nil || strings.TrimSpace(receipt.SourceArtifactID) == "" || strings.TrimSpace(receipt.SourceSHA256) == "" {
-		return errors.New("expansion receipt has no source artifact identity")
+		return ArtifactRef{}, "", errors.New("expansion receipt has no source artifact identity")
 	}
 	if c == nil || c.session == nil {
-		return errors.New("coordinator workspace is unavailable")
+		return ArtifactRef{}, "", errors.New("coordinator workspace is unavailable")
 	}
 	if strings.TrimSpace(receipt.RunID) == "" || strings.TrimSpace(c.executionRunID) == "" {
-		return fmt.Errorf("workset receipt belongs to run %q, want current run %q", receipt.RunID, c.executionRunID)
+		return ArtifactRef{}, "", fmt.Errorf("workset receipt belongs to run %q, want current run %q", receipt.RunID, c.executionRunID)
 	}
 	if receipt.RunID != c.executionRunID {
 		if err := c.validateRecoveredWorksetReceipt(ctx, receipt, nil); err != nil {
-			return fmt.Errorf("workset receipt belongs to run %q, want current run %q or an admitted recovery source: %w", receipt.RunID, c.executionRunID, err)
+			return ArtifactRef{}, "", fmt.Errorf("workset receipt belongs to run %q, want current run %q or an admitted recovery source: %w", receipt.RunID, c.executionRunID, err)
 		}
 	}
-	producerRef, _, err := c.currentWorksetSourceOccurrence(ctx, receipt)
+	if !isWorkspaceWorksetSnapshot(receipt) {
+		return c.currentWorksetSourceOccurrence(ctx, receipt)
+	}
+	ref := receipt.SourceArtifact
+	if err := validateWorksetSourceOccurrence(ref, receipt.SourceArtifactID, receipt.SourceSHA256, false); err != nil {
+		return ArtifactRef{}, "", err
+	}
+	// The expansion itself recorded the workspace snapshot. Its original path
+	// may disappear or change; only the registered content is read here.
+	store, err := OpenFileArtifactStoreReadOnly(c.session.Workspace, c.session.Workspace)
 	if err != nil {
-		return err
+		return ArtifactRef{}, "", err
 	}
-	store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
+	meta, err := store.Get(ctx, ref.ID)
 	if err != nil {
-		return err
+		return ArtifactRef{}, "", fmt.Errorf("workset snapshot %q is not registered: %w", ref.ID, err)
 	}
-	// CAS metadata is immutable first-writer content metadata. It is not the
-	// authority for producer occurrence provenance, which was validated above
-	// from the current canonical typed result.
-	ref, err := store.Resolve(ctx, producerRef)
-	if err != nil {
-		return fmt.Errorf("source artifact %q is not registered: %w", receipt.SourceArtifactID, err)
+	if ref.SHA256 != meta.SHA256 || ref.ByteSize != meta.ByteSize || ref.Bytes != meta.Bytes {
+		return ArtifactRef{}, "", fmt.Errorf("workset snapshot %q immutable identity changed", ref.ID)
 	}
-	if ref.ID != receipt.SourceArtifactID || ref.SHA256 != receipt.SourceSHA256 {
-		return fmt.Errorf("source artifact %q immutable identity changed", receipt.SourceArtifactID)
-	}
-	return nil
+	return ref, "", store.Verify(ctx, ref)
+}
+
+func isWorkspaceWorksetSnapshot(receipt *WorksetExpansionReceipt) bool {
+	ref := receipt.SourceArtifact
+	return ref.Agent == "" && ref.Attempt == 0 && ref.RunID == receipt.RunID && ref.TaskID == receipt.ParentTaskID &&
+		ref.Kind == "workset_manifest" && ref.ID == "sha256-"+ref.SHA256 && filepath.IsLocal(ref.Path) && filepath.Clean(ref.Path) != "."
 }
 
 // currentWorksetSourceOccurrence resolves occurrence authority from the
@@ -179,12 +193,9 @@ func (c *Coordinator) currentWorksetSourceOccurrence(ctx context.Context, receip
 	if err := validateWorksetSourceOccurrence(receipt.SourceArtifact, receipt.SourceArtifactID, receipt.SourceSHA256, true); err != nil {
 		return ArtifactRef{}, "", fmt.Errorf("source artifact %q has invalid persisted occurrence: %w", receipt.SourceArtifactID, err)
 	}
-	store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
+	store, err := OpenFileArtifactStoreReadOnly(c.session.Workspace, c.session.Workspace)
 	if err != nil {
 		return ArtifactRef{}, "", err
-	}
-	if _, err := resolveWorksetArtifactContent(ctx, store, receipt.SourceArtifact); err != nil {
-		return ArtifactRef{}, "", fmt.Errorf("source artifact %q has invalid persisted content claims: %w", receipt.SourceArtifactID, err)
 	}
 	producerTaskID := receipt.SourceArtifact.TaskID
 	result := c.GetTaskResult(producerTaskID)
@@ -195,8 +206,8 @@ func (c *Coordinator) currentWorksetSourceOccurrence(ctx context.Context, receip
 	if err := c.validateCurrentProducerArtifactOccurrence(ctx, ref, producerTaskID, result); err != nil {
 		return ArtifactRef{}, "", fmt.Errorf("source artifact %q has invalid current producer occurrence: %w", receipt.SourceArtifactID, err)
 	}
-	if _, err := resolveWorksetArtifactContent(ctx, store, ref); err != nil {
-		return ArtifactRef{}, "", fmt.Errorf("source artifact %q has invalid current producer content claims: %w", receipt.SourceArtifactID, err)
+	if _, err := resolveWorksetArtifactContent(ctx, store, receipt.SourceArtifact); err != nil {
+		return ArtifactRef{}, "", fmt.Errorf("source artifact %q has invalid persisted content claims: %w", receipt.SourceArtifactID, err)
 	}
 	if !sameArtifactOccurrence(ref, receipt.SourceArtifact) {
 		return ArtifactRef{}, "", fmt.Errorf("source artifact %q current producer occurrence does not match expansion receipt", receipt.SourceArtifactID)
