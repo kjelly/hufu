@@ -43,7 +43,8 @@ jobs:
         uses: golangci/golangci-lint-action@a4f60bb28d35aeee14e6880718e0c85ff1882e64 # v6.0.1
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-          args: --timeout 5m ./... ./.agent-teams/hufu-dev/diagnostic-pilot/... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/... ./.agent-teams/hufu-pr/evidence ./.agent-teams/web-research/tests
+          # A cold PR run exhausted 5m while loading and analyzing the full package set.
+          args: --timeout 10m ./... ./.agent-teams/hufu-dev/diagnostic-pilot/... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/... ./.agent-teams/hufu-pr/evidence ./.agent-teams/web-research/tests
           only-new-issues: true
 
   vet:

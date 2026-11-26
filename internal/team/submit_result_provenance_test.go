@@ -15,6 +15,9 @@ import (
 func TestSubmitResultRejectsForgedExistingArtifactOccurrence(t *testing.T) {
 	t.Parallel()
 	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "report.txt"), []byte("example"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	c := &Coordinator{
 		session:        &TeamSession{Workspace: workspace},
 		taskTracker:    NewTaskTracker(),

@@ -138,7 +138,7 @@ func TestCoordinatorCloseReleasesActiveContextPreflight(t *testing.T) {
 }
 
 func TestCoordinatorCloseDoesNotReleaseAnotherCoordinatorResources(t *testing.T) {
-	t.Parallel()
+	// This test observes the process-wide audit logger across calls.
 	newNamedCoordinator := func(name string) *Coordinator {
 		t.Helper()
 		c, err := newCoordinator(coordinatorParams{Session: &TeamSession{
@@ -149,6 +149,11 @@ func TestCoordinatorCloseDoesNotReleaseAnotherCoordinatorResources(t *testing.T)
 		if err != nil {
 			t.Fatalf("newCoordinator(%s) failed: %v", name, err)
 		}
+		t.Cleanup(func() {
+			if err := c.Close(); err != nil {
+				t.Errorf("close coordinator %s: %v", name, err)
+			}
+		})
 		return c
 	}
 	first := newNamedCoordinator("close-owner-first")

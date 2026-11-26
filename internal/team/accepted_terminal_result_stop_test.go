@@ -30,7 +30,12 @@ func (a *acceptedTerminalResultScriptAgent) Generate(context.Context, fantasy.Ag
 
 func (a *acceptedTerminalResultScriptAgent) Stream(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
 	var steps []fantasy.StepResult
+	model := new(rejectedResultStreamModel)
 	for {
+		stepCtx, _, err := call.PrepareStep(ctx, fantasy.PrepareStepFunctionOptions{Steps: steps, StepNumber: len(steps), Model: model, Messages: call.Messages})
+		if err != nil {
+			return nil, err
+		}
 		a.modelCalls++
 		input := `{"status":"success","summary":"canonical first result"}`
 		toolName := submitResultToolName
@@ -54,9 +59,8 @@ func (a *acceptedTerminalResultScriptAgent) Stream(ctx context.Context, call fan
 			return nil, err
 		}
 		var response fantasy.ToolResponse
-		var err error
 		if toolName == submitResultToolName {
-			response, err = a.tool.Run(ctx, fantasy.ToolCall{ID: callID, Name: toolName, Input: input})
+			response, err = a.tool.Run(stepCtx, fantasy.ToolCall{ID: callID, Name: toolName, Input: input})
 			if err == nil && !response.IsError {
 				a.acceptedCalls++
 			}
@@ -89,7 +93,7 @@ func (a *acceptedTerminalResultScriptAgent) Stream(ctx context.Context, call fan
 				break
 			}
 		}
-		if stop || a.modelCalls >= 3 {
+		if stop || response.StopTurn || a.modelCalls >= 3 {
 			return &fantasy.AgentResult{Steps: steps, Response: step.Response}, nil
 		}
 	}

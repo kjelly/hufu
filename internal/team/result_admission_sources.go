@@ -61,6 +61,13 @@ func (c *Coordinator) validateSubmissionSourceEnvelope(ctx context.Context, task
 			return &resultReceiptSourceError{err}
 		}
 	}
+	if item := c.todoItemByID(taskID); legacyFields && item != nil && item.Execution.ForbidArtifacts {
+		for _, field := range fields {
+			if sourceMemberMatches(field.name, "artifacts", legacyFields) {
+				return rejectLocalResult(RepairFailureContract, fmt.Errorf("artifacts are forbidden by this task's execution contract; omit the artifacts field"))
+			}
+		}
+	}
 	if len(claims.Artifacts) > 0 {
 		if err := c.validateDirectResultArtifactClaims(ctx, workspace, claims.Artifacts); err != nil {
 			return err

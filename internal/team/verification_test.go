@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,7 +61,7 @@ func TestCharacterizationTypedVerificationRejectsMissingGenericItem(t *testing.T
 	if err == nil || result == nil || result.ExitCode == 0 {
 		t.Fatalf("missing gamma passed typed verification: result=%#v err=%v", result, err)
 	}
-	if strings.Contains(err.Error(), "malformed verification spec") || !strings.Contains(err.Error(), `key "gamma" not found`) {
+	if !errors.Is(err, errVerificationAssertionPath) {
 		t.Fatalf("missing gamma did not produce a missing-key assertion failure: %v", err)
 	}
 }

@@ -34,13 +34,13 @@ func TestExecuteTaskRetryDisposition(t *testing.T) {
 	environmentErr := withFailureClassOverride(errors.New("required executable unavailable"), FailureEnvironment)
 
 	tests := []struct {
-		name   string
-		worker *scriptedWorker
-		task   TaskDef
-		setup  func(t *testing.T, c *Coordinator)
-		// cancelParent runs the task under an already-cancelled context.
-		cancelParent bool
-		wantCalls    int
+		name                 string
+		worker               *scriptedWorker
+		task                 TaskDef
+		setup                func(t *testing.T, c *Coordinator)
+		cancelBeforeDispatch bool
+		cancelDuringWork     bool
+		wantCalls            int
 		// atMost treats wantCalls as an upper bound; the loop may stop before
 		// the first dispatch when preflight blocks the task.
 		atMost         bool
@@ -117,17 +117,16 @@ func TestExecuteTaskRetryDisposition(t *testing.T) {
 			wantStatus: TaskBlocked,
 		},
 		{
-			name:         "cancelled parent context stops before a second dispatch",
-			worker:       scriptWorker(),
-			cancelParent: true,
-			wantCalls:    1,
+			name:                 "already cancelled parent prevents dispatch",
+			worker:               scriptWorker(),
+			cancelBeforeDispatch: true,
+			wantNoRetries:        true,
 		},
 		{
-			name:          "cancelled parent with a cancelling worker records no retry classes",
-			worker:        scriptWorker(scriptedTurn{err: context.Canceled}),
-			cancelParent:  true,
-			wantCalls:     1,
-			wantNoRetries: true,
+			name:             "parent cancelled during work records no retry classes",
+			cancelDuringWork: true,
+			wantCalls:        1,
+			wantNoRetries:    true,
 		},
 		{
 			name: "worker cancellation stops without counting a retry",
@@ -141,17 +140,22 @@ func TestExecuteTaskRetryDisposition(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tt.cancelBeforeDispatch {
+				cancel()
+			}
+			if tt.cancelDuringWork {
+				tt.worker = scriptWorker(scriptedTurn{stream: func(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+					cancel()
+					return nil, ctx.Err()
+				}})
+			}
 			c := newTestCoordinator(t, withWorker(tt.worker))
 			if tt.setup != nil {
 				tt.setup(t, c)
 			}
 			todoID := addTodo(t, c, "do work")
-			ctx := context.Background()
-			if tt.cancelParent {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithCancel(ctx)
-				cancel()
-			}
 			task := tt.task
 			task.Agent, task.Goal = "worker", "do work"
 

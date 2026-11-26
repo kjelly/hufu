@@ -625,15 +625,23 @@ func collectionModelSchemaFailure(compiled *CompiledResultContract, plans []resu
 			}
 			return true
 		}
-		if required, ok := node.ErrorKind.(*kind.Required); ok {
-			for _, missing := range required.Missing {
-				if !isModelField(pointer + "/" + escapeJSONPointerToken(missing)) {
-					return false
-				}
-			}
-			return len(required.Missing) > 0
+		var fields []string
+		switch problem := node.ErrorKind.(type) {
+		case *kind.Required:
+			fields = problem.Missing
+		case *kind.AdditionalProperties:
+			fields = problem.Properties
+		default:
+			return isModelField(pointer)
 		}
-		return isModelField(pointer)
+		// An object-level member error applies to the named fields, even
+		// when other fields in the same object are runtime-owned.
+		for _, field := range fields {
+			if !isModelField(pointer + "/" + escapeJSONPointerToken(field)) {
+				return false
+			}
+		}
+		return len(fields) > 0
 	}
 	return visit(validation)
 }

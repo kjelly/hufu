@@ -1,6 +1,11 @@
 # 0002. Team-Neutral Result Normalizer Pipeline
 
-- Status: proposed
+> Status: draft
+> Authority: reference
+> Verified-Commit: `56f9ac73`
+> Supersedes: —
+> Superseded-By: —
+
 - Date: 2026-11-24
 - Deciders: Hufu Core & Agent-Team Maintainers
 

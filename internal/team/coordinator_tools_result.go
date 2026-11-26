@@ -507,13 +507,21 @@ type submitResultCallIDKey struct{}
 
 func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (response fantasy.ToolResponse, runErr error) {
 	var inspectPayload *CompiledResultContract
+	stopOnSchemaFailure := protocolRepairExecution(ctx)
 	original, ok := ctx.Value(originalSubmitResultInputKey{}).(string)
 	if !ok {
 		original = call.Input
 	}
 	defer func() {
 		response = tagSubmissionFailure(response, RepairFailureInvalidSchema)
-		if inspectPayload != nil && submissionFailureMetadata(response.Metadata) == RepairFailureInvalidSchema {
+		if submissionFailureMetadata(response.Metadata) != RepairFailureInvalidSchema {
+			return
+		}
+		// Normalizer and repair submissions use the coordinator's correction
+		// budget. Ordinary work can correct malformed claims in the stream
+		// until its schema-loop limit is reached.
+		response.StopTurn = stopOnSchemaFailure
+		if inspectPayload != nil {
 			if err := t.coordinator.validateReadablePayloadSources(ctx, t.todoID, inspectPayload, original, true); err != nil {
 				response = submissionRejectionResponse(err)
 			}
@@ -541,6 +549,7 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 			return sourceSubmissionFailure(err), nil
 		}
 		if ref != nil && ref.Normalizer != "" {
+			stopOnSchemaFailure = true
 			draft, err = submittedNormalizerDraft([]byte(original), true)
 			if err != nil {
 				return fantasy.NewTextErrorResponse(err.Error()), nil
@@ -622,6 +631,12 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 		}
 		if isResultReferenceChoiceError(err) && t.coordinator != nil {
 			err = t.coordinator.localEvidenceRejection(ctx, t.todoID, call.Input, err)
+		}
+		if inspectPayload != nil && len(inspectPayload.fixedCollections) > 0 && localResultRejectionReason(err) == RepairFailureInvalidSchema {
+			info := t.candidateValidationInfo()
+			if violation := validateToolArguments(call.Input, info); violation != nil {
+				return submissionFailureResponse(RepairFailureInvalidSchema, err.Error()+"\n"+buildToolSchemaValidationPrompt(submitResultToolName, violation, info)), nil
+			}
 		}
 		return submissionRejectionResponse(err), nil
 	}

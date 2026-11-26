@@ -88,6 +88,12 @@ func expandPipelineDeps(tasks []TaskDef) []TaskDef {
 
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ string, retErr error) {
 	ctx = c.tokenBudgetRoot().runIdle.Context(ctx)
+	dispatched := false
+	defer func() {
+		if !dispatched && errors.Is(retErr, context.Canceled) && c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+			c.recordWorkflowCancellation("preflight")
+		}
+	}()
 	tasks = withoutEmptyCollections(tasks)
 	if err := validateNativeMediaBatch(tasks); err != nil {
 		return "", err
@@ -342,7 +348,6 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	})
 	// A batch that fails before its workers start must not leave anything
 	// that refuses the same work later in this round.
-	dispatched := false
 	var created []*TodoItem
 	defer func() {
 		if retErr != nil && !dispatched {
@@ -692,17 +697,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	if err != nil {
 		if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-				source := "context_canceled"
-				message := "execution cancelled"
-				if c.IsWrapUp() {
-					source = "operator"
-					message = "operator requested graceful wrap-up"
-				}
-				_ = c.phaseWorkflow.cancel("scheduler", source, message)
+				c.recordWorkflowCancellation("scheduler")
 			} else {
 				_ = c.phaseWorkflow.fail("scheduler", "scheduler", CategoryInternalError, err.Error(), false)
+				c.saveCheckpoint()
 			}
-			c.saveCheckpoint()
 		}
 		return "", markCoordinatorFatal(err)
 	}
@@ -734,6 +733,17 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	}
 
 	return formatTaskResults(results, len(tasks), duplicateWarnings)
+}
+
+func (c *Coordinator) recordWorkflowCancellation(component string) {
+	source := "context_canceled"
+	message := "execution cancelled"
+	if c.IsWrapUp() {
+		source = "operator"
+		message = "operator requested graceful wrap-up"
+	}
+	_ = c.phaseWorkflow.cancel(component, source, message)
+	c.saveCheckpoint()
 }
 
 func schedulerPredecessorIDs(positions []int, ids []string, current int) []string {

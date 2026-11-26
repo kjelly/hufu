@@ -113,8 +113,6 @@ func TestSubmitResultSchemaPreflightStopsLoopWithoutWorkerReplay(t *testing.T) {
 			wantRepairs := 1
 			if name == "valid_correction" {
 				wantRepairs = 0
-			} else if name == "repair_exhausted" {
-				wantRepairs = 2
 			}
 			if model.calls != maxRepeatedSubmitResultFailures || repairCalls != wantRepairs {
 				t.Fatalf("provider/repair calls = %d/%d, want %d/%d", model.calls, repairCalls, maxRepeatedSubmitResultFailures, wantRepairs)
