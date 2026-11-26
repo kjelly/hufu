@@ -40,7 +40,7 @@ func TestNonReviewActionsDoNotFetchDiff(t *testing.T) {
 					}
 					if test.action == operationCI {
 						metadata.Checks = []githubCheck{
-							{Conclusion: "FAILURE", DetailsURL: jobURL},
+							{Status: "COMPLETED", Conclusion: "CANCELLED", DetailsURL: jobURL},
 							{Conclusion: "FAILURE", DetailsURL: foreignJob},
 						}
 					}
@@ -53,7 +53,7 @@ func TestNonReviewActionsDoNotFetchDiff(t *testing.T) {
 				endpoint := args[len(args)-1]
 				if endpoint == "repos/example/project/actions/jobs/123" && test.action == operationCI {
 					jobCalls++
-					return fmt.Appendf(nil, `{"id":123,"html_url":%q,"name":"CI","conclusion":"failure","steps":[{"name":"Run tests","conclusion":"failure"}]}`, jobURL), nil
+					return fmt.Appendf(nil, `{"id":123,"html_url":%q,"name":"CI","conclusion":"cancelled","steps":[{"name":"Run tests","conclusion":"cancelled"}]}`, jobURL), nil
 				}
 				if endpoint == "repos/example/project/actions/jobs/123/logs" && test.action == operationCI {
 					jobCalls++
@@ -82,21 +82,33 @@ func TestNonReviewActionsDoNotFetchDiff(t *testing.T) {
 }
 
 func TestReadinessVerdictUsesObservedSignals(t *testing.T) {
+	passed := githubCheck{Status: "COMPLETED", Conclusion: "SUCCESS"}
+	skipped := githubCheck{Status: "COMPLETED", Conclusion: "SKIPPED"}
+	neutral := githubCheck{Status: "COMPLETED", Conclusion: "NEUTRAL"}
 	for _, test := range []struct {
 		name, want string
 		decision   string
-		checks     checkCounts
+		checks     []githubCheck
+		counts     checkCounts
 		threadsOK  bool
 	}{
-		{name: "all observed gates pass", want: "ready", threadsOK: true, checks: checkCounts{Passed: 2}},
-		{name: "review required", want: "blocked", decision: "REVIEW_REQUIRED", threadsOK: true, checks: checkCounts{Passed: 2}},
-		{name: "failed check", want: "blocked", threadsOK: true, checks: checkCounts{Passed: 2, Failed: 1}},
+		{name: "all observed gates pass", want: "ready", threadsOK: true, checks: []githubCheck{passed, skipped, neutral}, counts: checkCounts{Passed: 3}},
+		{name: "skipped and neutral satisfy checks", want: "ready", threadsOK: true, checks: []githubCheck{skipped, neutral}, counts: checkCounts{Passed: 2}},
+		{name: "review required", want: "blocked", decision: "REVIEW_REQUIRED", threadsOK: true, checks: []githubCheck{passed}, counts: checkCounts{Passed: 1}},
+		{name: "failed status context", want: "blocked", threadsOK: true, checks: []githubCheck{passed, {State: "FAILURE"}}, counts: checkCounts{Passed: 1, Failed: 1}},
+		{name: "cancelled check", want: "blocked", threadsOK: true, checks: []githubCheck{passed, {Status: "COMPLETED", Conclusion: "CANCELLED"}}, counts: checkCounts{Passed: 1, Failed: 1}},
+		{name: "pending check", want: "blocked", threadsOK: true, checks: []githubCheck{passed, {Status: "IN_PROGRESS"}}, counts: checkCounts{Passed: 1, Pending: 1}},
+		{name: "unknown conclusion", want: "undetermined", threadsOK: true, checks: []githubCheck{passed, {Status: "COMPLETED", Conclusion: "UNKNOWN"}}, counts: checkCounts{Passed: 1, Other: 1}},
 		{name: "missing checks", want: "undetermined", threadsOK: true},
-		{name: "partial thread coverage", want: "undetermined", checks: checkCounts{Passed: 2}},
+		{name: "partial thread coverage", want: "undetermined", checks: []githubCheck{passed}, counts: checkCounts{Passed: 1}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			pr := pullRequest{State: "OPEN", Mergeable: "MERGEABLE", MergeState: "CLEAN", ReviewDecision: test.decision}
-			if got := assessReadiness(pr, test.checks, 0, test.threadsOK); got != test.want {
+			counts := countChecks(test.checks)
+			if counts != test.counts {
+				t.Errorf("check counts = %+v, want %+v", counts, test.counts)
+			}
+			if got := assessReadiness(pr, counts, 0, test.threadsOK); got != test.want {
 				t.Fatalf("readiness = %q, want %q", got, test.want)
 			}
 		})

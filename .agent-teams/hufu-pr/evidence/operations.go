@@ -65,7 +65,7 @@ func collectCI(ctx context.Context, workspace string, observed pullRequest, scop
 	seen := make(map[string]bool)
 	missing, tried := 0, 0
 	for _, check := range observed.Checks {
-		if checkResult(check) != "failed" && !strings.EqualFold(check.Conclusion, "CANCELLED") {
+		if checkResult(check) != "failed" {
 			continue
 		}
 		id := actionsJobID(scope.Requested.Repository, check.DetailsURL)

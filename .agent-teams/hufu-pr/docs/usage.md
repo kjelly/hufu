@@ -33,5 +33,7 @@ depends on GitHub access and retention.
 
 Each report identifies the GitHub base and head SHAs. Multi-request actions
 verify those SHAs again before publishing evidence. Merge readiness describes
-the observed GitHub signals at collection time. The team reports its findings
-in Hufu, and GitHub operations are read-only.
+the observed GitHub signals at collection time. The `passed` count includes
+GitHub's successful, skipped, and neutral checks. Cancelled checks count as
+failed and qualify for CI log collection. The team reports its findings in
+Hufu, and GitHub operations are read-only.

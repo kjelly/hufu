@@ -181,9 +181,9 @@ func countChecks(checks []githubCheck) checkCounts {
 
 func checkResult(check githubCheck) string {
 	switch strings.ToUpper(check.Conclusion + check.State) {
-	case "SUCCESS":
+	case "SUCCESS", "SKIPPED", "NEUTRAL":
 		return "passed"
-	case "FAILURE", "ERROR", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE":
+	case "FAILURE", "ERROR", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "CANCELLED":
 		return "failed"
 	case "PENDING", "EXPECTED":
 		return "pending"
