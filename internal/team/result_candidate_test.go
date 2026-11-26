@@ -234,12 +234,13 @@ func TestResultSubmissionFieldsAndDiagnostics(t *testing.T) {
 func TestCandidateConcurrentSubmissionAcceptsOnce(t *testing.T) {
 	t.Parallel()
 	c, item, ctx, _ := resultCandidateFixture(t)
+	taskID := item.ID
 	candidate := rejectCandidate(t, c, item, ctx, candidateMisplaced)
 	responses := make(chan fantasy.ToolResponse, 2)
 	var group sync.WaitGroup
 	for range 2 {
 		group.Go(func() {
-			response, err := (&submitResultTool{coordinator: c, todoID: item.ID, candidate: cloneResultCandidate(candidate)}).Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: candidateMove})
+			response, err := (&submitResultTool{coordinator: c, todoID: taskID, candidate: cloneResultCandidate(candidate)}).Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: candidateMove})
 			if err != nil {
 				t.Error(err)
 			}
@@ -254,7 +255,7 @@ func TestCandidateConcurrentSubmissionAcceptsOnce(t *testing.T) {
 			successes++
 		}
 	}
-	if successes != 1 || c.GetTaskResult(item.ID) == nil {
+	if successes != 1 || c.GetTaskResult(taskID) == nil {
 		t.Fatalf("accepted %d concurrent submissions", successes)
 	}
 }
