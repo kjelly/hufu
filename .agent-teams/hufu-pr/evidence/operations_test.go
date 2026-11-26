@@ -88,6 +88,7 @@ func TestReadinessVerdictUsesObservedSignals(t *testing.T) {
 	for _, test := range []struct {
 		name, want string
 		decision   string
+		mergeState string
 		checks     []githubCheck
 		counts     checkCounts
 		threadsOK  bool
@@ -100,10 +101,14 @@ func TestReadinessVerdictUsesObservedSignals(t *testing.T) {
 		{name: "pending check", want: "blocked", threadsOK: true, checks: []githubCheck{passed, {Status: "IN_PROGRESS"}}, counts: checkCounts{Passed: 1, Pending: 1}},
 		{name: "unknown conclusion", want: "undetermined", threadsOK: true, checks: []githubCheck{passed, {Status: "COMPLETED", Conclusion: "UNKNOWN"}}, counts: checkCounts{Passed: 1, Other: 1}},
 		{name: "missing checks", want: "undetermined", threadsOK: true},
+		{name: "hook outcome requires merge", want: "undetermined", mergeState: "HAS_HOOKS", threadsOK: true, checks: []githubCheck{passed}, counts: checkCounts{Passed: 1}},
 		{name: "partial thread coverage", want: "undetermined", checks: []githubCheck{passed}, counts: checkCounts{Passed: 1}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			pr := pullRequest{State: "OPEN", Mergeable: "MERGEABLE", MergeState: "CLEAN", ReviewDecision: test.decision}
+			if test.mergeState != "" {
+				pr.MergeState = test.mergeState
+			}
 			counts := countChecks(test.checks)
 			if counts != test.counts {
 				t.Errorf("check counts = %+v, want %+v", counts, test.counts)
@@ -127,7 +132,7 @@ func TestJobLogKeepsEarlierDiagnosticsAndMasksCredentials(t *testing.T) {
 		}
 	}
 	evidence := string(log.excerpt())
-	if !strings.Contains(evidence, "FAIL: regression [REDACTED]") ||
+	if !strings.Contains(evidence, "FAIL: regression token=[REDACTED]") ||
 		!strings.Contains(evidence, "job cleanup finished") || strings.Contains(evidence, "examplecredential") ||
 		strings.Contains(evidence, "fixturepassword") || strings.Contains(evidence, "\x1b") || len(evidence) > maxLogSignals+maxLogTail+80 {
 		t.Fatal("log excerpt did not retain bounded, redacted evidence")

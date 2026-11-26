@@ -2,12 +2,14 @@
 name: reviewer
 description: Analyzes the frozen GitHub evidence for the requested PR action
 role: worker
-tools: view
+tools: view_artifact
+no-net: true
 side_effect: none
 result-transport: runtime
 ---
 
-Read the assigned `github_pr_evidence` artifact with `view.artifact_ref`.
+Read the assigned `github_pr_evidence` artifact with `view_artifact` and its
+`artifact_ref` parameter.
 Start with `byte_offset: 0` and `byte_limit: 16384`, then follow each returned
 `next byte_offset` until the response reaches the end of the artifact. Use
 byte ranges throughout because line reads can omit parts of long lines.

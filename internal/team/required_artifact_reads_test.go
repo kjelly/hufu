@@ -58,12 +58,40 @@ func requiredReadTaskFixture(t *testing.T, content string, runtime bool, configu
 
 func deliverRequiredRead(t *testing.T, c *Coordinator, ctx context.Context, view fantasy.AgentTool, callID, input string) {
 	t.Helper()
-	call := fantasy.ToolCall{ID: callID, Name: "view", Input: input}
+	call := fantasy.ToolCall{ID: callID, Name: view.Info().Name, Input: input}
 	response, err := view.Run(ctx, call)
 	if err != nil || response.IsError {
 		t.Fatalf("view: %v %s", err, response.Content)
 	}
 	if err := c.captureRequiredArtifactRead(ctx, view, call, response); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestArtifactOnlyViewRecordsCoverageWithoutFilesystemReads(t *testing.T) {
+	c, item, ctx, _, _ := requiredReadFixture(t, "approved artifact")
+	const localContents = "local fixture contents"
+	localPath := filepath.Join(c.session.Workspace, "local.txt")
+	if err := os.WriteFile(localPath, []byte(localContents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	view := tools.NewArtifactViewTool(tools.WithArtifactOpener(c.openArtifactRef), tools.WithAllowedPaths([]string{c.session.Workspace}))
+	ctx = tools.SetToolsAllowed(ctx, []string{view.Info().Name})
+	for _, input := range []string{
+		fmt.Sprintf(`{"file_path":%q}`, localPath),
+		fmt.Sprintf(`{"items":[{"file_path":%q}]}`, localPath),
+		fmt.Sprintf(`{"artifact_ref":%q,"file_path":%q}`, item.WorksetBinding.Inputs[0].ID, localPath),
+	} {
+		response, err := view.Run(ctx, fantasy.ToolCall{ID: "local", Name: view.Info().Name, Input: input})
+		if err != nil || !response.IsError || strings.Contains(response.Content, localContents) {
+			t.Fatalf("local read response = %#v, %v", response, err)
+		}
+	}
+	if err := c.validateRequiredArtifactReadSubmission(ctx, item.ID); err == nil {
+		t.Fatal("a denied read satisfied required evidence coverage")
+	}
+	deliverRequiredRead(t, c, ctx, view, "artifact", fmt.Sprintf(`{"artifact_ref":%q,"byte_offset":0,"byte_limit":64}`, item.WorksetBinding.Inputs[0].ID))
+	if err := c.validateRequiredArtifactReadSubmission(ctx, item.ID); err != nil {
 		t.Fatal(err)
 	}
 }

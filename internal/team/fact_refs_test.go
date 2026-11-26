@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,54 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 )
+
+type cancelAfterArtifactPreflight struct {
+	context.Context
+	cancel context.CancelFunc
+}
+
+func (ctx cancelAfterArtifactPreflight) Value(key any) any {
+	// expandFanOutTasks checks the context cause before looking up this
+	// budget. Cancel after that check so the next preflight must handle it.
+	if _, ok := key.(artifactReadBudgetKey); ok {
+		ctx.cancel()
+	}
+	return ctx.Context.Value(key)
+}
+
+func TestFactPreflightCancellationPreservesWorkflowFailure(t *testing.T) {
+	t.Parallel()
+	var policyDecisions int
+	c := newTestCoordinator(t, withTeamConfig(func(cfg *agent.TeamConfig) {
+		cfg.Workflow.Phases = []string{"prepare", "audit", "execute", "verify"}
+	}))
+	c.reportStatus = func(event StatusEvent) {
+		if event.Type == "policy_decision" {
+			policyDecisions++
+		}
+	}
+	workflow, err := newRuntimeWorkflow(c.session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workflow.Start(); err != nil {
+		t.Fatal(err)
+	}
+	c.phaseWorkflow = workflow
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	_, err = c.ExecuteTasks(cancelAfterArtifactPreflight{Context: ctx, cancel: cancel}, []TaskDef{{
+		Agent: "worker", Goal: "read {source}", Phase: PhasePrepare,
+		FactRefs: []FactRef{{Name: "source", TaskID: "missing-producer", Artifact: "source.txt"}},
+	}})
+	if !errors.Is(err, context.Canceled) || policyDecisions != 0 || len(c.taskTracker.TodoList().Items()) != 0 {
+		t.Fatalf("expected cancellation before dispatch without a policy rejection, got %v and %d rejections", err, policyDecisions)
+	}
+	state, results, _, _ := workflow.snapshot()
+	if state != PhaseFailed || results[PhasePrepare].Status != PhaseStatusCancelled {
+		t.Fatalf("workflow state = %s, phase = %+v", state, results[PhasePrepare])
+	}
+}
 
 func coordinatorWithTaskResult(todoID string, result *TaskResult) *Coordinator {
 	c := &Coordinator{

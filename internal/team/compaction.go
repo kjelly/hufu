@@ -920,7 +920,7 @@ func extractFileOperations(messages []fantasy.Message) (readFiles, modifiedFiles
 				}
 
 				switch name {
-				case "view", "read_file", "cat":
+				case "view", "view_artifact", "read_file", "cat":
 					if !successfulResults[tcp.ToolCallID] {
 						continue
 					}

@@ -121,11 +121,28 @@ func (c *Coordinator) validateRequiredArtifactReadExecution(ctx context.Context,
 		return fmt.Errorf("required_reads_unsupported_execution: built-in view requires a local LLM worker")
 	}
 	for _, candidate := range resolved.Tools {
-		if candidate != nil && candidate.Info().Name == "view" && tools.IsTrustedArtifactPathTool(candidate) && slices.Contains(resolved.AuthorizedNames, "view") {
+		if trustedArtifactView(candidate) && slices.Contains(resolved.AuthorizedNames, candidate.Info().Name) {
 			return nil
 		}
 	}
 	return fmt.Errorf("required_reads_view_unavailable: authorize the built-in view tool for worker execution")
+}
+
+func trustedArtifactView(tool fantasy.AgentTool) bool {
+	if tool == nil || !tools.IsTrustedArtifactPathTool(tool) {
+		return false
+	}
+	name := tool.Info().Name
+	return name == "view" || name == tools.ArtifactViewToolName
+}
+
+func hasDeclaredArtifactView(grant string, denied []string) bool {
+	for _, name := range []string{"view", tools.ArtifactViewToolName} {
+		if explicitlyDeclaresTool(grant, name) && !slices.Contains(denied, name) {
+			return true
+		}
+	}
+	return false
 }
 
 type artifactReadObservation struct {
@@ -173,7 +190,7 @@ func validateArtifactReadObservationEvent(event RunEvent) error {
 // Only the central policy gate calls this after an authentic successful view.
 // The serialized response retains its content digest binding for process replay.
 func (c *Coordinator) captureRequiredArtifactRead(ctx context.Context, inner fantasy.AgentTool, call fantasy.ToolCall, response fantasy.ToolResponse) error {
-	if c == nil || response.IsError || inner.Info().Name != "view" || !tools.IsTrustedArtifactPathTool(inner) {
+	if c == nil || response.IsError || !trustedArtifactView(inner) {
 		return nil
 	}
 	metadata, ok := invocationMetadataFromContext(ctx)

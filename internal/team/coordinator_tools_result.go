@@ -520,12 +520,13 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 		// Normalizer and repair submissions use the coordinator's correction
 		// budget. Ordinary work can correct malformed claims in the stream
 		// until its schema-loop limit is reached.
-		response.StopTurn = stopOnSchemaFailure
 		if inspectPayload != nil {
-			if err := t.coordinator.validateReadablePayloadSources(ctx, t.todoID, inspectPayload, original, true); err != nil {
+			if err := t.coordinator.validateReadablePayloadSources(ctx, t.todoID, inspectPayload, original, true); err != nil && localResultRejectionReason(err) != RepairFailureInvalidSchema {
 				response = submissionRejectionResponse(err)
+				return
 			}
 		}
+		response.StopTurn = stopOnSchemaFailure
 	}()
 	contract := t.submissionContract()
 	var draft json.RawMessage
@@ -535,7 +536,9 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 		if err != nil {
 			return submissionFailureResponse(RepairFailureContract, err.Error()), nil
 		}
-		if ref != nil && ref.Normalizer == "" {
+		hasNormalizer := ref != nil && ref.Normalizer != ""
+		stopOnSchemaFailure = stopOnSchemaFailure || hasNormalizer
+		if ref != nil && !hasNormalizer {
 			inspectPayload = compiled
 		}
 		workspace := ""
@@ -548,8 +551,7 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 		if err := t.coordinator.validateIndependentSubmissionSources(ctx, t.todoID, compiled, submissionSourceOmissions(compiled, call.Input, true)); err != nil {
 			return sourceSubmissionFailure(err), nil
 		}
-		if ref != nil && ref.Normalizer != "" {
-			stopOnSchemaFailure = true
+		if hasNormalizer {
 			draft, err = submittedNormalizerDraft([]byte(original), true)
 			if err != nil {
 				return fantasy.NewTextErrorResponse(err.Error()), nil

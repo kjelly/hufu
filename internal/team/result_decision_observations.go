@@ -123,7 +123,7 @@ func (c *Coordinator) readDecisionArtifact(ctx context.Context, ref ArtifactRef,
 // Called only after the central gate and the authentic built-in view succeeded.
 // Nothing is recovered from worker-writable transcript files.
 func (c *Coordinator) captureDecisionArtifactRead(ctx context.Context, inner fantasy.AgentTool, call fantasy.ToolCall, response *fantasy.ToolResponse) error {
-	if c == nil || response == nil || response.IsError || inner.Info().Name != "view" || !tools.IsTrustedArtifactPathTool(inner) {
+	if c == nil || response == nil || response.IsError || !trustedArtifactView(inner) {
 		return nil
 	}
 	metadata, ok := invocationMetadataFromContext(ctx)

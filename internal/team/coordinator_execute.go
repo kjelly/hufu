@@ -90,7 +90,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	ctx = c.tokenBudgetRoot().runIdle.Context(ctx)
 	dispatched := false
 	defer func() {
-		if !dispatched && errors.Is(retErr, context.Canceled) && c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+		if !dispatched && retErr != nil && (errors.Is(retErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)) && c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 			c.recordWorkflowCancellation("preflight")
 		}
 	}()
@@ -130,14 +130,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	// pass matches against the real, substituted Goal text.
 	tasks, err = c.expandFanOutTasks(ctx, tasks)
 	if err != nil {
-		if ctxErr := artifactReadContextError(ctx); ctxErr != nil {
-			return "", ctxErr
-		}
 		// A malformed fan-out spec is a configuration/authoring error, not a
 		// worker failure: fail the whole dispatch before any TODO/model call so
 		// a coordinator mistake never produces some correct and some silently
 		// wrong tasks.
-		return "", c.rejectDelegationPolicy(err.Error())
+		return "", c.rejectEvidencePreflight(ctx, err)
 	}
 	emptyInventory := inventoryDispatch && len(tasks) == 0
 	tasks, err = c.bindInitialTaskContracts(tasks)
@@ -151,7 +148,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	// that binding preserves context already resolved under the same hash.
 	tasks, err = c.resolveFactRefs(ctx, tasks)
 	if err != nil {
-		return "", c.rejectDelegationPolicy(err.Error())
+		return "", c.rejectEvidencePreflight(ctx, err)
 	}
 	tasks, err = c.bindTaskGoalContracts(tasks)
 	if err != nil {
@@ -176,11 +173,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	}
 	tasks, err = c.bindInventoryEvidence(ctx, tasks)
 	if err != nil {
-		return "", c.rejectDelegationPolicy(err.Error())
+		return "", c.rejectEvidencePreflight(ctx, err)
 	}
 	tasks, err = c.bindEvidenceSources(ctx, tasks)
 	if err != nil {
-		return "", c.rejectDelegationPolicy(err.Error())
+		return "", c.rejectEvidencePreflight(ctx, err)
 	}
 	// A configured delegation policy is checked before workspace validation,
 	// resource locking, TODO creation, or worker startup. It therefore leaves

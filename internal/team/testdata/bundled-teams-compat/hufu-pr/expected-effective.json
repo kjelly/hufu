@@ -61,6 +61,13 @@
     },
     "execution_profile": "fresh-session",
     "goal_mode": "outcome",
+    "tools_denied": [
+      "view",
+      "grep",
+      "glob",
+      "ls",
+      "load_skill"
+    ],
     "workflow": {
       "phases": [
         "prepare",
@@ -114,9 +121,10 @@
     {
       "name": "reviewer",
       "role": "worker",
-      "tools": "view",
+      "tools": "view_artifact",
       "side_effect": "none",
-      "max_retries": -1
+      "max_retries": -1,
+      "no_net": true
     }
   ],
   "tasks": [

@@ -32,9 +32,17 @@ use metadata or logs and do not download patches. CI excerpts include
 selected diagnostics and a bounded log tail. The availability of job logs
 depends on GitHub access and retention.
 
+The trusted GitHub adapter masks recognizable credentials before publishing
+evidence. If masking would invalidate a patch's line ranges, the report lists
+the patch as unavailable. The reviewer reads only the assigned artifacts using
+`view_artifact`, with local filesystem tools and worker tool network access
+disabled. The collector validates a JSON report against the team contract.
+
 Each report identifies the GitHub base and head SHAs. Multi-request actions
 verify those SHAs again before publishing evidence. Merge readiness describes
 the observed GitHub signals at collection time. The `passed` count includes
 GitHub's successful, skipped, and neutral checks. Cancelled checks count as
 failed and qualify for CI log collection. The team reports its findings in
 Hufu, and GitHub operations are read-only.
+GitHub's `HAS_HOOKS` state remains `undetermined` when its other signals pass.
+The read-only assessment cannot establish the outcome of a pre-receive hook.

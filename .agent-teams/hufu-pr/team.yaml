@@ -9,7 +9,9 @@ max-retries: 0
 timeout: 1200
 max-duration: 1200
 allow-free-text-results: false
-collector-response-channel: function
+collector-response-channel: text_json
+tools:
+  denied: [view, grep, glob, ls, load_skill]
 
 inputs:
   pr.target:

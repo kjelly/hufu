@@ -10,6 +10,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 const (
@@ -26,6 +28,7 @@ func summarizeInput(pr pullRequest, scope *prScope) string {
 }
 
 func boundedDescription(body string, scope *prScope) string {
+	body = utils.RedactSecrets(body)
 	if len(body) <= maxDescriptionBytes {
 		return body
 	}
@@ -133,9 +136,9 @@ type jobLog struct {
 }
 
 var (
-	logSignal     = regexp.MustCompile(`(?i)(::error|\bFAIL\b|error:|panic:|data race|timed out|no space left|exception:|exit code [1-9])`)
-	logANSI       = regexp.MustCompile("\x1b\\[[0-?]*[ -/]*[@-~]")
-	logCredential = regexp.MustCompile(`(?i)(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]+|(authorization|token|secret|password|api[_-]?key)["']?[\t ]*[:=][\t ]*["']?((bearer|basic)[\t ]+)?[^\s"']+)`)
+	logSignal = regexp.MustCompile(`(?i)(::error|\bFAIL\b|error:|panic:|data race|timed out|no space left|exception:|exit code [1-9])`)
+	logANSI   = regexp.MustCompile("\x1b\\[[0-?]*[ -/]*[@-~]")
+	// An excerpt can end before the closing private-key delimiter.
 	logPrivateKey = regexp.MustCompile(`(?s)-----BEGIN [^\n]*PRIVATE KEY-----.*?(-----END [^\n]*PRIVATE KEY-----|$)`)
 )
 
@@ -191,7 +194,7 @@ func (log *jobLog) excerpt() []byte {
 	data := fmt.Appendf(nil, "Selected diagnostic lines:\n%s\nLog tail:\n%s", log.signals.String(), tail)
 	data = logANSI.ReplaceAll(data, nil)
 	data = logPrivateKey.ReplaceAll(data, []byte("[REDACTED]"))
-	data = logCredential.ReplaceAll(data, []byte("[REDACTED]"))
+	data = []byte(utils.RedactSecrets(string(data)))
 	if !utf8.Valid(data) {
 		data = bytes.ToValidUTF8(data, []byte("�"))
 	}
@@ -297,8 +300,12 @@ func collectReadiness(ctx context.Context, workspace string, pr pullRequest, sco
 		scope.Gaps = append(scope.Gaps, "GitHub returned no check results for this PR revision.")
 	}
 	scope.Readiness = assessReadiness(pr, scope.Checks, unresolved, complete)
-	if scope.Readiness == "undetermined" && len(scope.Gaps) == 0 {
-		scope.Gaps = append(scope.Gaps, "GitHub's merge state or check conclusions do not establish readiness.")
+	if scope.Readiness == "undetermined" {
+		if pr.MergeState == "HAS_HOOKS" {
+			scope.Gaps = append(scope.Gaps, "GitHub reports pre-receive hooks. The read-only assessment cannot establish whether a merge would pass them.")
+		} else if len(scope.Gaps) == 0 {
+			scope.Gaps = append(scope.Gaps, "GitHub's merge state or check conclusions do not establish readiness.")
+		}
 	}
 	fmt.Fprintf(&section, "Readiness from observed GitHub signals: %s\n", scope.Readiness)
 	return section.String(), nil

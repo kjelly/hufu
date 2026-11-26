@@ -310,7 +310,7 @@ jobs:
         run: CGO_ENABLED=0 go build -v ./cmd/hufu
 
       - name: CGO_ENABLED=0 test
-        run: CGO_ENABLED=0 go test ./... ./.agent-teams/hufu-dev/diagnostic-pilot/... ./.agent-teams/web-research/tests
+        run: CGO_ENABLED=0 go test ./... ./.agent-teams/hufu-dev/diagnostic-pilot/... ./.agent-teams/hufu-pr/evidence ./.agent-teams/web-research/tests
 
   # Offline deterministic workflow regression harness. All ten critical
   # semantic cases plus the core lifecycle baseline are implemented, so this

@@ -4887,7 +4887,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					if _, missing := readErr.(*artifactReadCoverageIncomplete); !missing {
 						return ctx, fantasy.PrepareStepResult{}, readErr
 					}
-					directive := fantasy.NewUserMessage("## Required artifact delivery\nBefore finalizing, use the built-in view tool to deliver these missing source bytes. Ranges are half-open source bytes, not history/output offsets. Coverage proves delivery only, not understanding.\n" + readErr.Error())
+					directive := fantasy.NewUserMessage("## Required artifact delivery\nBefore finalizing, use the authorized native artifact viewer to deliver these missing source bytes. Ranges are half-open source bytes, not history/output offsets. Coverage proves delivery only, not understanding.\n" + readErr.Error())
 					preparedMessages = append(append([]fantasy.Message(nil), preparedMessages...), directive)
 					runtimeRequiredMessages = append(runtimeRequiredMessages, directive)
 					terminalOnly = false

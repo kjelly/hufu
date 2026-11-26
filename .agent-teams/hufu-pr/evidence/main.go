@@ -18,6 +18,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/processutil"
 	"github.com/kjelly/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 const (
@@ -84,7 +85,9 @@ func resolve(req request) resolverResult {
 			continue
 		}
 		var pr target
-		if json.Unmarshal(value, &pr) != nil {
+		decoder := json.NewDecoder(bytes.NewReader(value))
+		decoder.DisallowUnknownFields()
+		if !json.Valid(value) || decoder.Decode(&pr) != nil {
 			result.Status = "invalid"
 			result.Diagnostic = "provide a GitHub PR URL or owner/repo#number"
 			return result
@@ -360,9 +363,9 @@ func renderDiff(scope *prScope, pages [][]changedFile, budget int) (string, erro
 				return "", fmt.Errorf("GitHub returned a missing, duplicate, or out-of-budget PR file")
 			}
 			seen[file.Path] = true
-			header := fmt.Sprintf("\nFile %q (%s, +%d/-%d)\n", file.Path, file.Status, file.Additions, file.Deletions)
+			header := fmt.Sprintf("\nFile %q (%s, +%d/-%d)\n", utils.RedactSecrets(file.Path), utils.RedactSecrets(file.Status), file.Additions, file.Deletions)
 			if file.PreviousPath != "" {
-				header += fmt.Sprintf("Previous path %q\n", file.PreviousPath)
+				header += fmt.Sprintf("Previous path %q\n", utils.RedactSecrets(file.PreviousPath))
 			}
 			entries = append(entries, entry{file: file, header: header})
 			// Every file keeps its inventory entry and a patch or omission marker.
@@ -377,18 +380,24 @@ func renderDiff(scope *prScope, pages [][]changedFile, budget int) (string, erro
 	}
 	var diff strings.Builder
 	diff.WriteString(heading)
-	githubGaps, budgetGaps := 0, 0
+	githubGaps, budgetGaps, redactionGaps, redactedPatches := 0, 0, 0, 0
 	for _, entry := range entries {
 		diff.WriteString(entry.header)
-		patch := entry.file.Patch
-		patchCost := len(patch) + 1 - len(missingPatch)
+		redacted := entry.file
+		redacted.Patch = utils.RedactSecrets(redacted.Patch)
+		patchCost := len(redacted.Patch) + 1 - len(missingPatch)
 		switch {
 		case !completePatch(entry.file):
 			githubGaps++
+		case redacted.Patch != entry.file.Patch && !completePatch(redacted):
+			redactionGaps++
 		case patchCost > remaining:
 			budgetGaps++
 		default:
-			diff.WriteString(patch)
+			if redacted.Patch != entry.file.Patch {
+				redactedPatches++
+			}
+			diff.WriteString(redacted.Patch)
 			diff.WriteByte('\n')
 			remaining -= patchCost
 			continue
@@ -401,6 +410,9 @@ func renderDiff(scope *prScope, pages [][]changedFile, budget int) (string, erro
 	}
 	if budgetGaps > 0 {
 		scope.Gaps = append(scope.Gaps, fmt.Sprintf("%d complete file patches exceeded the review evidence budget. The affected paths are listed in unavailable_files.", budgetGaps))
+	}
+	if redactionGaps > 0 || redactedPatches > 0 {
+		scope.Gaps = append(scope.Gaps, fmt.Sprintf("Recognizable credentials were masked in %d patches. Redaction invalidated the line ranges of %d patches, which are listed in unavailable_files.", redactedPatches, redactionGaps))
 	}
 	return diff.String(), nil
 }
@@ -452,7 +464,7 @@ func hunkCount(suffix string) int {
 
 func evidenceHeader(scope *prScope, observed pullRequest) ([]byte, error) {
 	data := fmt.Appendf(nil, "GitHub PR %s at %s (base %s)\nAction: %s\nState: %s\nTitle: %q\n\n",
-		scope.URL, scope.HeadSHA, scope.BaseSHA, scope.Requested.Action, observed.State, observed.Title)
+		scope.URL, scope.HeadSHA, scope.BaseSHA, scope.Requested.Action, observed.State, utils.RedactSecrets(observed.Title))
 	if scope.Requested.Action == operationReview {
 		data = fmt.Appendf(data, "Description: %q\n", boundedDescription(observed.Body, scope))
 	}
@@ -473,6 +485,11 @@ func evidenceHeader(scope *prScope, observed pullRequest) ([]byte, error) {
 }
 
 func writeEvidence(workspace string, scope prScope, data []byte) (result, error) {
+	redacted := utils.RedactSecrets(string(data))
+	if redacted != string(data) {
+		scope.Gaps = append(scope.Gaps, "Recognizable credentials were masked before publication.")
+		data = []byte(redacted)
+	}
 	if len(data) > maxEvidenceBytes {
 		return result{}, fmt.Errorf("PR evidence exceeds the %d-byte publication limit", maxEvidenceBytes)
 	}

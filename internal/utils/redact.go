@@ -68,15 +68,14 @@ var (
 	// from `[A-Za-z0-9_-]`. The first body character must be alphanumeric or
 	// `_` so a string of dashes cannot match.
 	openAIProjSecretRe = regexp.MustCompile(`\bsk-proj-[A-Za-z0-9_][A-Za-z0-9_-]{19,}`)
-	// githubPATSecretRe matches `ghp_` followed by exactly 36 alphanumeric
-	// characters.
-	githubPATSecretRe = regexp.MustCompile(`\bghp_[A-Za-z0-9]{36}\b`)
+	// GitHub classic, OAuth, App and fine-grained credential prefixes.
+	githubTokenRe = regexp.MustCompile(`\b(?:ghs_[0-9]+_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{36,})`)
 	// awsAccessKeyIDRe matches `AKIA` followed by exactly 16 uppercase
 	// alphanumeric characters.
 	awsAccessKeyIDRe = regexp.MustCompile(`\bAKIA[A-Z0-9]{16}\b`)
-	// slackTokenRe matches `xoxb-` followed by at least two `-`-separated
+	// slackTokenRe matches Slack token prefixes followed by at least two `-`-separated
 	// segments; the body-length floor is enforced in code.
-	slackTokenRe = regexp.MustCompile(`(?i)\bxoxb-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+`)
+	slackTokenRe = regexp.MustCompile(`(?i)\bxox[baprs]-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+`)
 	// urlUserInfoRe matches the userinfo portion of an RFC 3986 absolute
 	// URL with a scheme: `scheme://user[:password]@host`. The character
 	// class before the closing `@` is the union of unreserved, sub-delims,
@@ -104,8 +103,13 @@ var credentialPrefixLiterals = []string{
 	"sk-",
 	"sk-proj-",
 	"ghp_",
+	"gho_",
+	"ghu_",
+	"ghs_",
+	"ghr_",
+	"github_pat_",
 	"akia",
-	"xoxb-",
+	"xox",
 }
 
 // mayContainCredentialPrefix is the cheap literal gate that decides whether
@@ -631,7 +635,7 @@ func redactSecretsPlainText(content string, learn bool, scope *SecretRedactionSc
 	if mayContainCredentialPrefix(content) {
 		content = openAISecretRe.ReplaceAllString(content, redactedSecret)
 		content = openAIProjSecretRe.ReplaceAllString(content, redactedSecret)
-		content = githubPATSecretRe.ReplaceAllString(content, redactedSecret)
+		content = githubTokenRe.ReplaceAllString(content, redactedSecret)
 		content = awsAccessKeyIDRe.ReplaceAllString(content, redactedSecret)
 		content = slackTokenRe.ReplaceAllStringFunc(content, redactSlackTokenLengthGate)
 	}

@@ -90,6 +90,7 @@ func TestResolvePullRequestTarget(t *testing.T) {
 		{"ambiguous target", "null", "no_match"},
 		{"write action", `{"action":"merge","repository":"kjelly/hufu","number":53}`, "invalid"},
 		{"missing repository", `{"number":53}`, "invalid"},
+		{"unknown target member", `{"action":"review","repository":"kjelly/hufu","number":53,"unexpected":true}`, "invalid"},
 		{"arbitrary host", `{"action":"review","repository":"evil.example/kjelly/hufu","number":53}`, "invalid"},
 		{"path traversal", `{"action":"review","repository":"kjelly/..","number":53}`, "invalid"},
 		{"flag-shaped owner", `{"action":"review","repository":"--help/hufu","number":53}`, "invalid"},
@@ -101,6 +102,46 @@ func TestResolvePullRequestTarget(t *testing.T) {
 				t.Fatalf("resolve = %+v", got)
 			}
 		})
+	}
+}
+
+func TestReviewMasksCredentialsBeforePublishingEvidence(t *testing.T) {
+	const patchToken = "gho_" + "abcdefghijklmnopqrstuvwx0123456789ABCDEF"
+	file := changedFile{Path: "file.txt", Status: "modified", Additions: 1, Patch: "@@ -0,0 +1 @@\n+" + patchToken}
+	privateKey := changedFile{
+		Path: "key.txt", Status: "added", Additions: 3,
+		Patch: "@@ -0,0 +1,3 @@\n+-----BEGIN PRIVATE KEY-----\n+fixture-private-material\n+-----END PRIVATE KEY-----",
+	}
+	scope := prScope{Requested: target{Action: operationReview}, ChangedFiles: 2}
+	header, err := evidenceHeader(&scope, pullRequest{Title: "URL https://example:fixture-pass@example.test/", Body: `{"api_key":"fixture-body-secret"}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff, err := renderDiff(&scope, [][]changedFile{{file, privateKey}}, maxEvidenceBytes-len(header))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	got, err := writeEvidence(workspace, scope, append(header, diff...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := got.Artifacts[0]
+	contents, err := os.ReadFile(filepath.Join(workspace, artifact.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hidden := range []string{patchToken, "fixture-pass", "fixture-body-secret", "fixture-private-material"} {
+		if strings.Contains(string(contents), hidden) {
+			t.Fatal("published evidence contains a recognizable credential")
+		}
+	}
+	if !strings.Contains(string(contents), "@@ -0,0 +1 @@\n+[REDACTED]") || !strings.Contains(string(contents), "Patch unavailable.") {
+		t.Fatalf("patch coordinates or omission marker missing: %s", contents)
+	}
+	finalScope := got.Outputs["scope"].(prScope)
+	if len(finalScope.UnavailableFiles) != 1 || finalScope.UnavailableFiles[0] != privateKey.Path || len(finalScope.Gaps) == 0 {
+		t.Fatalf("redaction gap was not recorded: %+v", finalScope)
 	}
 }
 
