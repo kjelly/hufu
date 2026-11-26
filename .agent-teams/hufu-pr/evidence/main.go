@@ -23,6 +23,7 @@ import (
 const (
 	maxFiles           = 256
 	maxEvidenceBytes   = 128 << 10
+	maxCheckDetail     = 16 << 10
 	maxGitHubBytes     = 2 << 20
 	operationReview    = "review"
 	operationSummary   = "summarize"
@@ -252,10 +253,14 @@ func fetchPR(ctx context.Context, pr target, workspace string, run githubCommand
 		return result{}, err
 	}
 	scope := newScope(pr, before)
+	header, err := evidenceHeader(&scope, before)
+	if err != nil {
+		return result{}, err
+	}
 	var section string
 	switch pr.Action {
 	case operationReview:
-		section, err = collectDiff(ctx, workspace, &scope, run)
+		section, err = collectDiff(ctx, workspace, &scope, maxEvidenceBytes-len(header), run)
 	case operationSummary:
 		section = summarizeInput(before, &scope)
 	case operationCI:
@@ -279,10 +284,10 @@ func fetchPR(ctx context.Context, pr target, workspace string, run githubCommand
 			return result{}, fmt.Errorf("PR base or head changed during evidence collection; start a new run")
 		}
 	}
-	return writeEvidence(workspace, scope, before, section)
+	return writeEvidence(workspace, scope, append(header, section...))
 }
 
-func collectDiff(ctx context.Context, workspace string, scope *prScope, run githubCommand) (string, error) {
+func collectDiff(ctx context.Context, workspace string, scope *prScope, budget int, run githubCommand) (string, error) {
 	if scope.ChangedFiles > maxFiles {
 		return "", fmt.Errorf("PR has %d changed files; the review limit is %d", scope.ChangedFiles, maxFiles)
 	}
@@ -296,14 +301,7 @@ func collectDiff(ctx context.Context, workspace string, scope *prScope, run gith
 	if err := json.Unmarshal(raw, &pages); err != nil || len(pages) == 0 {
 		return "", fmt.Errorf("GitHub returned invalid PR file pages")
 	}
-	diff, err := renderDiff(scope, pages)
-	if err != nil {
-		return "", err
-	}
-	if len(scope.UnavailableFiles) > 0 {
-		scope.Gaps = append(scope.Gaps, "GitHub omitted or truncated one or more file patches. The affected paths are listed in unavailable_files.")
-	}
-	return "Changed files and unified patches\n" + diff, nil
+	return renderDiff(scope, pages, budget)
 }
 
 func readPR(ctx context.Context, pr target, workspace string, run githubCommand) (pullRequest, error) {
@@ -346,30 +344,63 @@ func newScope(pr target, observed pullRequest) prScope {
 	}
 }
 
-func renderDiff(scope *prScope, pages [][]changedFile) (string, error) {
+func renderDiff(scope *prScope, pages [][]changedFile, budget int) (string, error) {
+	const heading = "Changed files and unified patches\n"
+	const missingPatch = "Patch unavailable.\n"
+	type entry struct {
+		file   changedFile
+		header string
+	}
 	seen := make(map[string]bool)
-	var diff strings.Builder
+	var entries []entry
+	remaining := budget - len(heading)
 	for _, page := range pages {
 		for _, file := range page {
 			if file.Path == "" || seen[file.Path] || len(seen) == maxFiles {
 				return "", fmt.Errorf("GitHub returned a missing, duplicate, or out-of-budget PR file")
 			}
 			seen[file.Path] = true
-			fmt.Fprintf(&diff, "\nFile %q (%s, +%d/-%d)\n", file.Path, file.Status, file.Additions, file.Deletions)
+			header := fmt.Sprintf("\nFile %q (%s, +%d/-%d)\n", file.Path, file.Status, file.Additions, file.Deletions)
 			if file.PreviousPath != "" {
-				fmt.Fprintf(&diff, "Previous path %q\n", file.PreviousPath)
+				header += fmt.Sprintf("Previous path %q\n", file.PreviousPath)
 			}
-			if !completePatch(file) {
-				scope.UnavailableFiles = append(scope.UnavailableFiles, file.Path)
-				diff.WriteString("Patch omitted or incomplete in GitHub's response.\n")
-			} else {
-				diff.WriteString(file.Patch)
-				diff.WriteByte('\n')
-			}
+			entries = append(entries, entry{file: file, header: header})
+			// Every file keeps its inventory entry and a patch or omission marker.
+			remaining -= len(header) + len(missingPatch)
 		}
 	}
 	if len(seen) != scope.ChangedFiles {
 		return "", fmt.Errorf("GitHub reported %d changed files but delivered %d", scope.ChangedFiles, len(seen))
+	}
+	if remaining < 0 {
+		return "", fmt.Errorf("PR file inventory exceeds the evidence publication budget")
+	}
+	var diff strings.Builder
+	diff.WriteString(heading)
+	githubGaps, budgetGaps := 0, 0
+	for _, entry := range entries {
+		diff.WriteString(entry.header)
+		patch := entry.file.Patch
+		patchCost := len(patch) + 1 - len(missingPatch)
+		switch {
+		case !completePatch(entry.file):
+			githubGaps++
+		case patchCost > remaining:
+			budgetGaps++
+		default:
+			diff.WriteString(patch)
+			diff.WriteByte('\n')
+			remaining -= patchCost
+			continue
+		}
+		diff.WriteString(missingPatch)
+		scope.UnavailableFiles = append(scope.UnavailableFiles, entry.file.Path)
+	}
+	if githubGaps > 0 {
+		scope.Gaps = append(scope.Gaps, fmt.Sprintf("GitHub omitted or truncated %d file patches. The affected paths are listed in unavailable_files.", githubGaps))
+	}
+	if budgetGaps > 0 {
+		scope.Gaps = append(scope.Gaps, fmt.Sprintf("%d complete file patches exceeded the review evidence budget. The affected paths are listed in unavailable_files.", budgetGaps))
 	}
 	return diff.String(), nil
 }
@@ -419,20 +450,29 @@ func hunkCount(suffix string) int {
 	return count
 }
 
-func writeEvidence(workspace string, scope prScope, observed pullRequest, section string) (result, error) {
-	checks, err := json.Marshal(observed.Checks)
-	if err != nil {
-		return result{}, err
-	}
+func evidenceHeader(scope *prScope, observed pullRequest) ([]byte, error) {
 	data := fmt.Appendf(nil, "GitHub PR %s at %s (base %s)\nAction: %s\nState: %s\nTitle: %q\n\n",
 		scope.URL, scope.HeadSHA, scope.BaseSHA, scope.Requested.Action, observed.State, observed.Title)
 	if scope.Requested.Action == operationReview {
-		data = fmt.Appendf(data, "Description: %q\n", observed.Body)
+		data = fmt.Appendf(data, "Description: %q\n", boundedDescription(observed.Body, scope))
 	}
 	if scope.Requested.Action != operationSummary {
-		data = fmt.Appendf(data, "Recorded GitHub checks: %s\n\n", checks)
+		checks, err := json.Marshal(observed.Checks)
+		if err != nil {
+			return nil, err
+		}
+		if len(checks) > maxCheckDetail {
+			data = fmt.Appendf(data, "Recorded GitHub checks: %d passed, %d failed, %d pending, %d other\n\n",
+				scope.Checks.Passed, scope.Checks.Failed, scope.Checks.Pending, scope.Checks.Other)
+			scope.Gaps = append(scope.Gaps, "GitHub check details exceed the evidence budget. The report includes counts from the full response.")
+		} else {
+			data = fmt.Appendf(data, "Recorded GitHub checks: %s\n\n", checks)
+		}
 	}
-	data = append(data, section...)
+	return data, nil
+}
+
+func writeEvidence(workspace string, scope prScope, data []byte) (result, error) {
 	if len(data) > maxEvidenceBytes {
 		return result{}, fmt.Errorf("PR evidence exceeds the %d-byte publication limit", maxEvidenceBytes)
 	}

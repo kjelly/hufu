@@ -13,22 +13,24 @@ import (
 )
 
 const (
-	maxSummaryBody = 16 << 10
-	maxFailedLogs  = 3
-	maxLogTail     = 8 << 10
-	maxLogSignals  = 8 << 10
-	maxLogLine     = 2048
+	maxDescriptionBytes = 16 << 10
+	maxFailedLogs       = 3
+	maxLogTail          = 8 << 10
+	maxLogSignals       = 8 << 10
+	maxLogLine          = 2048
 )
 
 func summarizeInput(pr pullRequest, scope *prScope) string {
-	body := pr.Body
-	if len(body) > maxSummaryBody {
-		body = body[:maxSummaryBody]
-		body = strings.ToValidUTF8(body, "")
-		scope.Gaps = append(scope.Gaps, "PR description exceeds the summary budget. Only its beginning was collected.")
-	}
 	return fmt.Sprintf("Branch change: %q into %q\nDiff totals: %d files, +%d/-%d\nAuthor-provided description and testing claims: %q\n",
-		pr.HeadRef, pr.BaseRef, pr.ChangedFiles, pr.Additions, pr.Deletions, body)
+		pr.HeadRef, pr.BaseRef, pr.ChangedFiles, pr.Additions, pr.Deletions, boundedDescription(pr.Body, scope))
+}
+
+func boundedDescription(body string, scope *prScope) string {
+	if len(body) <= maxDescriptionBytes {
+		return body
+	}
+	scope.Gaps = append(scope.Gaps, "PR description exceeds the evidence budget. Only its beginning was collected.")
+	return strings.ToValidUTF8(body[:maxDescriptionBytes], "")
 }
 
 var actionJobPath = regexp.MustCompile(`^/actions/runs/[1-9][0-9]{0,18}/job/([1-9][0-9]{0,18})$`)

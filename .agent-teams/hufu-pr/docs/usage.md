@@ -22,12 +22,13 @@ hufu run --team hufu-pr --new --input 'pr.target={"action":"triage_ci","reposito
 | --- | --- |
 | Summarize | PR title, author description, branch names and GitHub change totals |
 | Diagnose CI | PR check statuses, failed steps and excerpts from up to three failing or cancelled GitHub Actions jobs |
-| Review | PR metadata, checks, and the full set of available PR patch excerpts |
+| Review | PR metadata, checks, the complete changed-file list, and complete patches that fit the evidence budget |
 | Assess readiness | Draft and merge state, GitHub review decision, checks, and up to 100 review threads |
 
-Review takes up to 256 changed files and 128 KiB of evidence. The other
-actions use metadata or logs and do not download patches. Incomplete or
-unavailable observed evidence is listed in the report. CI excerpts include
+Review takes up to 256 changed files and 128 KiB of evidence. It reserves
+space for the file list before adding patches and identifies paths whose
+patches are unavailable or exceed the remaining budget. The other actions
+use metadata or logs and do not download patches. CI excerpts include
 selected diagnostics and a bounded log tail. The availability of job logs
 depends on GitHub access and retention.
 

@@ -200,3 +200,40 @@ func TestFetchPullRequestEvidence(t *testing.T) {
 		})
 	}
 }
+
+func TestReviewPublishesEvidenceWhenPatchExceedsBudget(t *testing.T) {
+	pr := target{Action: operationReview, Repository: "example/project", Number: 53}
+	metadata := pullRequest{
+		Number: 53, URL: "https://github.com/example/project/pull/53",
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), ChangedFiles: 3, State: "OPEN",
+		Body:   strings.Repeat("description\n", maxDescriptionBytes/12+1),
+		Checks: []githubCheck{{Status: "COMPLETED", Conclusion: "SUCCESS", Name: strings.Repeat("x", maxCheckDetail)}},
+	}
+	files := [][]changedFile{{
+		{Path: "big.json", Status: "added", Additions: 1, Patch: "@@ -0,0 +1 @@\n+" + strings.Repeat("large", maxEvidenceBytes/5)},
+		{Path: "small.go", Status: "added", Additions: 1, Patch: "@@ -0,0 +1 @@\n+package example"},
+		{Path: "binary.dat", Status: "modified"},
+	}}
+	run := func(_ context.Context, _ string, args []string) ([]byte, error) {
+		if args[0] == "api" {
+			return json.Marshal(files)
+		}
+		return json.Marshal(metadata)
+	}
+	workspace := t.TempDir()
+	got, err := fetchPR(t.Context(), pr, workspace, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := got.Outputs["scope"].(prScope)
+	if !reflect.DeepEqual(scope.UnavailableFiles, []string{"big.json", "binary.dat"}) || len(scope.Gaps) != 4 || scope.Checks != (checkCounts{Passed: 1}) {
+		t.Fatalf("unexpected evidence gaps: %+v", scope)
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, got.Artifacts[0].Path))
+	if err != nil || len(data) > maxEvidenceBytes || !strings.Contains(string(data), `File "big.json"`) ||
+		!strings.Contains(string(data), `File "binary.dat"`) || !strings.Contains(string(data), "+package example") ||
+		!strings.Contains(string(data), "Recorded GitHub checks: 1 passed, 0 failed, 0 pending, 0 other") ||
+		strings.Contains(string(data), "largelargelarge") {
+		t.Fatalf("bounded review evidence = %d bytes, read error = %v", len(data), err)
+	}
+}
