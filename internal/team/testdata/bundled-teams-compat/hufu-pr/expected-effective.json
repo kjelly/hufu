@@ -1,0 +1,136 @@
+{
+  "team": {
+    "name": "hufu-pr",
+    "description": "Summarize GitHub pull requests, diagnose CI, review changes, and assess merge readiness",
+    "max_rounds": 12,
+    "max_steps": 45,
+    "timeout": 1200,
+    "verify_timeout": 120,
+    "max_retries": 0,
+    "unattended": true,
+    "max_wall_clock": 1200,
+    "acceptance_spec": {
+      "required_workers": [
+        "reviewer"
+      ],
+      "required_workers_accept_gaps": true,
+      "require_no_unresolved_tasks": true,
+      "mode": "blocking",
+      "verifications": [
+        {
+          "type": "task_output_assert",
+          "assertions": [
+            {
+              "pointer": "/requested",
+              "op": "equals_input",
+              "input": "pr.target"
+            },
+            {
+              "pointer": "/requested_input_hash",
+              "op": "equals_input_hash",
+              "input": "pr.target"
+            },
+            {
+              "pointer": "/satisfied",
+              "op": "equals",
+              "value": true
+            },
+            {
+              "pointer": "/head_sha",
+              "op": "non_empty"
+            },
+            {
+              "pointer": "/base_sha",
+              "op": "non_empty"
+            }
+          ],
+          "source_task": "fetch-pr",
+          "output": "scope"
+        },
+        {
+          "type": "workset_complete",
+          "source_task": "analyze-pr",
+          "require_all_terminal": true,
+          "require_all_verified": true,
+          "accepted_statuses": [
+            "success",
+            "completed_with_gaps"
+          ]
+        }
+      ]
+    },
+    "execution_profile": "fresh-session",
+    "goal_mode": "outcome",
+    "workflow": {
+      "phases": [
+        "prepare",
+        "verify"
+      ]
+    },
+    "policies": {
+      "require_phase_success": true,
+      "allow_phase_skip": true,
+      "fail_fast": true
+    },
+    "capabilities": {
+      "required": [
+        "read-github-pr"
+      ]
+    },
+    "verification": {
+      "required": true
+    },
+    "delegation": {
+      "AllowedWorkers": [
+        "reviewer"
+      ],
+      "InitialBatch": null,
+      "RequireExactInitialBatch": false,
+      "InitialCoordinatorTool": "",
+      "BindInitialTaskContracts": false,
+      "BindTaskGoalContracts": true,
+      "NoRedispatchAfterSuccess": null,
+      "ForbidContextFiles": true,
+      "TaskGoalInvariants": null,
+      "CapabilityRouting": null,
+      "RequireTaskContract": null,
+      "ShareRequestWith": null
+    }
+  },
+  "agents": [
+    {
+      "name": "coordinator",
+      "role": "coordinator",
+      "tools": "ask_user",
+      "side_effect": "none",
+      "max_retries": -1
+    },
+    {
+      "name": "Helper",
+      "role": "worker",
+      "tools": "view,write,edit,multiedit,grep,glob,ls,random,math",
+      "max_retries": -1
+    },
+    {
+      "name": "reviewer",
+      "role": "worker",
+      "tools": "view",
+      "side_effect": "none",
+      "max_retries": -1
+    }
+  ],
+  "tasks": [
+    {
+      "id": "fetch-pr",
+      "agent": "reviewer",
+      "phase": "PREPARE",
+      "side_effect": "none"
+    },
+    {
+      "id": "analyze-pr",
+      "agent": "reviewer",
+      "phase": "VERIFY",
+      "side_effect": "none"
+    }
+  ]
+}
