@@ -5,7 +5,7 @@ description: 將 kjelly/hufu 的單一 GitHub Issue 從根因分析、實作與�
 
 # Hufu Issue → PR
 
-先讀[共用流程](../_shared/hufu-pr-workflow.md)。請求執行本流程時，操作範圍為指定 Issue 的實作、commit、正常 push、建立及更新一個 PR，以及符合條件時轉 Ready。使用者的唯讀、禁止 push 或保留 Draft 等限制優先。
+先讀共用流程 [`.agents/skills/hufu-pr-workflow/SKILL.md`](../hufu-pr-workflow/SKILL.md)。請求執行本流程時，操作範圍為指定 Issue 的實作、commit、正常 push、建立及更新一個 PR，以及符合條件時轉 Ready。使用者的唯讀、禁止 push 或保留 Draft 等限制優先。
 
 ## 選定 Issue 與候選分支
 

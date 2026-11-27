@@ -5,7 +5,7 @@ description: 修正 kjelly/hufu 的單一既有 Draft PR，處理已證實的 re
 
 # Hufu Draft PR → Ready
 
-先讀[共用流程](../_shared/hufu-pr-workflow.md)。請求執行本流程時，操作範圍為指定 Draft 的修正、commit、正常 push、更新 PR 說明及轉 Ready。使用者的唯讀、禁止 push 或保留 Draft 等限制優先。
+先讀共用流程 [`.agents/skills/hufu-pr-workflow/SKILL.md`](../hufu-pr-workflow/SKILL.md)。請求執行本流程時，操作範圍為指定 Draft 的修正、commit、正常 push、更新 PR 說明及轉 Ready。使用者的唯讀、禁止 push 或保留 Draft 等限制優先。
 
 ## 修復與重驗
 

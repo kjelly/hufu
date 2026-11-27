@@ -5,7 +5,7 @@ description: 獨立審查 kjelly/hufu 的單一 open Ready PR，對核實的 hea
 
 # Hufu Ready PR → Merge
 
-先讀[共用流程](../_shared/hufu-pr-workflow.md)。使用者要求執行本流程時，操作範圍為指定 PR 的審查結論留言、合併或轉 Draft。唯讀或禁止合併的要求優先。審查使用隔離快照；需要修改 PR 分支時交由 `pr-ready`。
+先讀共用流程 [`.agents/skills/hufu-pr-workflow/SKILL.md`](../hufu-pr-workflow/SKILL.md)。使用者要求執行本流程時，操作範圍為指定 PR 的審查結論留言、合併或轉 Draft。唯讀或禁止合併的要求優先。審查使用隔離快照。需要修改 PR 分支時交由 `pr-ready`。
 
 ## 審查與整合
 

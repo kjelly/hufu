@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hufu Issue to PR"
+  short_description: "實作單一 Hufu Issue，建立 Draft PR 並驗證到 Ready"
+  default_prompt: "使用 $issue-to-pr 處理指定的 Hufu Issue。分析並實作後建立一個 Draft PR，待獨立審查與該版本的必要驗證、CI 通過後轉 Ready。"
