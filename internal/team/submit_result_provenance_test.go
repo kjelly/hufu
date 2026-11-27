@@ -15,6 +15,9 @@ import (
 func TestSubmitResultRejectsForgedExistingArtifactOccurrence(t *testing.T) {
 	t.Parallel()
 	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "report.txt"), []byte("example"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	c := &Coordinator{
 		session:        &TeamSession{Workspace: workspace},
 		taskTracker:    NewTaskTracker(),
@@ -34,6 +37,32 @@ func TestSubmitResultRejectsForgedExistingArtifactOccurrence(t *testing.T) {
 	}
 	if c.GetTaskResult(item.ID) != nil {
 		t.Fatal("forged artifact result was stored")
+	}
+}
+
+func TestSubmitResultMalformedPayloadRetainsSchemaFeedbackAndTurnPolicy(t *testing.T) {
+	t.Parallel()
+	const input = `{"status":"success","summary":"reviewed","structured_payload":{"verdict":"skip","verdict":"approve"}}`
+	for _, test := range []struct {
+		name   string
+		repair bool
+	}{
+		{name: "ordinary work"},
+		{name: "protocol repair", repair: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c, item := resultContractCoordinator(t, true)
+			tool := &submitResultTool{coordinator: c, todoID: item.ID}
+			ctx := occurrenceTestContext(c, item.ID, 1)
+			if test.repair {
+				ctx = context.WithValue(ctx, protocolRepairExecutionKey{}, true)
+			}
+			response, err := tool.Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: input})
+			if err != nil || submissionFailureMetadata(response.Metadata) != RepairFailureInvalidSchema || response.StopTurn != test.repair ||
+				!strings.Contains(response.Content, "invalid submit_result arguments") {
+				t.Fatalf("unexpected schema rejection: %#v, %v", response, err)
+			}
+		})
 	}
 }
 

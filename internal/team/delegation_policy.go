@@ -1,6 +1,8 @@
 package team
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -529,6 +531,16 @@ func containsInt(values []int, want int) bool {
 		}
 	}
 	return false
+}
+
+func (c *Coordinator) rejectEvidencePreflight(ctx context.Context, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if ctxErr := artifactReadContextError(ctx); ctxErr != nil {
+		return ctxErr
+	}
+	return c.rejectDelegationPolicy(err.Error())
 }
 
 func (c *Coordinator) rejectDelegationPolicy(message string) error {

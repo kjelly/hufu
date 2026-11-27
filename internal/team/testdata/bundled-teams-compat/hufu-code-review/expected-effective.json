@@ -80,16 +80,6 @@
           "type": "task_output_assert",
           "assertions": [
             {
-              "pointer": "/exit_code",
-              "op": "minimum",
-              "value": 0
-            },
-            {
-              "pointer": "/timed_out",
-              "op": "equals",
-              "value": false
-            },
-            {
               "pointer": "/output_truncated",
               "op": "equals",
               "value": false
@@ -225,16 +215,6 @@
           "verify": {
             "type": "task_output_assert",
             "assertions": [
-              {
-                "pointer": "/exit_code",
-                "op": "minimum",
-                "value": 0
-              },
-              {
-                "pointer": "/timed_out",
-                "op": "equals",
-                "value": false
-              },
               {
                 "pointer": "/output_truncated",
                 "op": "equals",

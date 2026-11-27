@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
@@ -59,6 +60,36 @@ type viewArgs struct {
 }
 
 func NewViewTool(opts ...ToolOption) fantasy.AgentTool {
+	return newViewTool(opts...)
+}
+
+// NewArtifactViewTool grants opaque artifact reads without filesystem paths.
+func NewArtifactViewTool(opts ...ToolOption) fantasy.AgentTool {
+	tool := newViewTool(opts...)
+	cfg := ApplyOptions(opts)
+	cfg.ToolName = ArtifactViewToolName
+	tool.info.Name = cfg.ToolName
+	tool.info.Description = "Read one authorized runtime artifact by its opaque artifact_ref. Use byte_offset and byte_limit to read large artifacts in ranges."
+	tool.info.Required = []string{"artifact_ref"}
+	delete(tool.info.Parameters, "file_path")
+	delete(tool.info.Parameters, "items")
+	tool.handler = func(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+		var args viewItemArgs
+		if err := json.Unmarshal([]byte(call.Input), &args, json.RejectUnknownMembers(true)); err != nil {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid artifact read: %v", err)), nil
+		}
+		if args.FilePath != "" || args.ArtifactRef == "" {
+			return fantasy.NewTextErrorResponse("view_artifact requires artifact_ref and denies filesystem paths"), nil
+		}
+		if err := validateViewItem(args); err != nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
+		return executeViewItem(ctx, args, "", cfg)
+	}
+	return tool
+}
+
+func newViewTool(opts ...ToolOption) *coreTool {
 	cfg := ApplyOptions(opts)
 	cfg.ToolName = "view"
 	return &coreTool{

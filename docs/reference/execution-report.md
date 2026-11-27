@@ -1,5 +1,11 @@
 # 自訂執行報告區塊
 
+> Status: active
+> Authority: reference
+> Verified-Commit: `b7c167e1`
+> Supersedes: —
+> Superseded-By: —
+
 在 `team.yaml` 的 `execution-report.sections` 宣告區塊。Hufu 按照宣告順序顯示，每個區塊讀取一個 runtime task 的具名輸出。以下範例在同一份報告中加入 Markdown 模板和 Go renderer。
 
 ```yaml

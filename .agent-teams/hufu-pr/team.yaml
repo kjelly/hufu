@@ -1,0 +1,132 @@
+name: hufu-pr
+description: Summarize GitHub pull requests, diagnose CI, review changes, and assess merge readiness
+goal-mode: outcome
+execution-profile: fresh-session
+unattended: true
+max-rounds: 12
+max-steps: 45
+max-retries: 0
+timeout: 1200
+max-duration: 1200
+allow-free-text-results: false
+collector-response-channel: text_json
+tools:
+  denied: [view, grep, glob, ls, load_skill]
+
+inputs:
+  pr.target:
+    type: object
+    required: true
+    properties:
+      action: {type: string, enum: [summarize, triage_ci, review, assess_readiness]}
+      repository: {type: string, min-length: 3, max-length: 140}
+      number: {type: integer, minimum: 1, maximum: 2147483647}
+    required-properties: [action, repository, number]
+    additional-properties: false
+    resolver:
+      id: github-pr-v2
+      capability: read-github-pr
+      type: resolve_github_pr
+      mode: semantic_json
+      source: invocation_prompt
+      side_effect: none
+      timeout: 10
+      semantic-guidance: |
+        Resolve exactly one GitHub.com pull request and one read-only action.
+        Return repository as owner/repo, number as a positive integer, and action.
+        A https://github.com/owner/repo/pull/123 URL or owner/repo#123 is sufficient.
+        A PR number plus an explicitly named owner/repo is also sufficient.
+        Use summarize for a PR overview, triage_ci for investigating failed CI,
+        review for code review, and assess_readiness for evaluating whether the
+        PR can merge. A qualified PR given without a requested action defaults
+        to review. An explicit structured input supplies the action when the
+        prompt does not specify one.
+        Return null for multiple requested actions or a request to change a PR,
+        post a comment, approve, push, rerun CI, or merge.
+        A bare number, multiple pull requests, another host, an issue URL, a branch,
+        a revision, or a local path is insufficient. Return null for ambiguous or
+        absent targets. Never infer a repository from the working directory.
+
+workflow:
+  phases: [prepare, verify]
+policies:
+  require_phase_success: true
+  allow_phase_skip: true
+  fail_fast: true
+capabilities:
+  required: [read-github-pr]
+action-providers:
+  read-github-pr:
+    runtime: golang
+    source: ./evidence
+    mode: trusted-static
+    timeout: 90
+delegation:
+  bind-task-goal-contracts: true
+  forbid-context-files: true
+  allowed-workers: [reviewer]
+verification:
+  required: true
+acceptance:
+  mode: blocking
+  require-no-unresolved-tasks: true
+  required-workers: [reviewer]
+  required-workers-accept-gaps: true
+  verifications:
+    - type: task_output_assert
+      source-task: fetch-pr
+      output: scope
+      assertions:
+        - {pointer: /requested, op: equals_input, input: pr.target}
+        - {pointer: /requested_input_hash, op: equals_input_hash, input: pr.target}
+        - {pointer: /satisfied, op: equals, value: true}
+        - {pointer: /head_sha, op: non_empty}
+        - {pointer: /base_sha, op: non_empty}
+    - type: workset_complete
+      source-task: analyze-pr
+      require-all-terminal: true
+      require-all-verified: true
+      accepted-statuses: [success, completed_with_gaps]
+
+contracts:
+  - id: fetch-pr
+    agent: reviewer
+    phase: prepare
+    side_effect: none
+    action:
+      capability: read-github-pr
+      type: fetch_github_pr
+      payload: '{"target":{}}'
+      input-bindings:
+        - {input: pr.target, target: /target}
+    verify-spec:
+      type: task_result_assert
+      task-result-assertions:
+        - {pointer: /runtime_outputs/scope/head_sha, op: non_empty}
+        - {pointer: /artifacts, op: min_items, value: 2}
+
+  - id: analyze-pr
+    agent: reviewer
+    phase: verify
+    side_effect: none
+    result-contract: {schema: schemas/pr-report-v1.json, require-structured: true}
+    fan_out:
+      source-artifact: {task_id: fetch-pr, artifact: GitHub PR workset}
+      goal-template: 'Execute the read-only {pr_action} task for {pr_url} using the bound evidence.'
+    constraints: |
+      Answer only the frozen action in the receipt-verified scope.
+      Receipt-verified PR scope: {scope}
+    fact_refs:
+      - {name: scope, task_id: fetch-pr, runtime_output: scope}
+    execution:
+      requires-result: true
+      requires-grounded-result: true
+      forbid-artifacts: true
+    verify-spec:
+      type: task_result_assert
+      task-result-assertions:
+        - {pointer: /summary, op: non_empty}
+        - {pointer: /files_read, op: min_items, value: 1}
+        - pointer: /status
+          op: equals_by_items
+          value: {pointer: /structured_payload/value/limitations, empty: success, non_empty: completed_with_gaps}

@@ -12,6 +12,9 @@ import (
 	"github.com/kjelly/hufu/internal/ollamaweb"
 )
 
+// ArtifactViewToolName is the explicit grant for opaque artifact reads.
+const ArtifactViewToolName = "view_artifact"
+
 type PathScopeBehavior string
 
 const (

@@ -3,6 +3,7 @@ package team
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/kjelly/hufu/internal/utils"
 )
+
+var errVerificationAssertionPath = errors.New("could not resolve its configured path")
 
 const (
 	verificationEvidenceBytes     = 2000
@@ -122,7 +125,7 @@ func (w *verificationOutput) evidence(env []string) string {
 func checkPrivateJSONAssertion(data any, assertion JSONAssertion, index int) error {
 	actual, err := resolveJSONAssertionValue(data, assertion.Path)
 	if err != nil {
-		return fmt.Errorf("JSON assertion %d could not resolve its configured path", index+1)
+		return fmt.Errorf("JSON assertion %d %w", index+1, errVerificationAssertionPath)
 	}
 	if equalJSONValues(actual, assertion.Equals) {
 		return nil

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scope", "report", "findings", "limitations"],
+  "properties": {
+    "scope": {
+      "type": "object",
+      "required": ["requested", "requested_input_hash", "satisfied", "url", "base_sha", "head_sha", "changed_files", "unavailable_files", "checks", "evidence_gaps", "readiness"],
+      "additionalProperties": false,
+      "properties": {
+        "requested": {
+          "type": "object",
+          "required": ["action", "repository", "number"],
+          "additionalProperties": false,
+          "properties": {
+            "action": {"type": "string", "enum": ["summarize", "triage_ci", "review", "assess_readiness"]},
+            "repository": {"type": "string", "minLength": 3, "maxLength": 140},
+            "number": {"type": "integer", "minimum": 1}
+          }
+        },
+        "url": {"type": "string", "pattern": "^https://github\\.com/"},
+        "requested_input_hash": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "satisfied": {"const": true},
+        "base_sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "head_sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "changed_files": {"type": "integer", "minimum": 0},
+        "unavailable_files": {"type": "array", "items": {"type": "string"}, "maxItems": 256},
+        "evidence_gaps": {"type": "array", "maxItems": 8, "items": {"type": "string"}},
+        "readiness": {"type": "string", "enum": ["not_assessed", "blocked", "undetermined", "ready"]},
+        "checks": {
+          "type": "object",
+          "required": ["passed", "failed", "pending", "other"],
+          "additionalProperties": false,
+          "properties": {
+            "passed": {"type": "integer", "minimum": 0},
+            "failed": {"type": "integer", "minimum": 0},
+            "pending": {"type": "integer", "minimum": 0},
+            "other": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    },
+    "report": {"type": "string", "minLength": 1, "maxLength": 8000},
+    "findings": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "severity", "summary", "detail", "evidence"],
+        "dependentRequired": {"line": ["side"], "side": ["line"]},
+        "properties": {
+          "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+          "line": {"type": "integer", "minimum": 1},
+          "side": {"type": "string", "enum": ["new", "old"]},
+          "severity": {"type": "string", "enum": ["error", "warning", "info"]},
+          "summary": {"type": "string", "minLength": 1, "maxLength": 200},
+          "detail": {"type": "string", "minLength": 1, "maxLength": 1200},
+          "evidence": {"type": "array", "minItems": 1, "maxItems": 4, "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
+    }
+  },
+  "x-hufu-runtime-inputs": [
+    {"target": "/scope", "source_task": "fetch-pr", "output": "scope"}
+  ],
+  "x-hufu-evidence-keys": {
+    "runtime_owned_files_read": true,
+    "pointers": ["/findings/*/evidence/*"]
+  }
+}

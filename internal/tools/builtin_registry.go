@@ -20,6 +20,7 @@ var builtinToolFactories = []builtinToolFactory{
 	{"scp", func(opts ...ToolOption) fantasy.AgentTool { return NewScpTool(opts...) }},
 	{"ssh_disconnect", func(opts ...ToolOption) fantasy.AgentTool { return NewSSHDisconnectTool(opts...) }},
 	{"view", func(opts ...ToolOption) fantasy.AgentTool { return NewViewTool(opts...) }},
+	{ArtifactViewToolName, NewArtifactViewTool},
 	{"write", func(opts ...ToolOption) fantasy.AgentTool { return NewWriteTool(opts...) }},
 	{"edit", func(opts ...ToolOption) fantasy.AgentTool { return NewEditTool(opts...) }},
 	{"multiedit", func(opts ...ToolOption) fantasy.AgentTool { return NewMultiEditTool(opts...) }},

@@ -176,6 +176,8 @@ func (c *Coordinator) reusableObservationTool(name, input string) bool {
 	// Protocol, recall, random and orchestration outputs are not source
 	// observations. Do not turn a historical read into a fresh observation.
 	switch name {
+	case tools.ArtifactViewToolName:
+		return false // Dependency artifact grants do not transfer to a later task.
 	case "view":
 		var arguments struct {
 			ArtifactRef string `json:"artifact_ref"`

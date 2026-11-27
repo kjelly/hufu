@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"log"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/config"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 func TestCompactionPolicyRejectsCapsBelowMandatoryToolEnvelope(t *testing.T) {
@@ -170,7 +172,19 @@ func TestParseModelFloat(t *testing.T) {
 	}
 }
 
-// TestSelectTools tests the SelectTools function
+func TestSelectToolNamesRequiresExplicitArtifactView(t *testing.T) {
+	available := []string{"view", tools.ArtifactViewToolName}
+	for _, grant := range []string{"", "all", "view", "read"} {
+		if got := SelectToolNames(available, grant); !slices.Equal(got, []string{"view"}) {
+			t.Fatalf("grant %q selected %v", grant, got)
+		}
+	}
+	if got := SelectToolNames(available, tools.ArtifactViewToolName); !slices.Equal(got, []string{tools.ArtifactViewToolName}) {
+		t.Fatalf("explicit grant selected %v", got)
+	}
+}
+
+// TestSelectTools tests the SelectTools function.
 func TestSelectTools(t *testing.T) {
 	mockTools := []struct {
 		name string

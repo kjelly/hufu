@@ -1,5 +1,11 @@
 # 最小 Chrome 遠端桌面
 
+> Status: active
+> Authority: guide
+> Verified-Commit: `210063d6`
+> Supersedes: —
+> Superseded-By: —
+
 `scripts/init-chrome-desktop.sh` 在 Ubuntu／Debian 的 amd64 或 arm64 主機安裝
 Xvfb、Openbox、Chrome、x11vnc、noVNC，不安裝完整 GNOME／KDE 桌面。
 安裝需要 sudo；啟動桌面必須使用一般使用者，保留 Chrome sandbox。

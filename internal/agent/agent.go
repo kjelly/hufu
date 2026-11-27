@@ -2002,7 +2002,7 @@ func SelectToolNames(available []string, toolNames string) []string {
 		selected := dedupeNames(available)
 		filtered := selected[:0]
 		for _, name := range selected {
-			if name != "web_search" && name != "web_fetch" {
+			if name != "web_search" && name != "web_fetch" && name != tools.ArtifactViewToolName {
 				filtered = append(filtered, name)
 			}
 		}

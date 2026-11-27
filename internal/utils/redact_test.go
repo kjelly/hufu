@@ -46,6 +46,20 @@ func TestRedactSecrets(t *testing.T) {
 	}
 }
 
+func TestRedactSecretsMasksGitHubCredentialPrefixes(t *testing.T) {
+	for _, prefix := range []string{"ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"} {
+		credential := prefix + strings.Repeat("A0", 24)
+		const sha = "f28599817969eed50345323155d9d8ac48b5fa98"
+		if got := RedactSecrets(credential + " " + sha); got != "[REDACTED] "+sha {
+			t.Errorf("recognition for prefix %s did not preserve adjacent ordinary text", prefix)
+		}
+	}
+	const stateless = "ghs_12345_aGVhZGVy.cGF5bG9hZA.c2lnbmF0dXJl-"
+	if got := RedactSecrets("installation " + stateless); got != "installation [REDACTED]" {
+		t.Fatal("stateless installation token format was not masked in full")
+	}
+}
+
 func TestRedactJSONPreservesEscapedContent(t *testing.T) {
 	input := []byte(`{"entries":[{"content":"ipa_admin_password: \\\"ExampleSecret\\\" and api_token: hidden"}],"password":"top-secret"}`)
 	got, err := RedactJSON(input)

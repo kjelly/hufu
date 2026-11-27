@@ -52,7 +52,7 @@ func tagSubmissionFailure(response fantasy.ToolResponse, reason RepairFailureRea
 	if !response.IsError || response.Metadata != "" {
 		return response
 	}
-	response.StopTurn = true
+	response.StopTurn = reason != RepairFailureInvalidSchema
 	return fantasy.WithResponseMetadata(response, resultSubmissionFailure{Version: 1, Reason: reason})
 }
 
@@ -65,6 +65,9 @@ func sourceSubmissionFailure(err error) fantasy.ToolResponse {
 		return fantasy.WithResponseMetadata(fantasy.NewTextErrorResponse(err.Error()), resultSubmissionFailure{
 			Version: 1, Reason: submissionNeedsArtifactRead,
 		})
+	}
+	if rejection, ok := errors.AsType[*localResultAdmissionError](err); ok {
+		return submissionFailureResponse(rejection.reason, err.Error())
 	}
 	return submissionFailureResponse(resultSourceReadFailureReason(err), err.Error())
 }

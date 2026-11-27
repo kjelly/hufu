@@ -88,6 +88,12 @@ func expandPipelineDeps(tasks []TaskDef) []TaskDef {
 
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ string, retErr error) {
 	ctx = c.tokenBudgetRoot().runIdle.Context(ctx)
+	dispatched := false
+	defer func() {
+		if !dispatched && retErr != nil && (errors.Is(retErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)) && c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+			c.recordWorkflowCancellation("preflight")
+		}
+	}()
 	tasks = withoutEmptyCollections(tasks)
 	if err := validateNativeMediaBatch(tasks); err != nil {
 		return "", err
@@ -124,14 +130,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	// pass matches against the real, substituted Goal text.
 	tasks, err = c.expandFanOutTasks(ctx, tasks)
 	if err != nil {
-		if ctxErr := artifactReadContextError(ctx); ctxErr != nil {
-			return "", ctxErr
-		}
 		// A malformed fan-out spec is a configuration/authoring error, not a
 		// worker failure: fail the whole dispatch before any TODO/model call so
 		// a coordinator mistake never produces some correct and some silently
 		// wrong tasks.
-		return "", c.rejectDelegationPolicy(err.Error())
+		return "", c.rejectEvidencePreflight(ctx, err)
 	}
 	emptyInventory := inventoryDispatch && len(tasks) == 0
 	tasks, err = c.bindInitialTaskContracts(tasks)
@@ -145,7 +148,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	// that binding preserves context already resolved under the same hash.
 	tasks, err = c.resolveFactRefs(ctx, tasks)
 	if err != nil {
-		return "", c.rejectDelegationPolicy(err.Error())
+		return "", c.rejectEvidencePreflight(ctx, err)
 	}
 	tasks, err = c.bindTaskGoalContracts(tasks)
 	if err != nil {
@@ -170,11 +173,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	}
 	tasks, err = c.bindInventoryEvidence(ctx, tasks)
 	if err != nil {
-		return "", c.rejectDelegationPolicy(err.Error())
+		return "", c.rejectEvidencePreflight(ctx, err)
 	}
 	tasks, err = c.bindEvidenceSources(ctx, tasks)
 	if err != nil {
-		return "", c.rejectDelegationPolicy(err.Error())
+		return "", c.rejectEvidencePreflight(ctx, err)
 	}
 	// A configured delegation policy is checked before workspace validation,
 	// resource locking, TODO creation, or worker startup. It therefore leaves
@@ -342,7 +345,6 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	})
 	// A batch that fails before its workers start must not leave anything
 	// that refuses the same work later in this round.
-	dispatched := false
 	var created []*TodoItem
 	defer func() {
 		if retErr != nil && !dispatched {
@@ -692,17 +694,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	if err != nil {
 		if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-				source := "context_canceled"
-				message := "execution cancelled"
-				if c.IsWrapUp() {
-					source = "operator"
-					message = "operator requested graceful wrap-up"
-				}
-				_ = c.phaseWorkflow.cancel("scheduler", source, message)
+				c.recordWorkflowCancellation("scheduler")
 			} else {
 				_ = c.phaseWorkflow.fail("scheduler", "scheduler", CategoryInternalError, err.Error(), false)
+				c.saveCheckpoint()
 			}
-			c.saveCheckpoint()
 		}
 		return "", markCoordinatorFatal(err)
 	}
@@ -734,6 +730,17 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	}
 
 	return formatTaskResults(results, len(tasks), duplicateWarnings)
+}
+
+func (c *Coordinator) recordWorkflowCancellation(component string) {
+	source := "context_canceled"
+	message := "execution cancelled"
+	if c.IsWrapUp() {
+		source = "operator"
+		message = "operator requested graceful wrap-up"
+	}
+	_ = c.phaseWorkflow.cancel(component, source, message)
+	c.saveCheckpoint()
 }
 
 func schedulerPredecessorIDs(positions []int, ids []string, current int) []string {

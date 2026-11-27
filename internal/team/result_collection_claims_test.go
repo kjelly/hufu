@@ -209,6 +209,7 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	forgedReceipt := strings.Replace(conditionalInvalid, `"status":"success"`, `"receipt_ids":["forged-receipt"],"status":"success"`, 1)
+	forbiddenArtifact := strings.Replace(valid, `"status":`, `"artifacts":[{"path":"missing-report.md"}],"status":`, 1)
 	for _, tc := range []struct {
 		name            string
 		first           string
@@ -226,6 +227,8 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 		{name: "syntax_repeated_rejection", first: strings.Replace(valid, `,"findings":`, `},"findings":`, 1), second: strings.Replace(valid, `,"findings":`, `},"findings":`, 1), failureReason: RepairFailureInvalidSchema},
 		{name: "ordinary_invariant_field", first: strings.Replace(valid, `"status"`, `"invariant_assessments":[],"status"`, 1), second: valid},
 		{name: "unknown_field", first: strings.Replace(valid, `"status"`, `"assumptions":[],"status"`, 1), second: valid},
+		{name: "forbidden_artifact_is_repairable", first: forbiddenArtifact, second: valid},
+		{name: "forbidden_artifact_cannot_mask_forged_receipt", first: strings.Replace(forbiddenArtifact, `"status":`, `"receipt_ids":["forged-receipt"],"status":`, 1), sourceFailure: true, failureReason: RepairFailureSource},
 		{name: "projection_mismatch", first: mismatch, second: valid},
 		{name: "projection_budget_exhausted", first: mismatch, second: mismatch},
 		{name: "acceptance_failure", first: valid, contractFailure: true},

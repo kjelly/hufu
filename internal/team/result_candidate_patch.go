@@ -79,7 +79,12 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 }
 
 func (t *submitResultTool) runPatch(ctx context.Context, call fantasy.ToolCall) (response fantasy.ToolResponse, runErr error) {
-	defer func() { response = tagSubmissionFailure(response, RepairFailureInvalidSchema) }()
+	defer func() {
+		response = tagSubmissionFailure(response, RepairFailureInvalidSchema)
+		if submissionFailureMetadata(response.Metadata) == RepairFailureInvalidSchema {
+			response.StopTurn = true
+		}
+	}()
 	c := t.coordinator
 	if c == nil {
 		return submissionFailureResponse(RepairFailureSource, "candidate_unavailable"), nil

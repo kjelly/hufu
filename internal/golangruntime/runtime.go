@@ -27,6 +27,7 @@ import (
 	"github.com/kjelly/hufu/internal/actionstate"
 	"github.com/kjelly/hufu/internal/processutil"
 	"github.com/kjelly/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/utils"
 	"github.com/traefik/yaegi/interp"
 	"github.com/traefik/yaegi/stdlib"
 	"github.com/traefik/yaegi/stdlib/unrestricted"
@@ -56,6 +57,9 @@ var actionStateSymbols = interp.Exports{
 	"github.com/kjelly/hufu/internal/tools/tools": {
 		"ArtifactByteRange":    reflect.ValueOf((*tools.ArtifactByteRange)(nil)),
 		"ArtifactReadCoverage": reflect.ValueOf((*tools.ArtifactReadCoverage)(nil)),
+	},
+	"github.com/kjelly/hufu/internal/utils/utils": {
+		"RedactSecrets": reflect.ValueOf(utils.RedactSecrets),
 	},
 }
 

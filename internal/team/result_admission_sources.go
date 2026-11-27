@@ -61,13 +61,30 @@ func (c *Coordinator) validateSubmissionSourceEnvelope(ctx context.Context, task
 			return &resultReceiptSourceError{err}
 		}
 	}
-	if len(claims.Artifacts) > 0 {
-		if err := c.validateDirectResultArtifactClaims(ctx, workspace, claims.Artifacts); err != nil {
+	if item := c.todoItemByID(taskID); item != nil && item.Execution.ForbidArtifacts {
+		for _, field := range fields {
+			if sourceMemberMatches(field.name, "artifacts", legacyFields) {
+				err := fmt.Errorf("artifacts are forbidden by this task's execution contract; omit the artifacts field")
+				if legacyFields {
+					return rejectLocalResult(RepairFailureContract, err)
+				}
+				// The collector can remove an undeclared field during its bounded
+				// schema repair. Still inspect independent source fields below.
+				if deferredSchemaError == nil {
+					deferredSchemaError = rejectLocalResult(RepairFailureInvalidSchema, err)
+				}
+				break
+			}
+		}
+	} else {
+		if len(claims.Artifacts) > 0 {
+			if err := c.validateDirectResultArtifactClaims(ctx, workspace, claims.Artifacts); err != nil {
+				return err
+			}
+		}
+		if err := validateMalformedArtifactSources(ctx, workspace, fields, legacyFields); err != nil {
 			return err
 		}
-	}
-	if err := validateMalformedArtifactSources(ctx, workspace, fields, legacyFields); err != nil {
-		return err
 	}
 	if err := c.validateReadableAssumptionSources(ctx, taskID, cp, fields, legacyFields); err != nil {
 		return err
