@@ -10,7 +10,8 @@
 
 ## Hufu 的驗證
 
-- 修改行為前定義失敗觸發、預期結果、影響邊界與完成證據；區分根因、假設、source validation、bounded probe 與 full-target acceptance。當適用的 `AGENTS.md` 指向 `docs/reference/fix-evidence.md` 時依該版本辦理，並在非文件 PR 說明加入對應的 `hufu-fix-evidence` 區塊。驗證 invocation 或 runtime 變更時沿用適用的 Hufu 診斷、hardening 與 runtime review 規範。外部 target 缺少權限時記錄尚未驗收的範圍。
+- 修改行為前定義失敗觸發、預期結果、影響邊界與完成證據；區分根因、假設、source validation、bounded probe 與 full-target acceptance。驗證 invocation 或 runtime 變更時沿用適用的 Hufu 診斷、hardening 與 runtime review 規範。外部 target 缺少權限時記錄尚未驗收的範圍。
+- 依目標分支的 `docs/reference/fix-evidence.md` 與 `scripts/check-fix-evidence.py` 檢查 PR 說明。適用這份 evidence 規範時，除明列的文件路徑豁免外，建立或更新 PR 都須保留恰好一個 `hufu-fix-evidence` JSON 區塊。`.agents/skills/` 的 Markdown 變更也需要這個區塊。按實際範圍選擇 `kind`，只記錄已取得的證據，並明列尚待驗證的項目。
 - 用 `git log -- <paths>` 與 `git show` 查證變更涉及的歷史回歸。按範圍檢查授權與 tool gating、canonical task 狀態與 projections、receipt／redaction、persistence／replay、retry／rollback 的副作用，以及 TUI／CLI、PTY／Unix socket fixtures。追到 caller、callee、tests 與覆蓋不到的路徑。歷史問題需要當前 diff 的證據才列為 finding。
 - Go／lint 從候選版本根目錄透過 mise 執行，工具版本依 `.mise.toml`。程式碼變更須有 `mise run lint` 成功證據。依變更執行 focused tests、`mise run test`、`mise run vet` 及適用的 race／整合測試。合約變更（含 result、workflow、schema、receipt、repair、replay）依當前專案規範驗證，適用版本有 `test-contracts` 時執行 `mise run test-contracts`。維持 `GOMAXPROCS=2` 與 Go `-p 2`，序列執行重型驗證，避免與 live agent-team run 重疊。檢查磁碟與資源，保留設定的 `GOTMPDIR`、Go／lint caches。
 - 文件／skill-only 檢查 frontmatter、相對連結、適用規範及可用 validator。修改 `docs/` 時跑 `bin/check-docs`。依專案規範，文件／skill-only 可省略本機 Go lint，仍須等該 PR 的 CI。
