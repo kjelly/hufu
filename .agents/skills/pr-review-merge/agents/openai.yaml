@@ -1,4 +1,4 @@
 interface:
   display_name: "PR Review Merge"
-  short_description: "直接審查 PR 與歷史回歸風險，品質可接受則合併，否則轉草稿"
-  default_prompt: "使用 $pr-review-merge 直接審查指定 PR，品質可接受且必要檢查通過就合併，否則轉草稿；不執行 hufu-code-review 程式。"
+  short_description: "獨立審查單一 Hufu Ready PR，依驗證結果合併、等待或轉 Draft"
+  default_prompt: "使用 $pr-review-merge 獨立審查指定的 open Hufu Ready PR，略過 Draft。必要審查、驗證與 CI 通過才合併。待 CI、核准或證據時保持 Ready，確認有須修改分支的阻礙才轉 Draft。"
